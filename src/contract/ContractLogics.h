@@ -87,18 +87,9 @@ inline bool ContractRender(LogicEngineRenderer& r) {
   ContractUnit& g = gContract[u];
   uint32_t now = millis();
   BeatPos bp = beatPosAt(gBeat, now);
-
-  // Phase-2: advance the section score off the beat-clock (switch look on beat boundary).
-  if (gScoreLen[u] > 0) {
-    int idx = scoreActiveIndex(gScore[u], gScoreLen[u], bp.beatIndex);
-    if (idx >= 0 && idx != g.curSection) {
-      const ScoreEntry& s = gScore[u][idx];
-      g.effect = s.effect; g.color = s.color; g.speed = s.speed;
-      g.beatMod = s.beatMod; g.accentMode = s.accentMode;
-      g.curSection = idx; g.startMs = now; g.sectionStart = s.atBeat;
-      g.sectionEnd = (idx + 1 < gScoreLen[u]) ? gScore[u][idx + 1].atBeat : (s.atBeat + 9999);
-    }
-  }
+  // NB: the Phase-2 score is advanced in contractTick() from mainLoop (not here),
+  // so section switching keeps running even while a NATIVE section look (which is
+  // not rendered by ContractRender) is active.
 
   // verb-P overlay: layer a solid pulse over the base, auto-restore on expiry.
   if (g.pulseActive) {
@@ -177,6 +168,7 @@ inline void applyContractToUnit(uint8_t u, const ParsedContract& p) {
         ScoreEntry e;
         e.atBeat = pr.atBeat;
         e.effect = pr.hasEffect ? pr.effect : CE_SOLID;
+        e.nativeCode = pr.hasEffect ? pr.nativeCode : -1;
         e.color  = pr.hasColor ? pr.color : RGB{0, 0, 0};
         e.speed  = pr.hasSpeed ? pr.speed : 128;
         e.beatMod = pr.hasBeatMod ? pr.beatMod : 0;
@@ -243,6 +235,32 @@ inline void applyContract(const ParsedContract& p) {
   if (p.unit == 'F' || p.unit == '*') applyContractToUnit(0, p);
   if (p.unit == 'R' || p.unit == '*') applyContractToUnit(1, p);
   // unit 'T' (HP) => neither
+}
+
+// Phase-2 score sequencer — runs from mainLoop() every pass (NOT from an effect fn),
+// so it keeps switching sections even while a native/iconic section look is active.
+// Switching to a native look leaves ContractRender (fine); switching to a contract
+// look re-selects id 106; the next section switch fires here regardless.
+inline void contractTick() {
+  if (!gBeat.running) return;
+  BeatPos bp = beatPosAt(gBeat, millis());
+  for (uint8_t u = 0; u < 2; u++) {
+    if (gScoreLen[u] == 0) continue;
+    int idx = scoreActiveIndex(gScore[u], gScoreLen[u], bp.beatIndex);
+    if (idx < 0 || idx == gContract[u].curSection) continue;
+    ContractUnit& g = gContract[u];
+    const ScoreEntry& s = gScore[u][idx];
+    g.effect = s.effect; g.color = s.color; g.speed = s.speed;
+    g.beatMod = s.beatMod; g.accentMode = s.accentMode;
+    g.curSection = idx; g.startMs = millis(); g.sectionStart = s.atBeat;
+    g.sectionEnd = (idx + 1 < gScoreLen[u]) ? gScore[u][idx + 1].atBeat : (s.atBeat + 9999);
+    g.pulseActive = false;
+    if (s.effect == CE_NATIVE && s.nativeCode >= 0) {
+      g.baseSeq = (byte)s.nativeCode; _select(u, (byte)s.nativeCode);   // iconic native section look
+    } else {
+      g.baseSeq = FX_CONTRACT; _select(u, FX_CONTRACT); _reset(u);
+    }
+  }
 }
 
 // The single fork command entry point. '!' is collision-free vs every native prefix.

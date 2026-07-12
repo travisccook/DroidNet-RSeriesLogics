@@ -18,7 +18,7 @@ int main() {
   LogicEngineRenderer r;
   for (unsigned id = 1; id <= 2; id++) {
     r._id = id;
-    for (uint32_t t = 0; t < 5000; t += 250) { _mock_millis = t; ContractRender(r); }
+    for (uint32_t t = 0; t < 5000; t += 250) { _mock_millis = t; contractTick(); ContractRender(r); }
   }
   contractSetup();
 

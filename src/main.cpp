@@ -1268,6 +1268,7 @@ MARCDUINO_ACTION(Restart, #LERESTART, ({
 void mainLoop()
 {
     AnimatedEvent::process();
+    contractTick();   // DroidNet contract: advance the Phase-2 section score off the beat-clock
 #ifdef USE_MENUS
     sDisplay.process();
 #endif
