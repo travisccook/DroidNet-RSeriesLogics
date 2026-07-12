@@ -1,30 +1,27 @@
 // src/contract/ContractLogics.h — RSeries Logic firmware layer for the
-// Driveable-Animation Contract (Phase-1: live cues). ZERO edits to lib/Reeltwo.
+// Driveable-Animation Contract. Phase-1 (live cues) + Phase-2 (beat-clock +
+// autonomous board-side score). ZERO edits to lib/Reeltwo.
 //
-// INCLUDE ORDER (see main.cpp ~line 441): this header is included AFTER ReelTwo /
-// LogicEngine.h / FastLED and the global engine pointers `FLD`/`RLD` + the
-// `FLD_/RLD_selectSequence` wrappers, and BEFORE `CustomLogicEffectSelector`.
-// It relies on those being already declared: CRGB, millis(), byte,
+// INCLUDE ORDER (main.cpp ~line 441): included AFTER ReelTwo / LogicEngine.h /
+// FastLED and the global engine pointers FLD/RLD + FLD_/RLD_selectSequence, and
+// BEFORE CustomLogicEffectSelector. Relies on: CRGB, CHSV, millis(), byte,
 // LogicEngineRenderer, FLD/RLD (LogicEngineRenderer*), FLD_/RLD_selectSequence.
 //
-// DESIGN (verified against LogicEngine.h on 2026-07-12): one fork effect fn,
-// `ContractRender`, is appended to `sCustomLogicEffects[]` at id 106 and renders a
-// per-unit contract state every ~10 ms frame (LogicEngine.h:818). It MUST return
-// true or the engine reverts to NORMAL (LogicEngine.h:820-830); it is selected with
-// numSeconds=0 so it holds. Arbitrary color is written raw via `setPixelRGB`
-// (LogicEngine.h:1383), which bypasses the palette/`fBri` path — so brightness is
-// applied here per-unit. Verb P is an OVERLAY flag on the same effect (no effect
-// switching); rainbow/native looks pass through to native ids and a pulse over them
-// restores the native id on expiry.
+// DESIGN (verified vs LogicEngine.h 2026-07-12): ONE fork effect `ContractRender`
+// at id 106 renders a per-unit contract state every ~10 ms frame (LogicEngine.h:818)
+// and MUST return true (LogicEngine.h:820-830 reverts to NORMAL on false); selected
+// numSeconds=0 to hold. setPixelRGB (:1383) bypasses fBri, so brightness + the
+// beat-pump envelope are applied here. Verb P is a layered overlay (no effect
+// switch). The Phase-2 score advances INSIDE ContractRender off the shared beat-clock.
 #pragma once
 #include "contract_core.h"
 
 static const uint8_t  SAFE_MAX_BRIGHTNESS = 200;   // heat/USB clamp (fork spec §11)
 static const uint32_t STROBE_MIN_STATE_MS = 160;   // >=160 ms/state => <= ~3 Hz (fork spec §11)
 static const byte     FX_CONTRACT   = 106;         // single fork effect id (appended in main.cpp)
-static const byte     NATIVE_RAINBOW = 10;         // native RAINBOW seq
-static const byte     NATIVE_LIGHTSOUT = 14;       // native blackout/de-energize
+static const byte     NATIVE_LIGHTSOUT = 14;       // native blackout / de-energize
 static const byte     NATIVE_NORMAL = 0;           // native idle shimmer
+static const int      SCORE_MAX = 16;              // sections per unit (a song has ~8)
 
 // Per-unit contract state. Index 0 = FLD (engine id 1), 1 = RLD (engine id 2).
 struct ContractUnit {
@@ -32,23 +29,31 @@ struct ContractUnit {
   RGB      color{0, 0, 0};
   uint8_t  speed = 128;
   uint8_t  bright = SAFE_MAX_BRIGHTNESS;
-  uint8_t  beatMod = 0;                 // Plan 2 (beat-clock)
-  uint32_t durMs = 0, startMs = 0;
-  byte     baseSeq = FX_CONTRACT;       // seq shown as the base look (106, or a native id)
+  uint8_t  beatMod = 0;
+  uint8_t  accentMode = 0;
+  uint32_t startMs = 0;
+  byte     baseSeq = FX_CONTRACT;       // base look seq (106, or a native id for native:<code>)
   bool     armed = false;
   // verb P (pulse) overlay
   bool     pulseActive = false;
   RGB      pulseColor{255, 255, 255};
   uint32_t pulseDurMs = 0, pulseStartMs = 0;
+  // Phase-2 score cursor
+  int      curSection = -1;
+  int32_t  sectionStart = 0, sectionEnd = 0;
 };
 static ContractUnit gContract[2];
-static bool gShowMode = false;
+static bool      gShowMode = false;
+static BeatClock gBeat;                 // one shared beat-clock (verb C, !**C)
+static uint8_t   gLevel = 0;            // verb L energy 0..255 (drives CE_METER)
+static ScoreEntry gScore[2][SCORE_MAX];
+static int       gScoreLen[2] = {0, 0};
 
 // ---------------------------------------------------------------- helpers ----
 static inline uint8_t _clampBright(int v) {
   return (uint8_t)(v < 0 ? 0 : (v > SAFE_MAX_BRIGHTNESS ? SAFE_MAX_BRIGHTNESS : v));
 }
-static inline CRGB _scaled(const RGB& c, uint8_t bri) {   // apply brightness ourselves (setPixelRGB bypasses fBri)
+static inline CRGB _scaled(const RGB& c, uint8_t bri) {   // apply brightness (setPixelRGB bypasses fBri)
   return CRGB((uint16_t)c.r * bri / 255, (uint16_t)c.g * bri / 255, (uint16_t)c.b * bri / 255);
 }
 static inline void _fill(LogicEngineRenderer& r, const CRGB& c) {
@@ -56,16 +61,44 @@ static inline void _fill(LogicEngineRenderer& r, const CRGB& c) {
     for (int x = 0; x < r.width(); x++)
       r.setPixelRGB(x, y, c);
 }
-// verb-dispatch context (outside an effect fn): act on a specific engine by unit index.
+static inline uint32_t _hash3(int x, int y, uint32_t t) {
+  uint32_t h = (uint32_t)x * 73856093u ^ (uint32_t)y * 19349663u ^ t * 83492791u;
+  h ^= h >> 13; h *= 0x5bd1e995u; h ^= h >> 15; return h;
+}
+// verb-dispatch context (outside an effect fn): act on one engine by unit index.
 static inline void _select(uint8_t u, byte seq) { if (u == 0) FLD_selectSequence(seq); else RLD_selectSequence(seq); }
 static inline void _reset(uint8_t u)            { if (u == 0) { if (FLD) FLD->resetEffect(); } else { if (RLD) RLD->resetEffect(); } }
 static inline void _bright(uint8_t u, byte b)   { if (u == 0) { if (FLD) FLD->setBrightness(b); } else { if (RLD) RLD->setBrightness(b); } }
+
+// beat-modulated brightness for sustained looks (solid/rainbow/scan/sparkle/meter).
+static inline uint8_t _beatBright(const ContractUnit& g, const BeatPos& bp) {
+  if (g.accentMode == 0 || g.beatMod == 0 || !gBeat.running) return g.bright;
+  float prog = 0.0f;
+  if (g.sectionEnd > g.sectionStart)
+    prog = (float)(bp.beatIndex - g.sectionStart) / (float)(g.sectionEnd - g.sectionStart);
+  uint8_t amt = beatAccentAmount(g.accentMode, bp, g.beatMod, prog);
+  float f = 0.4f + 0.6f * ((float)amt / 255.0f);          // pump: 40% floor -> full on the beat
+  return (uint8_t)((float)g.bright * f);
+}
 
 // ---- the single fork effect fn: renders unit u's contract state each frame ----
 inline bool ContractRender(LogicEngineRenderer& r) {
   uint8_t u = (r.getID() == 1) ? 0 : 1;
   ContractUnit& g = gContract[u];
   uint32_t now = millis();
+  BeatPos bp = beatPosAt(gBeat, now);
+
+  // Phase-2: advance the section score off the beat-clock (switch look on beat boundary).
+  if (gScoreLen[u] > 0) {
+    int idx = scoreActiveIndex(gScore[u], gScoreLen[u], bp.beatIndex);
+    if (idx >= 0 && idx != g.curSection) {
+      const ScoreEntry& s = gScore[u][idx];
+      g.effect = s.effect; g.color = s.color; g.speed = s.speed;
+      g.beatMod = s.beatMod; g.accentMode = s.accentMode;
+      g.curSection = idx; g.startMs = now; g.sectionStart = s.atBeat;
+      g.sectionEnd = (idx + 1 < gScoreLen[u]) ? gScore[u][idx + 1].atBeat : (s.atBeat + 9999);
+    }
+  }
 
   // verb-P overlay: layer a solid pulse over the base, auto-restore on expiry.
   if (g.pulseActive) {
@@ -73,9 +106,12 @@ inline bool ContractRender(LogicEngineRenderer& r) {
       _fill(r, _scaled(g.pulseColor, g.bright));
       return true;
     }
-    g.pulseActive = false;                                  // pulse done -> restore base
-    if (g.baseSeq != FX_CONTRACT) { r.selectSequence(g.baseSeq); return true; }  // hand back to a native base
+    g.pulseActive = false;
+    if (g.baseSeq != FX_CONTRACT) { r.selectSequence(g.baseSeq); return true; }  // restore a native base
   }
+
+  uint8_t bb = _beatBright(g, bp);
+  int W = r.width(), H = r.height();
 
   switch (g.effect) {
     case CE_OFF:
@@ -87,9 +123,44 @@ inline bool ContractRender(LogicEngineRenderer& r) {
       _fill(r, on ? _scaled(g.color, g.bright) : CRGB(0, 0, 0));
       break;
     }
+    case CE_RAINBOW: {
+      uint32_t rate = 20u + (uint32_t)(255 - g.speed) / 4u;              // ms per hue step
+      uint8_t hbase = (uint8_t)((now / (rate ? rate : 1)) & 0xFF);
+      int step = (W > 0) ? (255 / W) : 8;
+      for (int y = 0; y < H; y++)
+        for (int x = 0; x < W; x++)
+          r.setPixelRGB(x, y, CRGB(CHSV((uint8_t)(hbase + x * step), 255, bb)));
+      break;
+    }
+    case CE_SCAN: {
+      uint32_t period = 60u * (uint32_t)(256 - g.speed) + 200u;
+      int pos = (W > 0) ? (int)(((now - g.startMs) % period) * (uint32_t)W / period) : 0;
+      CRGB c = _scaled(g.color, bb);
+      for (int y = 0; y < H; y++)
+        for (int x = 0; x < W; x++)
+          r.setPixelRGB(x, y, (x == pos) ? c : CRGB(0, 0, 0));
+      break;
+    }
+    case CE_SPARKLE: {
+      uint32_t blk = now / (uint32_t)(80 + (255 - g.speed) / 2);
+      uint32_t density = 20u + (uint32_t)g.speed / 4u;                   // ~20..84 % lit
+      CRGB c = _scaled(g.color, bb);
+      for (int y = 0; y < H; y++)
+        for (int x = 0; x < W; x++)
+          r.setPixelRGB(x, y, (_hash3(x, y, blk) % 100u) < density ? c : CRGB(0, 0, 0));
+      break;
+    }
+    case CE_METER: {
+      int lit = (H * (int)gLevel) / 255;                                 // fill from bottom
+      CRGB c = _scaled(g.color.r || g.color.g || g.color.b ? g.color : RGB{0, 255, 0}, bb);
+      for (int y = 0; y < H; y++)
+        for (int x = 0; x < W; x++)
+          r.setPixelRGB(x, y, ((H - 1 - y) < lit) ? c : CRGB(0, 0, 0));
+      break;
+    }
     case CE_SOLID:
     default:
-      _fill(r, _scaled(g.color, g.bright));
+      _fill(r, _scaled(g.color, bb));
       break;
   }
   return true;   // MUST return true (LogicEngine.h:820 reverts to NORMAL on false)
@@ -102,72 +173,82 @@ inline void applyContractToUnit(uint8_t u, const ParsedContract& p) {
   uint32_t now = millis();
   switch (p.verb) {
     case CV_ANIMATE: {
-      if (pr.hasAt) return;                                 // Plan 2 schedules; Phase-1 ignores at=
+      if (pr.hasAt) {                             // Phase-2: schedule this look, do not apply now
+        ScoreEntry e;
+        e.atBeat = pr.atBeat;
+        e.effect = pr.hasEffect ? pr.effect : CE_SOLID;
+        e.color  = pr.hasColor ? pr.color : RGB{0, 0, 0};
+        e.speed  = pr.hasSpeed ? pr.speed : 128;
+        e.beatMod = pr.hasBeatMod ? pr.beatMod : 0;
+        e.accentMode = pr.hasAm ? pr.accentMode : 0;
+        gScoreLen[u] = scoreInsert(gScore[u], gScoreLen[u], SCORE_MAX, e);
+        g.curSection = -1;                        // force re-eval on the next frame
+        _select(u, FX_CONTRACT); _reset(u);       // ensure ContractRender drives the score
+        break;
+      }
       if (pr.hasColor)   g.color   = pr.color;
       if (pr.hasSpeed)   g.speed   = pr.speed;
       if (pr.hasBright)  g.bright  = _clampBright(pr.bright);
       if (pr.hasBeatMod) g.beatMod = pr.beatMod;
-      if (pr.hasDur)     g.durMs   = pr.durMs;
+      if (pr.hasAm)      g.accentMode = pr.accentMode;
       g.startMs = now; g.armed = true; g.pulseActive = false;
       if (pr.hasEffect) {
         g.effect = pr.effect;
-        if (pr.effect == CE_SOLID || pr.effect == CE_FLASH || pr.effect == CE_OFF) {
-          g.baseSeq = FX_CONTRACT; _select(u, FX_CONTRACT); _reset(u);
-        } else if (pr.effect == CE_RAINBOW) {
-          g.baseSeq = NATIVE_RAINBOW; _select(u, NATIVE_RAINBOW);        // native rainbow (ignores color, per contract)
-        } else if (pr.effect == CE_NATIVE && pr.nativeCode >= 0) {
-          g.baseSeq = (byte)pr.nativeCode; _select(u, (byte)pr.nativeCode);
+        if (pr.effect == CE_NATIVE && pr.nativeCode >= 0) {
+          g.baseSeq = (byte)pr.nativeCode; _select(u, (byte)pr.nativeCode);   // escape hatch -> native
         } else {
-          // scan/sparkle/meter/pulse core ids arrive in Plan 2 — render as solid for now
-          g.effect = CE_SOLID; g.baseSeq = FX_CONTRACT; _select(u, FX_CONTRACT); _reset(u);
+          g.baseSeq = FX_CONTRACT; _select(u, FX_CONTRACT); _reset(u);        // all core looks render here
         }
       } else if (g.baseSeq == FX_CONTRACT) {
-        _reset(u);                                          // i omitted: patch params, re-render current look
+        _reset(u);                                // i omitted: patch params, re-render current look
       }
       break;
     }
     case CV_PULSE: {
-      // strobe cool-down: drop pulses arriving faster than ~3 Hz
-      if (!g.pulseActive && g.pulseStartMs != 0 && (now - g.pulseStartMs) < 2 * STROBE_MIN_STATE_MS) return;
+      if (!g.pulseActive && g.pulseStartMs != 0 && (now - g.pulseStartMs) < 2 * STROBE_MIN_STATE_MS) return;  // strobe cool-down
       g.pulseColor  = pr.hasColor ? pr.color : RGB{255, 255, 255};
       g.pulseDurMs  = pr.hasDur ? pr.durMs : 120;
       if (pr.hasBright) g.bright = _clampBright(pr.bright);
       g.pulseStartMs = now;
       g.pulseActive  = true;
-      _select(u, FX_CONTRACT); _reset(u);                   // ensure ContractRender active + retrigger
+      _select(u, FX_CONTRACT); _reset(u);         // ensure ContractRender active + retrigger
       break;
     }
+    case CV_CLOCK:
+      beatClockSeed(gBeat, pr, now);              // one shared clock; !**C fans to both units
+      break;
+    case CV_LEVEL:
+      if (pr.hasLevel) gLevel = pr.level;         // drives CE_METER (contract meter reads gLevel)
+      break;
     case CV_BRIGHT: {
       uint8_t b = _clampBright(pr.hasBright ? pr.bright : (pr.hasLevel ? pr.level : g.bright));
-      g.bright = b; _bright(u, b);                          // volatile fBri too (native effects); no NVS
+      g.bright = b; _bright(u, b);                // volatile fBri too; no NVS
       break;
     }
     case CV_STOP:
-      g.armed = false; g.pulseActive = false;
-      _select(u, NATIVE_LIGHTSOUT);                         // blackout + de-energize
+      g.armed = false; g.pulseActive = false; gScoreLen[u] = 0; g.curSection = -1;
+      _select(u, NATIVE_LIGHTSOUT);               // blackout + de-energize
       break;
     case CV_MODE:
       if (pr.mode == 's')      { gShowMode = true;  g.armed = false; g.pulseActive = false; _select(u, NATIVE_LIGHTSOUT); }
-      else if (pr.mode == 'i') { gShowMode = false; g.armed = false; _select(u, NATIVE_NORMAL); }
+      else if (pr.mode == 'i') { gShowMode = false; g.armed = false; gScoreLen[u] = 0; g.curSection = -1; _select(u, NATIVE_NORMAL); }
       break;
-    default: break;                                         // C / L / Q -> Plan 2
+    default: break;                               // Q -> optional, not in V1
   }
 }
 
 // Fan a parsed command to the addressed unit(s) per class/unit (fork spec §4).
 inline void applyContract(const ParsedContract& p) {
-  if (p.cls != 'L' && p.cls != '*') return;                 // not a Logic board
+  if (p.cls != 'L' && p.cls != '*') return;       // not a Logic board
   if (p.unit == 'F' || p.unit == '*') applyContractToUnit(0, p);
   if (p.unit == 'R' || p.unit == '*') applyContractToUnit(1, p);
   // unit 'T' (HP) => neither
 }
 
-// The single fork command entry point. '!' is collision-free vs every native prefix
-// (~RT / @LE / @AP / @<digit> / #LE). Marcduino::getCommand() = bytes after '!'.
+// The single fork command entry point. '!' is collision-free vs every native prefix.
 MARCDUINO_ACTION(Contract, !, ({
   ParsedContract p;
   if (contractParse(Marcduino::getCommand(), p)) applyContract(p);
 }))
 
-// Boot wiring. Phase-1: nothing. Plan 2 wires FLD_/RLD_setPeakValueProvider for verb L.
-inline void contractSetup() { }
+inline void contractSetup() { }   // (native mic-effect PeakValueProvider wiring is an optional follow-up)

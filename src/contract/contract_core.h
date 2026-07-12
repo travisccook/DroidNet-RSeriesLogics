@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <stdlib.h>
+#include <math.h>
 
 struct RGB { uint8_t r, g, b; };
 
@@ -124,3 +125,94 @@ inline bool contractParse(const char* afterBang, ParsedContract& out) {
   return true;
 }
 // ===== END PARSE IMPL =====
+
+// ===== BEAT-CLOCK + SCORE (Plan 2, board-agnostic, host-tested) =====
+// Seeded by verb C; drives a per-beat accent envelope and the Phase-2 section
+// schedule. Pure math (float is fine at frame rate, even on AVR). All firmware
+// forks share this exact logic so on-board playback is identical across boards.
+
+struct BeatClock {
+  bool     running = false;
+  uint16_t bpm = 0;
+  uint32_t anchorMs = 0;    // millis of the reference downbeat (= receiptMs + phMs)
+  uint8_t  bpb = 4;
+  int32_t  beatOffset = 0;  // absolute beat index at anchorMs (a downbeat -> multiple of bpb)
+};
+
+struct BeatPos {
+  int32_t beatIndex = 0;    // absolute beat ordinal (may be < 0 before the anchor)
+  float   phase = 0.0f;     // 0..1 within the current beat
+  uint8_t barPos = 0;       // 0 == downbeat
+};
+
+// Seed/adjust the clock from a parsed C command received at nowMs.
+inline void beatClockSeed(BeatClock& bc, const ContractParams& pr, uint32_t nowMs) {
+  if (pr.hasBpm) bc.bpm = pr.bpm;
+  if (pr.hasBpb) bc.bpb = pr.bpb ? pr.bpb : 4;
+  bc.anchorMs = nowMs + (pr.hasPh ? pr.phMs : 0);
+  if (pr.hasBeat) bc.beatOffset = pr.beatAnchor;      // re-anchor (drift correction)
+  bc.running = (bc.bpm > 0);
+}
+
+// Beat position at time nowMs (drift-free between re-seeds; computed from millis).
+inline BeatPos beatPosAt(const BeatClock& bc, uint32_t nowMs) {
+  BeatPos out;
+  if (!bc.running || bc.bpm == 0) return out;
+  int32_t delta = (int32_t)(nowMs - bc.anchorMs);     // signed ms since the anchor downbeat
+  float beats = (float)delta * (float)bc.bpm / 60000.0f;
+  float fl = floorf(beats);
+  out.beatIndex = bc.beatOffset + (int32_t)fl;
+  out.phase = beats - fl;                             // 0..1
+  int bpb = bc.bpb ? bc.bpb : 4;
+  out.barPos = (uint8_t)(((out.beatIndex % bpb) + bpb) % bpb);
+  return out;
+}
+
+// Accent envelope amount 0..255 for the current beat, per accent mode + depth.
+// am: 0 none, 1 downbeat, 2 every-beat, 3 build (uses sectionProgress 0..1), 4 drop (->downbeat).
+inline uint8_t beatAccentAmount(uint8_t am, const BeatPos& bp, uint8_t beatMod, float sectionProgress) {
+  if (am == 0 || beatMod == 0) return 0;
+  bool fire = (am == 2) || ((am == 1 || am == 4) && bp.barPos == 0) || (am == 3);
+  if (!fire) return 0;
+  float env = (1.0f - bp.phase) * (1.0f - bp.phase);  // fast attack, slow decay
+  if (bp.barPos == 0) { env *= 1.3f; if (env > 1.0f) env = 1.0f; }   // downbeat emphasis
+  if (am == 3) {                                       // build: scale by section progress
+    float s = sectionProgress < 0 ? 0.0f : (sectionProgress > 1 ? 1.0f : sectionProgress);
+    env *= s;
+  }
+  float amt = env * (float)beatMod;
+  if (amt < 0) amt = 0; if (amt > 255) amt = 255;
+  return (uint8_t)amt;
+}
+
+// A per-unit section-schedule entry (Phase-2 score, built from verb A + at=).
+struct ScoreEntry {
+  int32_t        atBeat = 0;
+  ContractEffect effect = CE_SOLID;
+  RGB            color{0, 0, 0};
+  uint8_t        speed = 128;
+  uint8_t        beatMod = 0;
+  uint8_t        accentMode = 0;
+};
+
+// Index of the last entry with atBeat <= beatIndex (-1 if none yet). Entries sorted asc.
+inline int scoreActiveIndex(const ScoreEntry* entries, int n, int32_t beatIndex) {
+  int found = -1;
+  for (int i = 0; i < n; i++) {
+    if (entries[i].atBeat <= beatIndex) found = i; else break;
+  }
+  return found;
+}
+
+// Insert keeping the array sorted by atBeat (replace on exact match). Returns new count
+// (drops silently if at cap). Firmware calls this from verb A when at= is present.
+inline int scoreInsert(ScoreEntry* entries, int n, int cap, const ScoreEntry& e) {
+  int i = 0;
+  while (i < n && entries[i].atBeat < e.atBeat) i++;
+  if (i < n && entries[i].atBeat == e.atBeat) { entries[i] = e; return n; }
+  if (n >= cap) return n;
+  for (int j = n; j > i; j--) entries[j] = entries[j - 1];
+  entries[i] = e;
+  return n + 1;
+}
+// ===== END BEAT-CLOCK + SCORE =====

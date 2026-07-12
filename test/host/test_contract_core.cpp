@@ -52,10 +52,76 @@ static void test_params() {
   CHECK(contractParse("LFA:c=XYZ", p) && !p.params.hasColor);
 }
 
+static bool approx(float a, float b) { float d = a - b; return (d < 0 ? -d : d) < 0.01f; }
+
+static void test_beat_clock() {
+  // 120 BPM (2 beats/sec), anchor downbeat at t=1000ms, beat 0, 4/4
+  BeatClock bc; ContractParams pr;
+  pr.hasBpm = true; pr.bpm = 120; pr.hasBpb = true; pr.bpb = 4; pr.hasPh = true; pr.phMs = 0; pr.hasBeat = true; pr.beatAnchor = 0;
+  beatClockSeed(bc, pr, 1000);
+  CHECK(bc.running && bc.bpm == 120 && bc.anchorMs == 1000 && bc.beatOffset == 0);
+
+  BeatPos p0 = beatPosAt(bc, 1000);
+  CHECK(p0.beatIndex == 0 && approx(p0.phase, 0.0f) && p0.barPos == 0);
+  BeatPos p1 = beatPosAt(bc, 1500);              // +0.5s @120bpm = 1 beat
+  CHECK(p1.beatIndex == 1 && approx(p1.phase, 0.0f) && p1.barPos == 1);
+  BeatPos pHalf = beatPosAt(bc, 1250);           // +0.25s = 0.5 beat
+  CHECK(pHalf.beatIndex == 0 && approx(pHalf.phase, 0.5f) && pHalf.barPos == 0);
+  BeatPos pBar = beatPosAt(bc, 3000);            // +2s = 4 beats -> downbeat again
+  CHECK(pBar.beatIndex == 4 && pBar.barPos == 0);
+
+  // re-anchor via beat= (drift correction): beat 64 now at t=1000
+  ContractParams pr2; pr2.hasBpm = true; pr2.bpm = 120; pr2.hasBpb = true; pr2.bpb = 4; pr2.hasPh = true; pr2.phMs = 0; pr2.hasBeat = true; pr2.beatAnchor = 64;
+  beatClockSeed(bc, pr2, 1000);
+  CHECK(beatPosAt(bc, 1000).beatIndex == 64 && beatPosAt(bc, 1500).beatIndex == 65);
+
+  // not running when bpm=0
+  BeatClock bc2;
+  CHECK(!bc2.running && beatPosAt(bc2, 5000).beatIndex == 0);
+}
+
+static void test_accent_envelope() {
+  BeatPos down; down.barPos = 0; down.phase = 0.0f;    // on the downbeat, phase 0 -> env 1
+  BeatPos offbeat; offbeat.barPos = 1; offbeat.phase = 0.0f;
+  BeatPos mid; mid.barPos = 0; mid.phase = 0.5f;       // decayed
+  CHECK(beatAccentAmount(0, down, 255, 0) == 0);       // am=0 none
+  CHECK(beatAccentAmount(1, down, 0, 0) == 0);         // beatMod=0 -> none
+  CHECK(beatAccentAmount(1, down, 255, 0) > 200);      // am=1 fires strong on downbeat
+  CHECK(beatAccentAmount(1, offbeat, 255, 0) == 0);    // am=1 silent off the downbeat
+  CHECK(beatAccentAmount(2, offbeat, 255, 0) > 0);     // am=2 fires every beat
+  CHECK(beatAccentAmount(2, mid, 255, 0) < beatAccentAmount(2, offbeat, 255, 0)); // decays with phase
+  CHECK(beatAccentAmount(3, down, 255, 0.0f) == 0);    // build at 0 progress -> 0
+  CHECK(beatAccentAmount(3, down, 255, 1.0f) > 200);   // build at full progress -> strong
+}
+
+static void test_score() {
+  ScoreEntry s[8]; int n = 0, cap = 8;
+  ScoreEntry a; a.atBeat = 0;  a.effect = CE_SOLID;
+  ScoreEntry b; b.atBeat = 32; b.effect = CE_FLASH;
+  ScoreEntry c; c.atBeat = 16; c.effect = CE_RAINBOW;
+  n = scoreInsert(s, n, cap, a);
+  n = scoreInsert(s, n, cap, b);
+  n = scoreInsert(s, n, cap, c);                       // inserted between a and b
+  CHECK(n == 3 && s[0].atBeat == 0 && s[1].atBeat == 16 && s[2].atBeat == 32);
+  CHECK(s[1].effect == CE_RAINBOW);
+  // replace on exact atBeat match
+  ScoreEntry c2; c2.atBeat = 16; c2.effect = CE_METER;
+  n = scoreInsert(s, n, cap, c2);
+  CHECK(n == 3 && s[1].effect == CE_METER);
+  // active index
+  CHECK(scoreActiveIndex(s, n, -1) == -1);             // before first
+  CHECK(scoreActiveIndex(s, n, 0) == 0);
+  CHECK(scoreActiveIndex(s, n, 20) == 1);
+  CHECK(scoreActiveIndex(s, n, 999) == 2);
+}
+
 int main() {
   test_scope_and_verb();
   test_verbs_and_units();
   test_params();
+  test_beat_clock();
+  test_accent_envelope();
+  test_score();
   printf("%s  %d/%d checks passed\n", g_fail ? "FAILURES" : "OK", g_total - g_fail, g_total);
   return g_fail ? 1 : 0;
 }

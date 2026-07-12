@@ -6,17 +6,20 @@
 #include <cstdio>
 
 int main() {
-  // exercise every fork entry point so the compiler instantiates + type-checks them
-  ParsedContract p;
-  contractParse("LFA:i=solid,c=0080FF,d=0", p);
-  applyContract(p);
-  applyContractToUnit(0, p);
-  applyContractToUnit(1, p);
+  // exercise every fork entry point / verb / effect so the compiler type-checks them
+  const char* cmds[] = {
+    "LFA:i=solid,c=0080FF,d=0", "**P:c=FFFFFF,d=120", "**C:bpm=120,ph=0,bpb=4,beat=0",
+    "LFB:v=120", "P*L:v=190", "L*A:i=rainbow", "LFA:i=scan,c=FF0000",
+    "LRA:i=sparkle,c=00FF00,s=200", "LFA:i=meter", "LFA:i=solid,c=3B82F6,at=0,am=1",
+    "LFA:i=fire,c=FF2A00,at=32,am=3", "**X", "**M:v=show", "**M:v=idle", "LFA:i=native:105",
+  };
+  for (const char* s : cmds) { ParsedContract p; if (contractParse(s, p)) applyContract(p); }
 
-  LogicEngineRenderer r; r._id = 1;
-  ContractRender(r);
-  r._id = 2;
-  ContractRender(r);
+  LogicEngineRenderer r;
+  for (unsigned id = 1; id <= 2; id++) {
+    r._id = id;
+    for (uint32_t t = 0; t < 5000; t += 250) { _mock_millis = t; ContractRender(r); }
+  }
   contractSetup();
 
   // replicate the MARCDUINO_ACTION(Contract, !, ...) body verbatim to type-check it

@@ -10,10 +10,15 @@ typedef uint8_t byte;
 static uint32_t _mock_millis = 0;
 inline uint32_t millis() { return _mock_millis; }
 
+struct CHSV {
+  uint8_t h, s, v;
+  CHSV(int hh, int ss, int vv) : h((uint8_t)hh), s((uint8_t)ss), v((uint8_t)vv) {}
+};
 struct CRGB {
   uint8_t r = 0, g = 0, b = 0;
   CRGB() {}
   CRGB(int rr, int gg, int bb) : r((uint8_t)rr), g((uint8_t)gg), b((uint8_t)bb) {}
+  CRGB(const CHSV&) {}   // FastLED provides CRGB(const CHSV&) rainbow conversion
 };
 
 struct LogicEngineRenderer {
