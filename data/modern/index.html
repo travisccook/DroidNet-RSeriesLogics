@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>C2B5 UI</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background-color: #f5f5f5;
+            color: #333;
+            line-height: 1.6;
+        }
+        
+        .header {
+            background: #2c3e50;
+            color: white;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .header h1 {
+            font-size: 1.8em;
+            font-weight: 300;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        
+        .menu-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-top: 20px;
+        }
+        
+        .menu-card {
+            background: white;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            padding: 30px;
+            text-decoration: none;
+            color: #333;
+            transition: all 0.3s ease;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .menu-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+        }
+        
+        .menu-card h2 {
+            font-size: 1.4em;
+            margin-bottom: 10px;
+            color: #2c3e50;
+            font-weight: 500;
+        }
+        
+        .menu-card p {
+            color: #666;
+            line-height: 1.5;
+            font-size: 0.95em;
+        }
+        
+        .menu-card .icon {
+            position: absolute;
+            right: 20px;
+            top: 50%;
+            transform: translateY(-50%);
+            font-size: 2.5rem;
+            opacity: 0.2;
+        }
+        
+        .status {
+            background: white;
+            border-radius: 8px;
+            padding: 30px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        
+        .status h3 {
+            color: #2c3e50;
+            margin-bottom: 20px;
+            font-weight: 300;
+            font-size: 1.5em;
+        }
+        
+        .status-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 12px 0;
+            border-bottom: 1px solid #eee;
+        }
+        
+        .status-item:last-child {
+            border-bottom: none;
+        }
+        
+        .status-item span:first-child {
+            font-weight: 500;
+            color: #2c3e50;
+        }
+        
+        .status-value {
+            color: #3498db;
+        }
+        
+        .back-link {
+            display: inline-block;
+            color: #3498db;
+            text-decoration: none;
+            margin-bottom: 20px;
+            transition: color 0.3s;
+            font-size: 0.95em;
+        }
+        
+        .back-link:hover {
+            color: #2980b9;
+        }
+        
+        /* Status indicators */
+        .status-indicator {
+            padding: 5px 10px;
+            border-radius: 20px;
+            font-size: 0.9em;
+            background: #27ae60;
+            color: white;
+        }
+        
+        .status-indicator.warning {
+            background: #f39c12;
+        }
+        
+        .status-indicator.error {
+            background: #e74c3c;
+        }
+        
+        @media (max-width: 768px) {
+            .container {
+                padding: 15px;
+            }
+            
+            .menu-grid {
+                grid-template-columns: 1fr;
+                gap: 15px;
+            }
+            
+            .header {
+                padding: 15px;
+                flex-direction: column;
+                gap: 10px;
+            }
+            
+            .header h1 {
+                font-size: 1.4em;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>C2B5 UI</h1>
+    </div>
+    
+    <div class="container">
+        <a href="/" class="back-link">← Back to Classic UI</a>
+        
+        <div class="status" id="system-status">
+            <h3>System Status</h3>
+            <div class="status-item">
+                <span>Loading...</span>
+            </div>
+        </div>
+        
+        <div class="menu-grid">
+            <a href="/m/wifi" class="menu-card">
+                <span class="icon">📡</span>
+                <h2>WiFi Settings</h2>
+                <p>Configure network connections, manage saved networks, and monitor connection status</p>
+            </a>
+            
+            <a href="/" class="menu-card">
+                <span class="icon">🔙</span>
+                <h2>Classic Interface</h2>
+                <p>Return to the original web interface for advanced settings</p>
+            </a>
+        </div>
+        
+        <div style="margin-top: 2rem; padding-top: 2rem; border-top: 1px solid #333; text-align: center; color: #666; font-size: 0.8rem;">
+            Firmware: <span id="firmware-version">Loading...</span>
+        </div>
+    </div>
+    
+    <script>
+        // Load system status
+        async function loadSystemStatus() {
+            console.log('[C2B5] Loading system status...');
+            try {
+                console.log('[C2B5] Fetching /api/wifi/status');
+                const response = await fetch('/api/wifi/status');
+                console.log('[C2B5] Response status:', response.status, response.statusText);
+                if (!response.ok) throw new Error(`Failed to load status: ${response.status} ${response.statusText}`);
+                
+                const data = await response.json();
+                console.log('[C2B5] Status data received:', data);
+                const statusDiv = document.getElementById('system-status');
+                
+                let statusHTML = '<h3>System Status</h3>';
+                
+                statusHTML += `
+                    <div class="status-item">
+                        <span>WiFi</span>
+                        <span class="status-value">${data.enabled ? 'Enabled' : 'Disabled'}</span>
+                    </div>
+                    <div class="status-item">
+                        <span>Mode</span>
+                        <span class="status-value">${data.mode === 'ap' ? 'Access Point' : 'Client'}</span>
+                    </div>
+                    <div class="status-item">
+                        <span>Connection</span>
+                        <span class="status-value">${data.connected ? 'Connected' : 'Not Connected'}</span>
+                    </div>
+                `;
+                
+                if (data.connected && data.ssid) {
+                    statusHTML += `
+                        <div class="status-item">
+                            <span>Network</span>
+                            <span class="status-value">${data.ssid}</span>
+                        </div>
+                        <div class="status-item">
+                            <span>IP Address</span>
+                            <span class="status-value">${data.ip}</span>
+                        </div>
+                    `;
+                    
+                    if (data.rssi) {
+                        statusHTML += `
+                            <div class="status-item">
+                                <span>Signal</span>
+                                <span class="status-value">${data.rssi} dBm</span>
+                            </div>
+                        `;
+                    }
+                }
+                
+                statusDiv.innerHTML = statusHTML;
+            } catch (error) {
+                console.error('Error loading status:', error);
+                const statusDiv = document.getElementById('system-status');
+                statusDiv.innerHTML = `
+                    <h3>System Status</h3>
+                    <div class="status-item">
+                        <span style="color: #e74c3c;">Unable to load status</span>
+                    </div>
+                `;
+            }
+        }
+        
+        // Load firmware version
+        async function loadFirmwareVersion() {
+            console.log('[C2B5] Loading firmware version...');
+            try {
+                console.log('[C2B5] Fetching /api/firmware/version');
+                const response = await fetch('/api/firmware/version');
+                console.log('[C2B5] Firmware response:', response.status);
+                const data = await response.json();
+                console.log('[C2B5] Firmware data:', data);
+                document.getElementById('firmware-version').textContent = data.filename || data.version || 'Unknown';
+            } catch (error) {
+                console.error('[C2B5] Error loading firmware:', error);
+                document.getElementById('firmware-version').textContent = 'Error: ' + error.message;
+            }
+        }
+        
+        // Load status on page load
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', () => {
+                loadSystemStatus();
+                loadFirmwareVersion();
+                // Refresh status every 5 seconds
+                setInterval(loadSystemStatus, 5000);
+            });
+        } else {
+            loadSystemStatus();
+            loadFirmwareVersion();
+            // Refresh status every 5 seconds
+            setInterval(loadSystemStatus, 5000);
+        }
+    </script>
+</body>
+</html>

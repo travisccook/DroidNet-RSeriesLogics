@@ -1,0 +1,25 @@
+{
+  "name": "rseries-logic-visualizer",
+  "version": "1.0.0",
+  "description": "Web-based LED matrix visualizer for RSeries Logic Display",
+  "main": "dist/index.html",
+  "scripts": {
+    "build": "node build.js",
+    "watch": "node build.js --watch",
+    "clean": "rm -rf dist",
+    "rebuild": "npm run clean && npm run build"
+  },
+  "keywords": [
+    "astromech",
+    "r2d2",
+    "led",
+    "visualizer",
+    "rseries"
+  ],
+  "author": "C2B5 Project",
+  "license": "MIT",
+  "devDependencies": {
+    "esbuild": "^0.19.0",
+    "puppeteer": "^22.8.2"
+  }
+}

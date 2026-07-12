@@ -1,0 +1,424 @@
+/* RSeries Logic Display Visualizer Styles */
+
+:root {
+    --bg-primary: #0a0a0a;
+    --bg-secondary: #1a1a1a;
+    --bg-tertiary: #2a2a2a;
+    --text-primary: #e0e0e0;
+    --text-secondary: #a0a0a0;
+    --accent-blue: #4a9eff;
+    --accent-green: #4aff4a;
+    --accent-red: #ff4a4a;
+    --accent-yellow: #ffff4a;
+    --border-color: #333;
+}
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+    background-color: var(--bg-primary);
+    color: var(--text-primary);
+    line-height: 1.6;
+    min-height: 100vh;
+}
+
+.container {
+    max-width: 100%;
+    margin: 0;
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    overflow: hidden;
+}
+
+/* Header */
+header {
+    text-align: center;
+    margin-bottom: 6px;
+    padding-bottom: 3px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+header h1 {
+    font-size: 1.1em;
+    margin-bottom: 1px;
+    background: linear-gradient(45deg, var(--accent-blue), var(--accent-green));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+
+header p {
+    color: var(--text-secondary);
+    font-size: 0.65em;
+}
+
+/* First Row - Displays and Animations */
+.first-row {
+    display: flex;
+    gap: 15px;
+    margin-bottom: 15px;
+    align-items: stretch;
+    height: 450px;
+}
+
+.display-section {
+    display: flex;
+    gap: 15px;
+    justify-content: center;
+    align-items: flex-start;
+}
+
+/* Second Row - Settings */
+.second-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 10px;
+    margin-bottom: 8px;
+}
+
+/* Third Row - Commands and Actions */
+.third-row {
+    display: grid;
+    grid-template-columns: 2fr 1fr;
+    gap: 10px;
+    margin-bottom: 8px;
+}
+
+.display-panel {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+/* Animation Panel - Right side of displays */
+.animation-panel {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 8px;
+    width: 300px;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    height: 100%;
+}
+
+.display-panel h2 {
+    font-size: 0.9em;
+    margin-bottom: 4px;
+    color: var(--accent-blue);
+}
+
+.display-info {
+    color: var(--text-secondary);
+    font-size: 0.7em;
+    margin-bottom: 8px;
+}
+
+.led-display {
+    background: #000;
+    border: 2px solid var(--border-color);
+    border-radius: 4px;
+    display: block;
+    image-rendering: pixelated;
+    image-rendering: -moz-crisp-edges;
+    image-rendering: crisp-edges;
+}
+
+/* Maximum canvas sizes */
+#fld-canvas {
+    width: 262px;  /* (24+1)*10 + 12 */
+    height: 212px; /* (24+1)*8 + 12 */
+}
+
+#rld-canvas {
+    width: 712px; /* (24+1)*28 + 12 */
+    height: 212px; /* Match FLD height for alignment */
+}
+
+/* Control Sections */
+.settings-panel {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 8px;
+}
+
+.control-group {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 10px;
+}
+
+.control-group h3 {
+    font-size: 0.85em;
+    margin-bottom: 8px;
+    color: var(--accent-green);
+}
+
+/* Animation Grid - Two column layout */
+.animation-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+    flex: 1;
+    overflow-y: auto;
+    min-height: 0;
+    max-height: 100%;
+}
+
+/* Debug - remove after testing */
+.animation-grid:empty::after {
+    content: "No animations loaded";
+    color: var(--accent-red);
+    font-style: italic;
+}
+
+.animation-category {
+    grid-column: 1 / -1;
+    font-size: 0.75em;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-top: 6px;
+    margin-bottom: 4px;
+    padding-bottom: 2px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.animation-category:first-child {
+    margin-top: 0;
+}
+
+.animation-button {
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    color: var(--text-primary);
+    padding: 6px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.75em;
+    transition: all 0.2s ease;
+    text-align: left;
+    width: 100%;
+}
+
+.animation-button:hover {
+    background: #3a3a3a;
+    border-color: var(--accent-blue);
+}
+
+.animation-button.active {
+    background: var(--accent-blue);
+    color: #000;
+    font-weight: bold;
+}
+
+/* Parameter Controls */
+.parameter-controls,
+.settings-controls {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.param-row {
+    display: grid;
+    grid-template-columns: 80px 1fr 35px;
+    align-items: center;
+    gap: 8px;
+}
+
+.param-row label {
+    font-size: 0.75em;
+    color: var(--text-secondary);
+}
+
+.param-row input[type="range"] {
+    -webkit-appearance: none;
+    appearance: none;
+    height: 4px;
+    background: var(--bg-tertiary);
+    border-radius: 2px;
+    outline: none;
+}
+
+.param-row input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 12px;
+    height: 12px;
+    background: var(--accent-blue);
+    border-radius: 50%;
+    cursor: pointer;
+}
+
+.param-row input[type="range"]::-moz-range-thumb {
+    width: 12px;
+    height: 12px;
+    background: var(--accent-blue);
+    border-radius: 50%;
+    cursor: pointer;
+    border: none;
+}
+
+.param-row span {
+    text-align: center;
+    font-family: monospace;
+    color: var(--accent-blue);
+    font-size: 0.7em;
+}
+
+.param-row select,
+.param-row input[type="number"] {
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    color: var(--text-primary);
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 0.75em;
+}
+
+/* Control Groups */
+.control-group {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 8px;
+}
+
+.animation-panel h3 {
+    font-size: 0.85em;
+    margin-bottom: 6px;
+    color: var(--accent-green);
+}
+
+.control-group h3,
+.settings-panel h3 {
+    font-size: 0.8em;
+    margin-bottom: 6px;
+    color: var(--accent-green);
+}
+
+/* Command Output */
+.command-output {
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+}
+
+.command-output textarea {
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    color: var(--text-primary);
+    padding: 4px;
+    border-radius: 4px;
+    font-family: monospace;
+    font-size: 0.65em;
+    resize: none;
+    flex: 1;
+    height: 40px;
+}
+
+/* Buttons */
+.button {
+    background: var(--accent-blue);
+    color: #000;
+    border: none;
+    padding: 6px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.75em;
+    font-weight: 500;
+    transition: all 0.2s ease;
+}
+
+.button:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 2px 8px rgba(74, 158, 255, 0.3);
+}
+
+.button.secondary {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+    border: 1px solid var(--border-color);
+}
+
+.button.secondary:hover {
+    background: #3a3a3a;
+    box-shadow: none;
+}
+
+.button.danger {
+    background: var(--accent-red);
+    color: #fff;
+}
+
+.button.danger:hover {
+    box-shadow: 0 2px 8px rgba(255, 74, 74, 0.3);
+}
+
+.action-buttons {
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+    align-items: center;
+}
+
+/* Footer */
+footer {
+    text-align: center;
+    margin-top: 10px;
+    padding-top: 5px;
+    border-top: 1px solid var(--border-color);
+    color: var(--text-secondary);
+    font-size: 0.7em;
+}
+
+/* Responsive */
+@media (max-width: 1200px) {
+    .main-content {
+        grid-template-columns: repeat(2, 1fr);
+    }
+    
+    .bottom-controls {
+        grid-template-columns: 1fr;
+    }
+}
+
+@media (max-width: 768px) {
+    .display-section {
+        flex-direction: column;
+    }
+    
+    .main-content {
+        grid-template-columns: 1fr;
+    }
+}
+
+@media (max-width: 600px) {
+    .container {
+        padding: 10px;
+    }
+    
+    header h1 {
+        font-size: 1.2em;
+    }
+    
+    .animation-grid {
+        grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
+    }
+}

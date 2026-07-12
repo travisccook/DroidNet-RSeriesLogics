@@ -1,0 +1,66 @@
+# OS generated files #
+######################
+*.*.bak
+*.orig
+*.sublime-workspace
+._*
+.build
+.pio
+.vscode
+.lib
+*build_version.h
+requirements.txt
+.DS_Store
+.DS_Store?
+.Spotlight-V100
+.Trashes
+.vs/
+CLAUDE.md
+
+# C2B5 Custom Build Outputs #
+#############################
+# Build directories
+build/
+dist/
+out/
+
+# Test files and outputs
+tests/
+test_*.html
+test_*.js
+*.test.js
+*.spec.js
+
+# Node.js (for test tools)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+package-lock.json
+yarn.lock
+
+# Backup files
+*.backup
+*.old
+
+# Generated files (should be built from source)
+build/generated/*.h
+
+# Log files
+*.log
+logs/
+
+# Temporary files
+*.tmp
+*.temp
+tmp/
+temp/
+
+# Python cache (for build scripts)
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+.pio/
+*.hex
+*.o

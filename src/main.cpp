@@ -1,0 +1,1410 @@
+
+////////////////////////////////
+// CONFIGURATION OPTIONS
+////////////////////////////////
+
+#define USE_DEBUG                     // Define to enable debug diagnostic
+#define USE_WIFI                      // Define to enable Wifi support
+#define USE_DROID_REMOTE              // Define for droid remote support
+#define USE_SPIFFS                    // Enable read only filesystem
+#define USE_LEDLIB 0                  // Require FastLED instead of Adafruit NeoPixel library
+#ifndef WREACTOR32_2023
+#define USE_SDCARD                    // Enable SD card support
+#else
+#define USE_CONTROLLER
+#endif
+#define SHOW_UPTIME
+
+#define USE_LOGICS
+#ifdef USE_WIFI
+#define USE_MDNS
+#define USE_OTA
+#define USE_WIFI_WEB
+#define USE_WIFI_MARCDUINO
+//#define LIVE_STREAM
+#endif
+
+////////////////////////////////
+
+#define PREFERENCE_REMOTE_ENABLED       "remote"
+#define PREFERENCE_REMOTE_HOSTNAME      "rhost"
+#define PREFERENCE_REMOTE_SECRET        "rsecret"
+#define PREFERENCE_REMOTE_PAIRED        "rpaired"
+#define PREFERENCE_REMOTE_LMK           "rlmk"
+
+#define PREFERENCE_FLD                  "fld"
+#define PREFERENCE_RLD                  "rld"
+#define PREFERENCE_WIFI_ENABLED         "wifi"
+#define PREFERENCE_WIFI_SSID            "ssid"
+#define PREFERENCE_WIFI_PASS            "pass"
+#define PREFERENCE_WIFI_AP              "ap"
+#define PREFERENCE_WIFI_NETWORKS        "wifinetworks"
+#define PREFERENCE_WIFI_TIMEOUT         "wifitimeout"
+#define PREFERENCE_MDNS_HOSTNAME        "mdnshost"
+
+#define PREFERENCE_MARCSERIAL1          "mserial1"
+#define PREFERENCE_MARCSERIAL2          "mserial2"
+#define PREFERENCE_MARCSERIAL_PASS      "mserialpass"
+#define PREFERENCE_MARCSERIAL_ENABLED   "mserial"
+
+#define PREFERENCE_MARCWIFI_ENABLED     "mwifi"
+#define PREFERENCE_MARCWIFI_SERIAL_PASS "mwifipass"
+
+///////////////////////////////////
+
+#if __has_include("build_version.h")
+#include "build_version.h"
+#endif
+
+#if __has_include("reeltwo_build_version.h")
+#include "reeltwo_build_version.h"
+#endif
+
+////////////////////////////////
+
+#include "pin-config.h"
+
+////////////////
+
+// Replace with your network credentials
+#ifdef USE_WIFI
+#define REMOTE_ENABLED       false
+#define WIFI_ENABLED         true
+// Set these to your desired credentials.
+#define WIFI_AP_NAME         "RSeries"
+#define WIFI_AP_PASSPHRASE   "Astromech"
+#define WIFI_ACCESS_POINT    true  /* true if access point: false if joining existing wifi */
+#endif
+
+#define SMQ_HOSTNAME         "RSeries"
+#define SMQ_SECRET           "Astromech"
+
+////////////////////////////////
+
+#ifdef USE_DROID_REMOTE
+#include "ReelTwoSMQ32.h"
+#else
+#include "ReelTwo.h"
+#endif
+#include "Arduino.h"
+#include "core/AnalogMonitor.h"
+#include "core/DelayCall.h"
+#include "core/Marcduino.h"
+#ifdef USE_OTA
+#include <ArduinoOTA.h>
+#endif
+#include "core/MedianSampleBuffer.h"
+
+////////////////////////////////
+
+#define MARC_SERIAL1_BAUD_RATE          9600
+#define MARC_SERIAL2_BAUD_RATE          9600
+#define MARC_SERIAL_PASS                true
+#define MARC_SERIAL_ENABLED             true
+#define MARC_WIFI_ENABLED               true
+#define MARC_WIFI_SERIAL_PASS           true
+
+////////////////////////////////
+
+#if defined(USE_LCD_SCREEN) || defined(USE_DROID_REMOTE)
+#define USE_MENUS                     // Define if using menu system
+#endif
+
+////////////////////////////////
+
+#include "wifi/WifiAccess.h"
+
+#ifdef USE_MDNS
+#include <ESPmDNS.h>
+#endif
+#ifdef USE_WIFI_WEB
+#include "wifi/WifiWebServer.h"
+#endif
+#ifdef USE_WIFI_MARCDUINO
+#include "wifi/WifiMarcduinoReceiver.h"
+#endif
+#ifdef USE_SPIFFS
+#include "SPIFFS.h"
+#define USE_FS SPIFFS
+#elif defined(USE_FATFS)
+#include "FFat.h"
+#define USE_FS FFat
+#elif defined(USE_LITTLEFS)
+#include "LITTLEFS.h"
+#define USE_FS LITTLEFS
+#endif
+#include "FS.h"
+#include "SPI.h"
+#ifdef USE_SDCARD
+#include "SD.h"
+#endif
+
+#ifdef LIVE_STREAM
+#include "AsyncUDP.h"
+#endif
+#include "dome/LogicEngine.h"
+#include "dome/LogicEngineController.h"
+#include "ServoDispatchPCA9685.h"
+#include "ServoSequencer.h"
+
+#include <Preferences.h>
+#include <ArduinoJson.h>
+
+Preferences preferences;
+
+/////////////////////////////////////////////////////////////////////////
+
+enum LogicEngineFLDType
+{
+    kLogicEngineNoFLD = 0,
+    kLogicEngineDeathStarFLD,
+    kLogicEngineDeathStarFLDInverted,
+    kLogicEngineKennyFLD,
+    kLogicEngineNabooFLD,
+    kLogicEngineRGBWFLD
+};
+
+enum LogicEngineRLDType
+{
+    kLogicEngineNoRLD = 0,
+    kLogicEngineCurvedRLD,
+    kLogicEngineCurvedRLDInverted,
+    kLogicEngineDeathStarRLD,
+    kLogicEngineDeathStarRLDStaggerOdd,
+    kLogicEngineDeathStarRLDInverted,
+    kLogicEngineDeathStarRLDInvertedStaggerOdd,
+    kLogicEngineKennyRLD,
+    kLogicEngineNabooRLD,
+    kLogicEngineSuperRLD
+};
+
+#ifdef USE_LOGICS
+LogicEngineRenderer* FLD;
+LogicEngineRenderer* RLD;
+LogicEngineFLDType sFLDType;
+LogicEngineRLDType sRLDType;
+#ifdef USE_CONTROLLER
+LogicEngineControllerDefault sController(preferences);
+#endif
+
+void FLD_init()
+{
+    switch (sFLDType)
+    {
+        case kLogicEngineDeathStarFLD:
+            FLD = new LogicEngineDeathStarFLD<>(LogicEngineFLDDefault, 1);
+            break;
+        case kLogicEngineDeathStarFLDInverted:
+            FLD = new LogicEngineDeathStarFLDInverted<>(LogicEngineFLDDefault, 1);
+            break;
+        case kLogicEngineKennyFLD:
+            FLD = new LogicEngineKennyFLD<>(LogicEngineFLDDefault, 1);
+            break;
+        case kLogicEngineNabooFLD:
+            FLD = new LogicEngineNabooFLD<>(LogicEngineFLDDefault, 1);
+            break;
+        case kLogicEngineRGBWFLD:
+            FLD = new LogicEngineRGBWFLD<>(LogicEngineFLDDefault, 1);
+            break;
+        case kLogicEngineNoFLD:
+        default:
+            break;
+    }
+}
+
+bool RLD_needsClock()
+{
+    return (sRLDType == kLogicEngineCurvedRLD || sRLDType == kLogicEngineCurvedRLDInverted);
+}
+
+void RLD_init()
+{
+    // LogicEngineCurvedRLD and LogicEngineCurvedRLDInverted will use pins
+    // REAR_LOGIC_PIN and REAR_LOGIC_CLOCK_PIN. Change all other RLD types to use
+    // REAR_LOGIC_CLOCK_PIN instead of the default REAR_LOGIC_PIN.
+    // That way they plug in directly to the board. In that case REAR_LOGIC_PIN
+    // will be left unused.
+    switch (sRLDType)
+    {
+        default:
+        case kLogicEngineNoRLD:
+            break;
+        case kLogicEngineCurvedRLD:
+            RLD = new LogicEngineCurvedRLD<>(LogicEngineRLDDefault, 2);
+            break;
+        case kLogicEngineCurvedRLDInverted:
+            RLD = new LogicEngineCurvedRLDInverted<>(LogicEngineRLDDefault, 2);
+            break;
+        case kLogicEngineDeathStarRLD:
+            RLD = new LogicEngineDeathStarRLD<REAR_LOGIC_CLOCK_PIN>(LogicEngineRLDDefault, 2);
+            break;
+        case kLogicEngineDeathStarRLDStaggerOdd:
+            RLD = new LogicEngineDeathStarRLDStaggerOdd<REAR_LOGIC_CLOCK_PIN>(LogicEngineRLDDefault, 2);
+            break;
+        case kLogicEngineDeathStarRLDInverted:
+            RLD = new LogicEngineDeathStarRLDInverted<REAR_LOGIC_CLOCK_PIN>(LogicEngineRLDDefault, 2);
+            break;
+        case kLogicEngineDeathStarRLDInvertedStaggerOdd:
+            RLD = new LogicEngineDeathStarRLDInvertedStaggerOdd<REAR_LOGIC_CLOCK_PIN>(LogicEngineRLDDefault, 2);
+            break;
+        case kLogicEngineKennyRLD:
+            RLD = new LogicEngineKennyRLD<REAR_LOGIC_CLOCK_PIN>(LogicEngineRLDDefault, 2);
+            break;
+        case kLogicEngineNabooRLD:
+            RLD = new LogicEngineNabooRLD<REAR_LOGIC_CLOCK_PIN>(LogicEngineRLDDefault, 2);
+            break;
+        case kLogicEngineSuperRLD:
+            RLD = new LogicEngineSuperRLD<REAR_LOGIC_CLOCK_PIN>(LogicEngineRLDDefault, 2);
+            break;
+    }
+}
+
+void FLD_selectType(unsigned type)
+{
+    switch (type)
+    {
+        default:
+        case kLogicEngineNoFLD:
+            sFLDType = kLogicEngineNoFLD;
+            break;
+        case kLogicEngineDeathStarFLD:
+        case kLogicEngineDeathStarFLDInverted:
+        case kLogicEngineKennyFLD:
+        case kLogicEngineNabooFLD:
+        case kLogicEngineRGBWFLD:
+            sFLDType = (LogicEngineFLDType)type;
+            break;
+    }
+}
+
+void RLD_selectType(unsigned type)
+{
+    switch (type)
+    {
+        default:
+        case kLogicEngineNoRLD:
+            sRLDType = kLogicEngineNoRLD;
+            break;
+        case kLogicEngineCurvedRLD:
+        case kLogicEngineCurvedRLDInverted:
+            sRLDType = (LogicEngineRLDType)type;
+            break;
+        case kLogicEngineDeathStarRLD:
+        case kLogicEngineDeathStarRLDStaggerOdd:
+        case kLogicEngineDeathStarRLDInverted:
+        case kLogicEngineDeathStarRLDInvertedStaggerOdd:
+        case kLogicEngineKennyRLD:
+        case kLogicEngineNabooRLD:
+        case kLogicEngineSuperRLD:
+            sRLDType = (LogicEngineRLDType)type;
+            break;
+    }
+}
+
+void FLD_selectSequence(byte seq, LogicEngineRenderer::ColorVal colorVal = LogicEngineRenderer::kDefault, uint8_t speedScale = 0, uint8_t numSeconds = 0)
+{
+    if (FLD != NULL)
+        FLD->selectSequence(seq, colorVal, speedScale, numSeconds);
+}
+
+void RLD_selectSequence(byte seq, LogicEngineRenderer::ColorVal colorVal = LogicEngineRenderer::kDefault, uint8_t speedScale = 0, uint8_t numSeconds = 0)
+{
+    if (RLD != NULL)
+        RLD->selectSequence(seq, colorVal, speedScale, numSeconds);
+}
+
+void FLD_selectScrollTextLeft(const char* text, LogicEngineRenderer::ColorVal colorVal = LogicEngineRenderer::kDefault, uint8_t speedScale = 0, uint8_t numSeconds = 0)
+{
+    if (FLD != NULL)
+        FLD->selectScrollTextLeft(text, colorVal, 0, numSeconds);
+}
+
+void RLD_selectScrollTextLeft(const char* text, LogicEngineRenderer::ColorVal colorVal = LogicEngineRenderer::kDefault, uint8_t speedScale = 0, uint8_t numSeconds = 0)
+{
+    if (RLD != NULL)
+        RLD->selectScrollTextLeft(text, colorVal, 0, numSeconds);
+}
+
+void FLD_setEffectFontNum(unsigned fontNum)
+{
+    if (FLD != NULL)
+        FLD->setEffectFontNum(fontNum);
+}
+
+void RLD_setEffectFontNum(unsigned fontNum)
+{
+    if (RLD != NULL)
+        RLD->setEffectFontNum(fontNum);
+}
+
+void FLD_setTextMessage(const char* str)
+{
+    if (FLD != NULL)
+        FLD->setTextMessage(str);
+}
+
+void RLD_setTextMessage(const char* str)
+{
+    if (RLD != NULL)
+        RLD->setTextMessage(str);
+}
+
+void FLD_setEffectWidthRange(float percent)
+{
+    if (FLD != NULL)
+        FLD->setEffectWidthRange(percent);
+}
+
+void RLD_setEffectWidthRange(float percent)
+{
+    if (RLD != NULL)
+        RLD->setEffectWidthRange(percent);
+}
+
+void FLD_setPeakValueProvider(PeakValueProvider& provider)
+{
+    if (FLD != NULL)
+        FLD->setPeakValueProvider(provider);
+}
+
+void RLD_setPeakValueProvider(PeakValueProvider& provider)
+{
+    if (RLD != NULL)
+        RLD->setPeakValueProvider(provider);
+}
+
+void FLD_setLogicEffectSelector(LogicEffectSelector selector)
+{
+    if (FLD != NULL)
+        FLD->setLogicEffectSelector(selector);
+}
+
+void RLD_setLogicEffectSelector(LogicEffectSelector selector)
+{
+    if (RLD != NULL)
+        RLD->setLogicEffectSelector(selector);
+}
+
+String FLDText;
+String RLDText;
+
+#endif
+
+/////////////////////////////////////////////////////////////////////////
+
+#include "MarcduinoLogics.h"
+
+const ServoSettings servoSettings[] PROGMEM = {
+};
+
+ServoDispatchPCA9685<SizeOfArray(servoSettings)> servoDispatch(servoSettings);
+ServoSequencer servoSequencer(servoDispatch);
+AnimationPlayer player(servoSequencer);
+MarcduinoSerial<> marcduinoSerial(player);
+
+/////////////////////////////////////////////////////////////////////////
+
+#define NUM_LEDS 28*4
+uint32_t lastEvent;
+CRGB leds[NUM_LEDS];
+#ifdef LIVE_STREAM
+AsyncUDP udp;
+#else
+File fxdata;
+#endif
+
+#ifdef USE_WIFI
+bool wifiEnabled;
+bool wifiActive;
+bool remoteEnabled;
+bool remoteActive;
+TaskHandle_t eventTask;
+bool otaInProgress;
+#endif
+
+enum
+{
+    SDBITMAP = 100,
+    PLASMA,
+    METABALLS,
+    FRACTAL,
+    FADEANDSCROLL,
+    COLORWHEEL
+};
+
+#include "effects/BitmapEffect.h"
+#include "effects/FadeAndScrollEffect.h"
+#include "effects/FractalEffect.h"
+#include "effects/MeatBallsEffect.h"
+#include "effects/PlasmaEffect.h"
+#include "effects/ColorWheel.h"
+
+LogicEffect CustomLogicEffectSelector(unsigned selectSequence)
+{
+    static const LogicEffect sCustomLogicEffects[] = {
+        LogicEffectBitmap,
+        LogicEffectPlasma,
+        LogicEffectMetaBalls,
+        LogicEffectFractal,
+        LogicEffectFadeAndScroll,
+        LogicEffectColorWheel
+    };
+    if (selectSequence >= 100 && selectSequence-100 <= SizeOfArray(sCustomLogicEffects))
+    {
+        return LogicEffect(sCustomLogicEffects[selectSequence-100]);
+    }
+    return LogicEffectDefaultSelector(selectSequence);
+}
+
+/////////////////////////////////////////////////////////////////////////
+
+static bool sVSPIStarted;
+
+bool ensureVSPIStarted()
+{
+    if (!sVSPIStarted)
+    {
+        sVSPIStarted = true;
+        SPI.begin();
+        SPI.setFrequency(1000000);
+    }
+    return true;
+}
+
+#ifdef USE_SDCARD
+static bool sSDCardMounted;
+#else
+static constexpr bool sSDCardMounted = false;
+#endif
+
+bool mountReadOnlyFileSystem()
+{
+#ifdef USE_SPIFFS
+    return (SPIFFS.begin(true));
+#endif
+    return false;
+}
+
+bool mountWritableFileSystem()
+{
+#ifdef USE_FATFS
+    return (FFat.begin(true, "/fatfs"));
+#endif
+    return false;
+}
+
+bool getSDCardMounted()
+{
+    return sSDCardMounted;
+}
+
+bool mountSDFileSystem()
+{
+#ifdef USE_SDCARD
+    if (!ensureVSPIStarted())
+        return false;
+    if (SD.begin(SD_CS_PIN))
+    {
+        DEBUG_PRINTLN("Card Mount Success");
+        sSDCardMounted = true;
+        return true;
+    }
+    DEBUG_PRINTLN("Card Mount Failed");
+#endif
+    return false;
+}
+
+void unmountSDFileSystem()
+{
+#ifdef USE_SDCARD
+    if (sSDCardMounted)
+    {
+        sSDCardMounted = false;
+        SD.end();
+    }
+    if (sVSPIStarted)
+    {
+        SPI.end();
+    }
+#endif
+}
+
+void unmountFileSystems()
+{
+    unmountSDFileSystem();
+#ifdef USE_FATFS
+    FFat.end();
+#endif
+#ifdef USE_SPIFFS
+    SPIFFS.end();
+#endif
+}
+
+////////////////////////////////
+
+void loadWifiNetworks(WifiAccess& wifi)
+{
+#ifdef USE_WIFI
+    DEBUG_PRINTLN("loadWifiNetworks called");
+    String networksJson = preferences.getString(PREFERENCE_WIFI_NETWORKS, "");
+    DEBUG_PRINTLN("Loaded from preferences: " + networksJson);
+    
+    if (!networksJson.isEmpty())
+    {
+        DynamicJsonDocument doc(2048);
+        DeserializationError error = deserializeJson(doc, networksJson);
+        
+        if (!error)
+        {
+            JsonArray networks = doc.as<JsonArray>();
+            DEBUG_PRINTLN("Number of networks loaded: " + String(networks.size()));
+            
+            for (JsonObject network : networks)
+            {
+                String ssid = network["ssid"];
+                String password = network["password"];
+                int priority = network["priority"];
+                
+                // Fix URL-encoded SSIDs when loading from preferences
+                if (ssid.indexOf("%20") >= 0) {
+                    DEBUG_PRINTLN("Fixing URL-encoded SSID: " + ssid);
+                    ssid.replace("%20", " ");
+                    DEBUG_PRINTLN("Fixed to: " + ssid);
+                    network["ssid"] = ssid;  // Update the JSON document
+                }
+                
+                DEBUG_PRINTLN("Loading network: " + ssid + " (Priority: " + String(priority) + ")");
+                wifi.addSavedNetwork(ssid, password, priority);
+            }
+        }
+        else
+        {
+            DEBUG_PRINTLN("JSON deserialization error: " + String(error.c_str()));
+        }
+    }
+    else
+    {
+        DEBUG_PRINTLN("No saved networks in preferences, checking legacy settings");
+        // Load legacy single network if no saved networks exist
+        String ssid = preferences.getString(PREFERENCE_WIFI_SSID, "");
+        String password = preferences.getString(PREFERENCE_WIFI_PASS, "");
+        if (!ssid.isEmpty())
+        {
+            DEBUG_PRINTLN("Loading legacy network: " + ssid);
+            wifi.addSavedNetwork(ssid, password, 1);
+        }
+        else
+        {
+            DEBUG_PRINTLN("No legacy network found either");
+        }
+    }
+#endif
+}
+
+void saveWifiNetworks(WifiAccess& wifi)
+{
+#ifdef USE_WIFI
+    DEBUG_PRINTLN("saveWifiNetworks called");
+    DynamicJsonDocument doc(2048);
+    JsonArray networks = doc.to<JsonArray>();
+    
+    auto savedNetworks = wifi.getSavedNetworks();
+    DEBUG_PRINTLN("Number of networks to save: " + String(savedNetworks.size()));
+    
+    for (const auto& network : savedNetworks)
+    {
+        DEBUG_PRINTLN("Saving network: " + network.ssid + " (Priority: " + String(network.priority) + ")");
+        JsonObject net = networks.createNestedObject();
+        net["ssid"] = network.ssid;
+        net["password"] = network.password;
+        net["priority"] = network.priority;
+    }
+    
+    String networksJson;
+    serializeJson(doc, networksJson);
+    DEBUG_PRINTLN("Saving to preferences: " + networksJson);
+    preferences.putString(PREFERENCE_WIFI_NETWORKS, networksJson);
+#endif
+}
+
+////////////////////////////////
+
+void reboot()
+{
+    DEBUG_PRINTLN("Restarting...");
+    unmountFileSystems();
+    preferences.end();
+    delay(1000);
+    ESP.restart();
+}
+
+/////////////////////////////////////////////////////////////////////////
+
+void scan_i2c()
+{
+    unsigned nDevices = 0;
+    for (byte address = 1; address < 127; address++)
+    {
+        String name = "<unknown>";
+        Wire.beginTransmission(address);
+        byte error = Wire.endTransmission();
+        if (address == 0x70)
+        {
+            // All call address for PCA9685
+            name = "PCA9685:all";
+        }
+        if (address == 0x40)
+        {
+            // Adafruit PCA9685
+            name = "PCA9685";
+        }
+        if (address == 0x14)
+        {
+            // IA-Parts magic panel
+            name = "IA-Parts Magic Panel";
+        }
+        if (address == 0x20)
+        {
+            // IA-Parts periscope
+            name = "IA-Parts Periscope";
+        }
+        if (address == 0x16)
+        {
+            // PSIPro
+            name = "PSIPro";
+        }
+
+        if (error == 0)
+        {
+            Serial.print("I2C device found at address 0x");
+            if (address < 16)
+                Serial.print("0");
+            Serial.print(address, HEX);
+            Serial.print(" ");
+            Serial.println(name);
+            nDevices++;
+        }
+        else if (error == 4)
+        {
+            Serial.print("Unknown error at address 0x");
+            if (address < 16)
+                Serial.print("0");
+            Serial.println(address, HEX);
+        }
+    }
+    if (nDevices == 0)
+        Serial.println("No I2C devices found\n");
+    else
+        Serial.println("done\n");
+}
+
+bool mountFileSystem()
+{
+#ifdef USE_FATFS
+    return (USE_FS.begin(false, "/ffat", 3));
+#elif defined(USE_LITTLEFS)
+    return (USE_FS.begin(false));
+#else
+    return (USE_FS.begin(true));
+#endif
+}
+
+void unmountFileSystem()
+{
+    USE_FS.end();
+}
+
+#ifdef USE_WIFI
+WifiAccess wifiAccess;
+#endif
+
+#ifdef USE_WIFI_MARCDUINO
+WifiMarcduinoReceiver wifiMarcduinoReceiver(wifiAccess);
+#endif
+
+////////////////////////////////
+
+#ifdef USE_MENUS
+
+#include "Screens.h"
+#include "menus/CommandScreen.h"
+
+#ifdef USE_LCD_SCREEN
+
+#define SCREEN_WIDTH 128 // OLED display width, in pixels
+#define SCREEN_HEIGHT 32 // OLED display height, in pixels
+
+#define SCREEN_ADDRESS 0x3C
+
+#include "menus/CommandScreenHandlerSSD1306.h"
+CommandScreenHandlerSSD1306 sDisplay(sPinManager);
+
+#else
+
+#include "menus/CommandScreenHandlerSMQ.h"
+CommandScreenHandlerSMQ sDisplay;
+
+#endif
+
+#include "menus/utility/ChoiceIntArrayScreen.h"
+#include "menus/utility/ChoiceStrArrayScreen.h"
+#include "menus/utility/UnsignedValueScreen.h"
+#include "menus/utility/MenuScreen.h"
+
+#include "menus/SplashScreen.h"
+#include "menus/MainScreen.h"
+#include "menus/LogicsScreen.h"
+#include "menus/SequenceScreen.h"
+
+#endif
+
+////////////////////////////////
+
+#ifdef USE_WIFI_WEB
+#include "WebPages.h"
+#endif
+
+////////////////////////////////
+
+#ifdef USE_WIFI
+void eventLoopTask(void*);
+#endif
+
+void setup()
+{
+    REELTWO_READY();
+
+    if (!preferences.begin("rseries", false))
+    {
+        DEBUG_PRINTLN("Failed to init prefs");
+    }
+    
+
+    mountSDFileSystem();
+
+    delay(200);
+
+#ifdef USE_SDCARD
+    if (getSDCardMounted())
+    {
+        File binImage = SD.open("/LENGINE.BIN");
+        if (binImage)
+        {
+            Serial.println("Firmware image found on SD card");
+            Serial.print("Reflashing");
+            Update.begin(binImage.size());
+            uint32_t readSize = 0;
+            while (binImage.available())
+            {
+                uint8_t buf = binImage.read();
+                Update.write(&buf, 1);
+                readSize++;
+                if ((readSize % 102400) == 0)
+                    Serial.print(".");
+            }
+            Serial.println("");
+            binImage.close();
+            // Delete the image file so we don't constantly reflash the box
+            SD.remove("/LENGINE.BIN");
+            if (Update.end(true))
+            {
+                Serial.println("Update Success: "); Serial.println(readSize);
+                reboot();
+            }
+        }
+    }
+#endif
+#ifdef USE_WIFI
+    wifiEnabled = preferences.getBool(PREFERENCE_WIFI_ENABLED, WIFI_ENABLED);
+    wifiActive = false;  // WiFi is not active until it actually connects
+    remoteEnabled = preferences.getBool(PREFERENCE_REMOTE_ENABLED, REMOTE_ENABLED);
+    remoteActive = remoteEnabled;  // Remote can be active immediately if enabled
+#endif
+    PrintReelTwoInfo(Serial, "LogicEngine");
+
+    if (preferences.getBool(PREFERENCE_MARCSERIAL_ENABLED, MARC_SERIAL_ENABLED))
+    {
+        int baudrate1 = preferences.getInt(PREFERENCE_MARCSERIAL1, MARC_SERIAL1_BAUD_RATE);
+        if (!isValidBaudRate(baudrate1)) {
+            printf("Serial1 baud rate of %d is invalid. Defaulting to %d.\n", baudrate1, MARC_SERIAL1_BAUD_RATE);
+            baudrate1 = MARC_SERIAL1_BAUD_RATE;
+        }
+        int baudrate2 = preferences.getInt(PREFERENCE_MARCSERIAL2, MARC_SERIAL2_BAUD_RATE);
+        if (!isValidBaudRate(baudrate2)) {
+            printf("Serial2 baud rate of %d is invalid. Defaulting to %d.\n", baudrate2, MARC_SERIAL2_BAUD_RATE);
+            baudrate2 = MARC_SERIAL2_BAUD_RATE;
+        }
+        Serial1.begin(baudrate1, SERIAL_8N1, SERIAL1_RX_PIN, SERIAL1_TX_PIN);
+        Serial2.begin(baudrate2, SERIAL_8N1, SERIAL2_RX_PIN, SERIAL2_TX_PIN);
+        marcduinoSerial.setStream(&Serial1, (preferences.getBool(PREFERENCE_MARCSERIAL_PASS, MARC_SERIAL_PASS)) ? &Serial2 : &Serial);
+    }
+
+    // Initialize FLD
+    FLD_selectType(preferences.getUChar(PREFERENCE_FLD, kLogicEngineDeathStarFLD));
+    FLD_init();
+
+    // Initialize RLD
+    RLD_selectType(preferences.getUChar(PREFERENCE_RLD, kLogicEngineCurvedRLD));
+    RLD_init();
+
+    Wire.begin();
+    SetupEvent::ready();
+
+    if (remoteEnabled)
+    {
+    #ifdef USE_SMQ
+        WiFi.mode(WIFI_MODE_STA);
+        if (SMQ::init(preferences.getString(PREFERENCE_REMOTE_HOSTNAME, SMQ_HOSTNAME),
+                        preferences.getString(PREFERENCE_REMOTE_SECRET, SMQ_SECRET)))
+        {
+            printf("Droid Remote Enabled\n");
+            SMQ::setHostDiscoveryCallback([](SMQHost* host) {
+                if (host->hasTopic("LCD"))
+                {
+                    printf("Remote Discovered: %s\n", host->getHostName().c_str());
+                }
+            });
+
+            SMQ::setHostLostCallback([](SMQHost* host) {
+                printf("Lost: %s\n", host->getHostName().c_str());
+            });
+        }
+        else
+        {
+            printf("Failed to activate Droid Remote\n");
+        }
+    #endif
+    }
+    else if (wifiEnabled)
+    {
+    #ifdef USE_WIFI_WEB
+        // Check if we should start in AP mode
+        bool startInAPMode = preferences.getBool(PREFERENCE_WIFI_AP, WIFI_ACCESS_POINT);
+        
+        // Check if we're forcing STA mode (from Connect button)
+        bool forceSTAMode = preferences.getBool("wifi_force_sta", false);
+        if (forceSTAMode) {
+            startInAPMode = false;
+            preferences.remove("wifi_force_sta");  // Clear the flag
+            DEBUG_PRINTLN("Forcing STA mode due to Connect button");
+        }
+        
+        // Load saved WiFi networks
+        loadWifiNetworks(wifiAccess);
+        
+        
+        
+        // If no saved networks and AP mode not explicitly set, default to AP mode
+        // Check if PREFERENCE_WIFI_AP has been explicitly set by checking if it's different from a sentinel value
+        bool apModeExplicitlySet = preferences.isKey(PREFERENCE_WIFI_AP);
+        if (wifiAccess.getSavedNetworks().empty() && !apModeExplicitlySet && !forceSTAMode)
+        {
+            startInAPMode = true;
+            DEBUG_PRINTLN("No saved networks found - defaulting to AP mode");
+        }
+        
+        // Set AP fallback credentials
+        wifiAccess.setAPFallback(
+            preferences.getString(PREFERENCE_WIFI_SSID, WIFI_AP_NAME),
+            preferences.getString(PREFERENCE_WIFI_PASS, WIFI_AP_PASSPHRASE));
+        
+        // Set WiFi connection timeout (default 60 seconds)
+        uint32_t wifiTimeout = preferences.getInt(PREFERENCE_WIFI_TIMEOUT, 60);
+        wifiAccess.setAPFallbackTimeout(wifiTimeout * 1000); // Convert seconds to milliseconds
+        DEBUG_PRINTLN("WiFi timeout set to: " + String(wifiTimeout) + " seconds");
+        
+        // Configure WiFi mode
+        if (startInAPMode)
+        {
+            DEBUG_PRINTLN("Starting WiFi in AP mode");
+            wifiAccess.setNetworkCredentials(
+                preferences.getString(PREFERENCE_WIFI_SSID, WIFI_AP_NAME),
+                preferences.getString(PREFERENCE_WIFI_PASS, WIFI_AP_PASSPHRASE),
+                true,  // accessPoint = true to force AP mode
+                true   // enabled = true
+            );
+        }
+        else
+        {
+            DEBUG_PRINTLN("Starting WiFi in client mode");
+            wifiAccess.setEnabled(true);
+        }
+    #ifdef USE_WIFI_MARCDUINO
+        wifiMarcduinoReceiver.setEnabled(preferences.getBool(PREFERENCE_MARCWIFI_ENABLED, MARC_WIFI_ENABLED));
+        if (wifiMarcduinoReceiver.enabled())
+        {
+            wifiMarcduinoReceiver.setCommandHandler([](const char* cmd) {
+                DEBUG_PRINTLN(cmd);
+                Marcduino::processCommand(player, cmd);
+                if (preferences.getBool(PREFERENCE_MARCWIFI_SERIAL_PASS, MARC_WIFI_SERIAL_PASS) &&
+                    preferences.getBool(PREFERENCE_MARCSERIAL_ENABLED, MARC_SERIAL_ENABLED) &&
+                    preferences.getBool(PREFERENCE_MARCSERIAL_PASS, MARC_SERIAL_PASS))
+                {
+                    Serial2.print(cmd); Serial2.print('\r');
+                }
+            });
+        }
+    #endif
+        wifiAccess.notifyWifiConnected([](WifiAccess &wifi) {
+        #ifdef STATUSLED_PIN
+            statusLED.setMode(sCurrentMode = kWifiMode);
+        #endif
+            wifiActive = true;  // Set wifiActive to true when WiFi connects
+            Serial.print("Connect to http://"); Serial.println(wifi.getIPAddress());
+        #ifdef USE_MDNS
+            // Set up mDNS for both AP and station modes
+            String hostName = preferences.getString(PREFERENCE_MDNS_HOSTNAME, "");
+            if (hostName.isEmpty())
+            {
+                // Default to simple "RSeries" hostname
+                hostName = String(WIFI_AP_NAME);
+            }
+            
+            if (webServer.enabled())
+            {
+                Serial.print("Host name: "); Serial.println(hostName);
+                Serial.print("Access at: http://"); Serial.print(hostName); Serial.println(".local");
+                if (!MDNS.begin(hostName.c_str()))
+                {
+                    // If "RSeries" fails (likely due to conflict), fall back to unique identifier
+                    DEBUG_PRINTLN("Error setting up MDNS responder! Trying with unique identifier...");
+                    String mac = wifi.getMacAddress();
+                    String uniqueHostName = mac.substring(mac.length()-5, mac.length());
+                    uniqueHostName.remove(2, 1);
+                    uniqueHostName = String(WIFI_AP_NAME)+String("-")+uniqueHostName;
+                    
+                    Serial.print("Fallback host name: "); Serial.println(uniqueHostName);
+                    if (!MDNS.begin(uniqueHostName.c_str()))
+                    {
+                        DEBUG_PRINTLN("Error setting up MDNS responder with fallback!");
+                    }
+                    else
+                    {
+                        Serial.print("Access at: http://"); Serial.print(uniqueHostName); Serial.println(".local");
+                        // Add service discovery
+                        MDNS.addService("http", "tcp", 80);
+                    }
+                }
+                else
+                {
+                    // Add service discovery
+                    MDNS.addService("http", "tcp", 80);
+                }
+            }
+        #endif
+        });
+        wifiAccess.notifyWifiDisconnected([](WifiAccess &wifi) {
+            wifiActive = false;  // Set wifiActive to false when WiFi disconnects
+            DEBUG_PRINTLN("WiFi disconnected");
+        });
+    #endif
+    #ifdef USE_OTA
+        ArduinoOTA.onStart([]()
+        {
+            String type;
+            if (ArduinoOTA.getCommand() == U_FLASH)
+            {
+                type = "sketch";
+            }
+            else // U_SPIFFS
+            {
+                type = "filesystem";
+            }
+            DEBUG_PRINTLN("OTA START");
+        })
+        .onEnd([]()
+        {
+            DEBUG_PRINTLN("OTA END");
+        })
+        .onProgress([](unsigned int progress, unsigned int total)
+        {
+            // float range = (float)progress / (float)total;
+        })
+        .onError([](ota_error_t error)
+        {
+            String desc;
+            if (error == OTA_AUTH_ERROR) desc = "Auth Failed";
+            else if (error == OTA_BEGIN_ERROR) desc = "Begin Failed";
+            else if (error == OTA_CONNECT_ERROR) desc = "Connect Failed";
+            else if (error == OTA_RECEIVE_ERROR) desc = "Receive Failed";
+            else if (error == OTA_END_ERROR) desc = "End Failed";
+            else desc = "Error: "+String(error);
+            DEBUG_PRINTLN(desc);
+        });
+    #endif
+    }
+
+#ifdef USE_CONTROLLER
+    // Setup button and trimpot controller
+    sController.configure(FLD, RLD);
+    sController.setWifiReset([]() {
+        DEBUG_PRINTLN("WiFi Changed");
+        preferences.putString(PREFERENCE_WIFI_SSID, WIFI_AP_NAME);
+        preferences.putString(PREFERENCE_WIFI_PASS, WIFI_AP_PASSPHRASE);
+        preferences.putBool(PREFERENCE_WIFI_AP, WIFI_ACCESS_POINT);
+        preferences.putBool(PREFERENCE_WIFI_ENABLED, WIFI_ENABLED);
+        reboot();
+    });
+
+    sController.setWifiToggle([]() {
+        bool wifiEnabled = !preferences.getBool(PREFERENCE_WIFI_ENABLED, WIFI_ENABLED);
+        if (wifiEnabled)
+        {
+            DEBUG_PRINTLN("WiFi Enabled");
+        }
+        else
+        {
+            DEBUG_PRINTLN("WiFi Disabled");
+        }
+        preferences.putBool(PREFERENCE_WIFI_ENABLED, wifiEnabled);
+        reboot();
+    });
+#endif
+
+    Serial.print("Total heap:  "); Serial.println(ESP.getHeapSize());
+    Serial.print("Free heap:   "); Serial.println(ESP.getFreeHeap());
+    Serial.print("Total PSRAM: "); Serial.println(ESP.getPsramSize());
+    Serial.print("Free PSRAM:  "); Serial.println(ESP.getFreePsram());
+
+#ifdef USE_WIFI_WEB
+    // For safety we will stop the motors if the web client is connected
+    webServer.setConnect([]() {
+        // Callback for each connected web client
+        // DEBUG_PRINTLN("Hello");
+    });
+#endif
+
+#ifdef LIVE_STREAM
+    udp.onPacket([](AsyncUDPPacket packet) {
+        if (packet.length() == sizeof(leds))
+        {
+            memcpy(leds, packet.data(), sizeof(leds));
+            // Serial.println(".");
+        }
+        else
+        {
+            Serial.println("BAD length : "+String(packet.length())+" expecting "+String(sizeof(leds)));
+        }
+    });
+#endif
+
+    RLD_setLogicEffectSelector(CustomLogicEffectSelector);
+    FLD_setLogicEffectSelector(CustomLogicEffectSelector);
+
+#ifdef LIVE_STREAM
+    if (udp.listen(1234)) {
+    }
+#endif
+
+#ifdef USE_WIFI
+    xTaskCreatePinnedToCore(
+          eventLoopTask,
+          "Events",
+          5000,    // shrink stack size?
+          NULL,
+          1,
+          &eventTask,
+          0);
+          
+    // Give WiFi and web server time to initialize properly
+    delay(100);
+#endif
+}
+
+////////////////
+
+MARCDUINO_ACTION(DirectCommand, ~RT, ({
+    // Direct ReelTwo command
+    CommandEvent::process(Marcduino::getCommand());
+}))
+
+////////////////
+
+MARCDUINO_ACTION(LEDirectCommand, @LE, ({
+    // Direct ReelTwo command
+    CommandEvent::process(Marcduino::getCommand());
+}))
+
+MARCDUINO_ACTION(APDirectCommand, @AP, ({
+    // Direct ReelTwo command
+    CommandEvent::process(Marcduino::getCommand());
+}))
+
+////////////////
+
+MARCDUINO_ACTION(WifiToggle, #LEWIFI, ({
+#ifdef USE_WIFI
+    bool wifiSetting = wifiEnabled;
+    switch (*Marcduino::getCommand())
+    {
+        case '0':
+            wifiSetting = false;
+            break;
+        case '1':
+            wifiSetting = true;
+            break;
+        case '\0':
+            // Toggle WiFi
+            wifiSetting = !wifiSetting;
+            break;
+    }
+    if (wifiEnabled != wifiSetting)
+    {
+        if (wifiSetting)
+        {
+            preferences.putBool(PREFERENCE_WIFI_ENABLED, true);
+            DEBUG_PRINTLN("WiFi Enabled");
+        }
+        else
+        {
+            preferences.putBool(PREFERENCE_WIFI_ENABLED, false);
+            DEBUG_PRINTLN("WiFi Disabled");
+        }
+        reboot();
+    }
+#endif
+}))
+
+////////////////
+
+MARCDUINO_ACTION(RemoteToggle, #LEREMOTE, ({
+#ifdef USE_DROID_REMOTE
+    bool remoteSetting = remoteEnabled;
+    switch (*Marcduino::getCommand())
+    {
+        case '0':
+            remoteSetting = false;
+            break;
+        case '1':
+            remoteSetting = true;
+            break;
+        case '\0':
+            // Toggle remote
+            remoteSetting = !remoteSetting;
+            break;
+    }
+    if (remoteEnabled != remoteSetting)
+    {
+        if (remoteSetting)
+        {
+            preferences.putBool(PREFERENCE_REMOTE_ENABLED, true);
+            DEBUG_PRINTLN("Remote Enabled");
+        }
+        else
+        {
+            preferences.putBool(PREFERENCE_REMOTE_ENABLED, false);
+            DEBUG_PRINTLN("Remote Disabled");
+        }
+        reboot();
+    }
+#endif
+}))
+
+////////////////
+
+MARCDUINO_ACTION(RemoteName, #LERNAME, ({
+    String newSecret = String(Marcduino::getCommand());
+    if (preferences.getString(PREFERENCE_REMOTE_SECRET, SMQ_HOSTNAME) != newSecret)
+    {
+        preferences.putString(PREFERENCE_REMOTE_SECRET, newSecret);
+        printf("Changed.\n");
+        reboot();
+    }
+}))
+
+////////////////
+
+MARCDUINO_ACTION(RemoteSecret, #LERSECRET, ({
+    String newSecret = String(Marcduino::getCommand());
+    if (preferences.getString(PREFERENCE_REMOTE_SECRET, SMQ_HOSTNAME) != newSecret)
+    {
+        preferences.putString(PREFERENCE_REMOTE_SECRET, newSecret);
+        printf("Changed.\n");
+        reboot();
+    }
+}))
+
+////////////////
+
+MARCDUINO_ACTION(RemotePair, #LEPAIR, ({
+    printf("Pairing Started ...\n");
+    SMQ::startPairing();
+}))
+
+////////////////
+
+MARCDUINO_ACTION(RemoteUnpair, #LEUNPAIR, ({
+    if (preferences.remove(PREFERENCE_REMOTE_PAIRED))
+    {
+        printf("Unpairing Success...\n");
+        reboot();
+    }
+    else
+    {
+        printf("Not Paired...\n");
+    }
+}))
+
+////////////////
+
+MARCDUINO_ACTION(ClearPrefs, #LEZERO, ({
+    preferences.clear();
+    DEBUG_PRINT("Clearing preferences. ");
+    reboot();
+}))
+
+////////////////
+
+MARCDUINO_ACTION(Restart, #LERESTART, ({
+    reboot();
+}))
+
+////////////////
+
+void mainLoop()
+{
+    AnimatedEvent::process();
+#ifdef USE_MENUS
+    sDisplay.process();
+#endif
+#ifdef SHOW_UPTIME
+    uint32_t now = millis();
+    static uint32_t sLastMillis;
+    if (sLastMillis + 1000L < now)
+    {
+        sLastMillis = now;
+        unsigned seconds = (unsigned)(now / 1000) % 60;
+        unsigned minutes = (unsigned)((now / (1000*60)) % 60);
+        unsigned hours   = (unsigned)((now / (1000*60*60)) % 24);
+        if (hours != 0) {
+            printf("Uptime: %u:%02u:%02u   \r", hours, minutes, seconds);
+        } else if (minutes != 0) {
+            printf("Uptime: %02u:%02u      \r", minutes, seconds);
+        } else {
+            printf("Uptime: %02u seconds\r", seconds);
+        }
+        fflush(stdout);
+    }
+#endif
+}
+
+////////////////
+
+#ifdef USE_WIFI
+void eventLoopTask(void* )
+{
+    for (;;)
+    {
+        mainLoop();
+        vTaskDelay(1);
+    }
+}
+#endif
+
+////////////////
+
+void loop()
+{
+#ifdef USE_WIFI
+    if (wifiActive)
+    {
+    #ifdef USE_OTA
+        ArduinoOTA.handle();
+    #endif
+    #ifdef USE_WIFI_WEB
+        webServer.handle();
+    #endif
+        // Periodic debug message every 30 seconds
+        static unsigned long lastDebugTime = 0;
+        unsigned long currentTime = millis();
+        if (currentTime - lastDebugTime > 30000) {
+            lastDebugTime = currentTime;
+            Serial.println("[C2B5_DEBUG] === WiFi Status ===");
+            Serial.print("[C2B5_DEBUG] Mode: ");
+            Serial.println(wifiAccess.isSoftAP() ? "Access Point" : "Client");
+            
+            if (WiFi.isConnected()) {
+                Serial.print("[C2B5_DEBUG] Connected to: ");
+                Serial.println(WiFi.SSID());
+                Serial.print("[C2B5_DEBUG] IP Address: ");
+                Serial.println(WiFi.localIP());
+                Serial.print("[C2B5_DEBUG] Signal: ");
+                Serial.print(WiFi.RSSI());
+                Serial.println(" dBm");
+                Serial.print("[C2B5_DEBUG] Channel: ");
+                Serial.println(WiFi.channel());
+            } else if (wifiAccess.isSoftAP()) {
+                Serial.print("[C2B5_DEBUG] AP Name: ");
+                Serial.println(preferences.getString(PREFERENCE_WIFI_SSID, WIFI_AP_NAME));
+                Serial.print("[C2B5_DEBUG] AP IP: ");
+                Serial.println(WiFi.softAPIP());
+                Serial.print("[C2B5_DEBUG] Connected clients: ");
+                Serial.println(WiFi.softAPgetStationNum());
+            } else {
+                Serial.println("[C2B5_DEBUG] Not connected!");
+                Serial.print("[C2B5_DEBUG] Saved networks: ");
+                Serial.println(wifiAccess.getSavedNetworks().size());
+                
+                // Quick scan to see what networks are visible
+                Serial.println("[C2B5_DEBUG] Performing quick scan...");
+                int n = WiFi.scanNetworks(false, false, false, 100); // Quick scan, 100ms per channel
+                Serial.print("[C2B5_DEBUG] Networks found: ");
+                Serial.println(n);
+                for (int i = 0; i < n && i < 5; i++) {
+                    Serial.print("[C2B5_DEBUG]   ");
+                    Serial.print(WiFi.SSID(i));
+                    Serial.print(" (");
+                    Serial.print(WiFi.RSSI(i));
+                    Serial.println(" dBm)");
+                }
+            }
+            
+            Serial.print("[C2B5_DEBUG] Free heap: ");
+            Serial.println(ESP.getFreeHeap());
+            #ifdef FIRMWARE_FILENAME
+            Serial.print("[C2B5_DEBUG] Firmware: ");
+            Serial.println(FIRMWARE_FILENAME);
+            #endif
+        }
+    }
+    else if (remoteActive)
+    {
+    #ifdef USE_SMQ
+        SMQ::process();
+    #endif
+    }
+#else
+    mainLoop();
+ #ifdef ESP32
+    vTaskDelay(1);
+ #endif
+#endif
+}
+
+////////////////
+
+#ifdef USE_SMQ
+SMQMESSAGE(DIAL, {
+    long newValue = msg.get_int32("new");
+    long oldValue = msg.get_int32("old");
+    sDisplay.remoteDialEvent(newValue, oldValue);
+})
+
+///////////////////////////////////////////////////////////////////////////////
+
+SMQMESSAGE(BUTTON, {
+    uint8_t id = msg.get_uint8("id");
+    bool pressed = msg.get_uint8("pressed");
+    bool repeat = msg.get_uint8("repeat");
+    sDisplay.remoteButtonEvent(id, pressed, repeat);
+})
+
+///////////////////////////////////////////////////////////////////////////////
+
+SMQMESSAGE(SELECT, {
+    DEBUG_PRINTLN("REMOTE ACTIVE");
+    sDisplay.setEnabled(true);
+    sDisplay.switchToScreen(kMainScreen);
+    sMainScreen.init();
+})
+#endif

@@ -1,0 +1,936 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>C2B5 WiFi Configuration</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background-color: #f5f5f5;
+            color: #333;
+            line-height: 1.6;
+        }
+        
+        .header {
+            background: #2c3e50;
+            color: white;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .header h1 {
+            font-size: 1.8em;
+            font-weight: 300;
+        }
+        
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        
+        .card {
+            background: white;
+            border-radius: 8px;
+            padding: 30px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        
+        .card h2 {
+            color: #2c3e50;
+            margin-bottom: 20px;
+            font-weight: 300;
+            font-size: 1.5em;
+        }
+        
+        .card h3 {
+            color: #2c3e50;
+            margin-bottom: 15px;
+            font-weight: 500;
+            font-size: 1.2em;
+        }
+        
+        /* Form Elements */
+        .form-group {
+            margin-bottom: 20px;
+        }
+        
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 500;
+            color: #2c3e50;
+        }
+        
+        .form-control {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 1em;
+        }
+        
+        .form-control:focus {
+            outline: none;
+            border-color: #3498db;
+            box-shadow: 0 0 0 2px rgba(52, 152, 219, 0.2);
+        }
+        
+        .form-hint {
+            display: block;
+            margin-top: 5px;
+            font-size: 0.85em;
+            color: #666;
+            font-style: italic;
+        }
+        
+        /* Buttons */
+        .btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 1em;
+            transition: background-color 0.3s;
+            margin-right: 10px;
+        }
+        
+        .btn-primary {
+            background: #3498db;
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            background: #2980b9;
+        }
+        
+        .btn-secondary {
+            background: #95a5a6;
+            color: white;
+        }
+        
+        .btn-secondary:hover {
+            background: #7f8c8d;
+        }
+        
+        .btn-success {
+            background: #27ae60;
+            color: white;
+        }
+        
+        .btn-success:hover {
+            background: #229954;
+        }
+        
+        .btn-danger {
+            background: #e74c3c;
+            color: white;
+        }
+        
+        .btn-danger:hover {
+            background: #c0392b;
+        }
+        
+        .btn-small {
+            padding: 5px 10px;
+            font-size: 0.85em;
+        }
+        
+        /* Status Grid */
+        .status-grid {
+            display: grid;
+            gap: 10px;
+        }
+        
+        .status-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 10px 0;
+            border-bottom: 1px solid #eee;
+        }
+        
+        .status-item:last-child {
+            border-bottom: none;
+        }
+        
+        .status-item span:first-child {
+            font-weight: 500;
+            color: #2c3e50;
+        }
+        
+        .status-item span:last-child {
+            color: #3498db;
+        }
+        
+        /* Network sections */
+        .current-network {
+            padding: 20px;
+            background: #ecf0f1;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+        
+        .network-info {
+            display: flex;
+            gap: 15px;
+            align-items: center;
+            margin-top: 10px;
+        }
+        
+        .network-mode {
+            padding: 4px 8px;
+            background: #3498db;
+            color: white;
+            border-radius: 12px;
+            font-size: 0.8em;
+        }
+        
+        .network-list {
+            max-height: 300px;
+            overflow-y: auto;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            margin-top: 10px;
+        }
+        
+        .network-item {
+            padding: 15px;
+            border-bottom: 1px solid #eee;
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .network-item:hover {
+            background: #f8f9fa;
+        }
+        
+        .network-item:last-child {
+            border-bottom: none;
+        }
+        
+        .network-card {
+            background: #fafafa;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            padding: 15px;
+            margin-bottom: 10px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .network-info-left {
+            flex: 1;
+        }
+        
+        .network-ssid {
+            font-weight: 500;
+            color: #2c3e50;
+        }
+        
+        .network-priority {
+            font-size: 0.85em;
+            color: #666;
+        }
+        
+        .network-actions {
+            display: flex;
+            gap: 5px;
+        }
+        
+        /* Settings sections */
+        .saved-networks {
+            padding: 20px;
+            background: white;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        
+        .device-settings {
+            padding: 20px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            margin-top: 20px;
+        }
+        
+        .ap-settings {
+            padding: 20px;
+            background: #fff3cd;
+            border: 1px solid #ffeaa7;
+            border-radius: 8px;
+            margin-top: 20px;
+        }
+        
+        .password-group {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+        
+        .password-group .form-control {
+            flex: 1;
+        }
+        
+        /* Status Messages */
+        .status-message {
+            margin-top: 15px;
+            padding: 10px;
+            border-radius: 4px;
+            font-size: 0.9em;
+        }
+        
+        .status-message.success {
+            background: #d5f4e6;
+            color: #27ae60;
+            border: 1px solid #27ae60;
+        }
+        
+        .status-message.error {
+            background: #ffeaa7;
+            color: #e17055;
+            border: 1px solid #e17055;
+        }
+        
+        .warning-message {
+            margin-top: 10px;
+            color: #856404;
+            font-style: italic;
+        }
+        
+        /* Modal */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.5);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+        }
+        
+        .modal-content {
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            max-width: 500px;
+            width: 90%;
+            max-height: 90vh;
+            overflow-y: auto;
+        }
+        
+        .modal.show {
+            display: flex;
+        }
+        
+        .back-link {
+            display: inline-block;
+            color: #3498db;
+            text-decoration: none;
+            margin-bottom: 20px;
+            transition: color 0.3s;
+            font-size: 0.95em;
+        }
+        
+        .back-link:hover {
+            color: #2980b9;
+        }
+        
+        .loading {
+            color: #666;
+            font-style: italic;
+        }
+        
+        .hidden {
+            display: none;
+        }
+        
+        @media (max-width: 768px) {
+            .container {
+                padding: 15px;
+            }
+            
+            .card {
+                padding: 20px;
+            }
+            
+            .header {
+                padding: 15px;
+                flex-direction: column;
+                gap: 10px;
+            }
+            
+            .header h1 {
+                font-size: 1.4em;
+            }
+            
+            .network-card {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 10px;
+            }
+            
+            .network-actions {
+                width: 100%;
+            }
+            
+            .network-actions button {
+                flex: 1;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>WiFi Configuration</h1>
+    </div>
+    
+    <div class="container">
+        <a href="/m/" class="back-link">← Back to C2B5 UI</a>
+        
+        <!-- Status Card -->
+        <div class="card">
+            <h2>Current Status</h2>
+            <div id="status-content" class="status-grid">
+                <div class="loading">Loading status...</div>
+            </div>
+        </div>
+        
+        <!-- Mode Selection -->
+        <div class="card">
+            <h2>WiFi Mode</h2>
+            <div style="display: flex; gap: 20px; margin-bottom: 20px;">
+                <label style="display: flex; align-items: center; cursor: pointer;">
+                    <input type="radio" name="wifi-mode" id="mode-client" value="client" style="margin-right: 8px;">
+                    <span>Client Mode (Connect to Network)</span>
+                </label>
+                <label style="display: flex; align-items: center; cursor: pointer;">
+                    <input type="radio" name="wifi-mode" id="mode-ap" value="ap" style="margin-right: 8px;">
+                    <span>Access Point Mode</span>
+                </label>
+            </div>
+            <button onclick="saveWifiMode()" class="btn btn-primary">Apply Mode</button>
+        </div>
+        
+        <!-- Saved Networks -->
+        <div class="card">
+            <h2>Saved Networks</h2>
+            <div id="saved-networks-list">
+                <div class="loading">Loading networks...</div>
+            </div>
+            <button class="btn btn-secondary" onclick="showAddNetworkModal()" style="margin-top: 0.5rem;">Add Network</button>
+            <button class="btn" onclick="startWifiScan()" style="margin-left: 0.5rem;">Scan for Networks</button>
+        </div>
+        
+        <!-- Scan Results -->
+        <div class="card hidden" id="scan-results-card">
+            <h2>Available Networks</h2>
+            <button class="btn btn-secondary" onclick="startWifiScan()">Refresh Scan</button>
+            <div id="scan-results" style="margin-top: 1rem;">
+                <div class="loading">Scanning...</div>
+            </div>
+        </div>
+        
+        <!-- AP Settings -->
+        <div class="card">
+            <h2>Access Point Settings</h2>
+            <form onsubmit="saveAPSettings(event); return false;">
+                <div class="form-group">
+                    <label for="ap-ssid">Network Name:</label>
+                    <input type="text" id="ap-ssid" class="form-control" required>
+                    <small class="form-hint">The name of your access point</small>
+                </div>
+                <div class="form-group">
+                    <label for="ap-password">Password:</label>
+                    <div class="password-group">
+                        <input type="password" id="ap-password" class="form-control" required minlength="8">
+                        <button type="button" class="btn btn-secondary" onclick="togglePasswordVisibility('ap-password')">Show</button>
+                    </div>
+                    <small class="form-hint">Minimum 8 characters</small>
+                </div>
+                <div class="form-group">
+                    <label for="ap-timeout">Connection Timeout (seconds):</label>
+                    <input type="number" id="ap-timeout" class="form-control" min="10" max="300" required>
+                    <small class="form-hint">Time to wait before switching to AP mode</small>
+                </div>
+                <button type="submit" class="btn btn-primary">Save Settings</button>
+            </form>
+        </div>
+    </div>
+    
+    <!-- Add Network Modal -->
+    <div class="modal" id="add-network-modal">
+        <div class="modal-content">
+            <h2>Add Network</h2>
+            <form onsubmit="addNetwork(event); return false;">
+                <div class="form-group">
+                    <label for="network-ssid">Network Name (SSID):</label>
+                    <input type="text" id="network-ssid" class="form-control" required>
+                </div>
+                <div class="form-group">
+                    <label for="network-password">Password:</label>
+                    <input type="password" id="network-password" class="form-control">
+                    <small class="form-hint">Leave empty for open networks</small>
+                </div>
+                <div class="form-group">
+                    <label for="network-priority">Priority:</label>
+                    <input type="number" id="network-priority" class="form-control" min="1" max="10" value="5" required>
+                    <small class="form-hint">Higher numbers = higher priority</small>
+                </div>
+                <div style="display: flex; gap: 0.5rem;">
+                    <button type="submit" class="btn btn-primary">Add Network</button>
+                    <button type="button" class="btn btn-secondary" onclick="hideAddNetworkModal()">Cancel</button>
+                </div>
+            </form>
+        </div>
+    </div>
+    
+    <div class="container" style="margin-top: 2rem;">
+        <div style="padding-top: 2rem; border-top: 1px solid #ddd; text-align: center; color: #666; font-size: 0.8rem;">
+            Firmware: <span id="firmware-version">Loading...</span><br>
+            <span id="debug-info" style="font-size: 0.7rem; color: #999;"></span>
+        </div>
+    </div>
+    
+    <script>
+        // Debug info
+        console.log('WiFi page script starting...');
+        
+        // Immediately show debug info
+        try {
+            document.getElementById('debug-info').textContent = 'Script loaded at ' + new Date().toLocaleTimeString();
+        } catch (e) {
+            console.error('Could not update debug info:', e);
+        }
+        
+        let currentStatus = {};
+        let savedNetworks = [];
+        let scanResults = [];
+        
+        // Load firmware version
+        function loadFirmwareVersion() {
+            fetch('/api/firmware/version')
+                .then(response => response.json())
+                .then(data => {
+                    document.getElementById('firmware-version').textContent = data.version || 'Unknown';
+                })
+                .catch(() => {
+                    document.getElementById('firmware-version').textContent = 'Unknown';
+                });
+        }
+        
+        // Load initial data
+        async function init() {
+            await loadStatus();
+            await loadNetworks();
+            loadFirmwareVersion();
+            setInterval(loadStatus, 5000);
+        }
+        
+        async function loadStatus() {
+            console.log('[C2B5 WiFi] Loading status...');
+            try {
+                console.log('[C2B5 WiFi] Fetching /api/wifi/status');
+                const response = await fetch('/api/wifi/status');
+                console.log('[C2B5 WiFi] Status response:', response.status, response.statusText);
+                if (!response.ok) throw new Error(`Failed to load status: ${response.status}`);
+                
+                currentStatus = await response.json();
+                console.log('[C2B5 WiFi] Status data:', currentStatus);
+                updateStatusDisplay();
+                updateModeSelection();
+                updateAPSettings();
+            } catch (error) {
+                console.error('[C2B5 WiFi] Error loading status:', error);
+                document.getElementById('status-content').innerHTML = 
+                    '<div class="error">Error: ' + error.message + '</div>';
+            }
+        }
+        
+        function updateStatusDisplay() {
+            const content = document.getElementById('status-content');
+            let html = '';
+            
+            html += `
+                <div class="status-item">
+                    <span>WiFi</span>
+                    <span>${currentStatus.enabled ? 'Enabled' : 'Disabled'}</span>
+                </div>
+                <div class="status-item">
+                    <span>Mode</span>
+                    <span>${currentStatus.mode === 'ap' ? 'Access Point' : 'Client'}</span>
+                </div>
+            `;
+            
+            if (currentStatus.connected) {
+                html += `
+                    <div class="status-item">
+                        <span>Connected to</span>
+                        <span>${currentStatus.ssid}</span>
+                    </div>
+                    <div class="status-item">
+                        <span>IP Address</span>
+                        <span>${currentStatus.ip}</span>
+                    </div>
+                    <div class="status-item">
+                        <span>Signal</span>
+                        <span>${currentStatus.rssi} dBm</span>
+                    </div>
+                `;
+            } else if (currentStatus.mode === 'ap') {
+                html += `
+                    <div class="status-item">
+                        <span>AP Name</span>
+                        <span>${currentStatus.ssid || 'Not set'}</span>
+                    </div>
+                    <div class="status-item">
+                        <span>IP Address</span>
+                        <span>${currentStatus.ip || '192.168.4.1'}</span>
+                    </div>
+                `;
+            } else {
+                html += `
+                    <div class="status-item">
+                        <span>Connection</span>
+                        <span>Not connected</span>
+                    </div>
+                `;
+            }
+            
+            content.innerHTML = html;
+        }
+        
+        function updateModeSelection() {
+            if (currentStatus.mode === 'ap') {
+                document.getElementById('mode-ap').checked = true;
+            } else {
+                document.getElementById('mode-client').checked = true;
+            }
+        }
+        
+        function updateAPSettings() {
+            if (currentStatus.ap) {
+                document.getElementById('ap-ssid').value = currentStatus.ap.ssid || '';
+                document.getElementById('ap-timeout').value = currentStatus.ap.timeout || 60;
+            }
+        }
+        
+        async function loadNetworks() {
+            try {
+                const response = await fetch('/api/wifi/networks');
+                if (!response.ok) throw new Error('Failed to load networks');
+                
+                savedNetworks = await response.json();
+                updateNetworksDisplay();
+            } catch (error) {
+                console.error('Error loading networks:', error);
+            }
+        }
+        
+        function updateNetworksDisplay() {
+            const container = document.getElementById('saved-networks-list');
+            
+            if (savedNetworks.length === 0) {
+                container.innerHTML = '<p style="color: #666;">No saved networks</p>';
+                return;
+            }
+            
+            const html = savedNetworks.map((network, index) => `
+                <div class="network-card">
+                    <div class="network-info-left">
+                        <div class="network-ssid">${escapeHtml(network.ssid)}</div>
+                        <div class="network-priority">
+                            Priority: 
+                            <input type="number" 
+                                   id="priority-${index}" 
+                                   value="${network.priority}" 
+                                   min="1" 
+                                   max="10" 
+                                   style="width: 50px; margin: 0 5px;"
+                                   onchange="updatePriority('${escapeJs(network.ssid)}', this.value)">
+                        </div>
+                    </div>
+                    <div class="network-actions">
+                        <button class="btn btn-small btn-success" onclick="connectToNetwork('${escapeJs(network.ssid)}')">Connect</button>
+                        <button class="btn btn-small btn-danger" onclick="removeNetwork('${escapeJs(network.ssid)}')">Remove</button>
+                    </div>
+                </div>
+            `).join('');
+            
+            container.innerHTML = html;
+        }
+        
+        async function saveWifiMode() {
+            const mode = document.querySelector('input[name="wifi-mode"]:checked').value;
+            
+            try {
+                const response = await fetch(`/wifisavesettings?mode=${mode}`);
+                if (!response.ok) throw new Error('Failed to save mode');
+                
+                showMessage('WiFi mode updated. Device will restart...', 'success');
+                setTimeout(() => window.location.href = '/', 3000);
+            } catch (error) {
+                showMessage('Failed to update WiFi mode', 'error');
+            }
+        }
+        
+        async function saveAPSettings(event) {
+            event.preventDefault();
+            
+            const ssid = document.getElementById('ap-ssid').value;
+            const password = document.getElementById('ap-password').value;
+            const timeout = document.getElementById('ap-timeout').value;
+            
+            try {
+                const params = new URLSearchParams({
+                    ssid: ssid,
+                    password: password,
+                    timeout: timeout
+                });
+                
+                const response = await fetch('/api/wifi/apsettings?' + params);
+                if (!response.ok) throw new Error('Failed to save settings');
+                
+                showMessage('Access Point settings saved', 'success');
+            } catch (error) {
+                showMessage('Failed to save AP settings', 'error');
+            }
+        }
+        
+        function showAddNetworkModal() {
+            document.getElementById('add-network-modal').classList.add('show');
+            document.getElementById('network-ssid').focus();
+        }
+        
+        function hideAddNetworkModal() {
+            document.getElementById('add-network-modal').classList.remove('show');
+            // Clear form
+            document.getElementById('network-ssid').value = '';
+            document.getElementById('network-password').value = '';
+            document.getElementById('network-priority').value = '5';
+        }
+        
+        async function addNetwork(event) {
+            event.preventDefault();
+            
+            const ssid = document.getElementById('network-ssid').value;
+            const password = document.getElementById('network-password').value;
+            const priority = document.getElementById('network-priority').value;
+            
+            try {
+                const params = new URLSearchParams({
+                    ssid: ssid,
+                    password: password,
+                    priority: priority
+                });
+                
+                const response = await fetch('/api/wifi/add?' + params);
+                if (!response.ok) throw new Error('Failed to add network');
+                
+                hideAddNetworkModal();
+                await loadNetworks();
+                showMessage('Network added successfully', 'success');
+            } catch (error) {
+                showMessage('Failed to add network', 'error');
+            }
+        }
+        
+        async function connectToNetwork(ssid) {
+            if (!confirm(`Connect to ${ssid}?`)) return;
+            
+            try {
+                const response = await fetch('/wificonnect?ssid=' + encodeURIComponent(ssid));
+                if (!response.ok) throw new Error('Failed to connect');
+                
+                showMessage('Connecting to ' + ssid + '...', 'success');
+                setTimeout(() => window.location.href = '/', 3000);
+            } catch (error) {
+                showMessage('Failed to connect to network', 'error');
+            }
+        }
+        
+        async function removeNetwork(ssid) {
+            if (!confirm(`Remove ${ssid} from saved networks?`)) return;
+            
+            try {
+                const response = await fetch('/wifiremove?ssid=' + encodeURIComponent(ssid));
+                if (!response.ok) throw new Error('Failed to remove');
+                
+                await loadNetworks();
+                showMessage('Network removed', 'success');
+            } catch (error) {
+                showMessage('Failed to remove network', 'error');
+            }
+        }
+        
+        async function updatePriority(ssid, newPriority) {
+            console.log('[C2B5 WiFi] Updating priority for', ssid, 'to', newPriority);
+            
+            // Find the network and update its priority
+            const network = savedNetworks.find(n => n.ssid === ssid);
+            if (!network) return;
+            
+            network.priority = parseInt(newPriority);
+            
+            // Save all networks with updated priorities
+            try {
+                const response = await fetch('/api/wifi/updatepriority?ssid=' + encodeURIComponent(ssid) + '&priority=' + newPriority);
+                if (!response.ok) throw new Error('Failed to update priority');
+                
+                // Reload networks to ensure we have the latest data
+                await loadNetworks();
+                console.log('[C2B5 WiFi] Priority updated successfully');
+            } catch (error) {
+                console.error('[C2B5 WiFi] Failed to update priority:', error);
+                showMessage('Failed to update priority', 'error');
+                // Reload to restore original values
+                await loadNetworks();
+            }
+        }
+        
+        async function startWifiScan() {
+            console.log('[C2B5 WiFi] Starting WiFi scan...');
+            try {
+                document.getElementById('scan-results-card').style.display = 'block';
+                document.getElementById('scan-results').innerHTML = '<p class="loading">Scanning for networks...</p>';
+                
+                console.log('[C2B5 WiFi] Fetching /api/wifi/scan');
+                const response = await fetch('/api/wifi/scan');
+                console.log('[C2B5 WiFi] Scan response:', response.status);
+                if (!response.ok) throw new Error(`Failed to start scan: ${response.status}`);
+                
+                // Poll for results
+                setTimeout(checkScanResults, 2000);
+            } catch (error) {
+                console.error('[C2B5 WiFi] Scan error:', error);
+                showMessage('Failed to start WiFi scan: ' + error.message, 'error');
+            }
+        }
+        
+        async function checkScanResults() {
+            console.log('[C2B5 WiFi] Checking scan results...');
+            try {
+                console.log('[C2B5 WiFi] Fetching /api/wifi/scanresults');
+                const response = await fetch('/api/wifi/scanresults');
+                console.log('[C2B5 WiFi] Scan results response:', response.status);
+                if (!response.ok) throw new Error('Failed to get scan results');
+                
+                const data = await response.json();
+                console.log('[C2B5 WiFi] Scan results data:', data);
+                
+                if (data.scanning) {
+                    // Still scanning, check again
+                    setTimeout(checkScanResults, 1000);
+                } else if (data.complete && data.networks) {
+                    scanResults = data.networks;
+                    updateScanResults();
+                }
+            } catch (error) {
+                console.error('Error checking scan results:', error);
+            }
+        }
+        
+        function updateScanResults() {
+            const container = document.getElementById('scan-results');
+            
+            if (scanResults.length === 0) {
+                container.innerHTML = '<p>No networks found</p>';
+                return;
+            }
+            
+            const html = scanResults.map(network => `
+                <div class="network-item" onclick="selectScannedNetwork('${escapeJs(network.ssid)}', ${network.encrypted})">
+                    <div>
+                        <div class="network-ssid">${escapeHtml(network.ssid)}</div>
+                        <div style="font-size: 0.85em; color: #666;">
+                            Signal: ${getSignalBars(network.rssi)} (${network.rssi} dBm)
+                            ${network.encrypted ? '🔒' : ''}
+                        </div>
+                    </div>
+                    <button class="btn btn-small btn-primary">Select</button>
+                </div>
+            `).join('');
+            
+            container.innerHTML = `<div class="network-list">${html}</div>`;
+        }
+        
+        function selectScannedNetwork(ssid, encrypted) {
+            document.getElementById('network-ssid').value = ssid;
+            document.getElementById('network-password').value = '';
+            if (encrypted) {
+                document.getElementById('network-password').focus();
+            }
+            showAddNetworkModal();
+        }
+        
+        function getSignalBars(rssi) {
+            if (rssi > -50) return '████';
+            if (rssi > -60) return '███░';
+            if (rssi > -70) return '██░░';
+            return '█░░░';
+        }
+        
+        function showMessage(message, type = 'info') {
+            // For now, just use alert
+            alert(message);
+        }
+        
+        function togglePasswordVisibility(fieldId) {
+            const field = document.getElementById(fieldId);
+            const button = event.target;
+            
+            if (field.type === 'password') {
+                field.type = 'text';
+                button.textContent = 'Hide';
+            } else {
+                field.type = 'password';
+                button.textContent = 'Show';
+            }
+        }
+        
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+        
+        function escapeJs(text) {
+            return text.replace(/\\/g, '\\\\')
+                      .replace(/'/g, "\\'")
+                      .replace(/"/g, '\\"')
+                      .replace(/\n/g, '\\n')
+                      .replace(/\r/g, '\\r');
+        }
+        
+        // Initialize on load
+        console.log('Setting up initialization...');
+        console.log('Document ready state:', document.readyState);
+        console.log('startWifiScan defined?', typeof startWifiScan);
+        
+        if (document.readyState === 'loading') {
+            console.log('Document still loading, waiting for DOMContentLoaded...');
+            document.addEventListener('DOMContentLoaded', init);
+        } else {
+            console.log('Document ready, initializing now...');
+            init();
+        }
+    </script>
+</body>
+</html>

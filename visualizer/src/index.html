@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RSeries Logic Display Visualizer</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>RSeries Logic Display Visualizer</h1>
+            <p>Interactive preview for Front and Rear Logic Displays</p>
+        </header>
+        
+        <!-- First Row: Displays and Animations -->
+        <div class="first-row">
+            <div class="display-section">
+                <div class="display-panel">
+                    <h2>Front Logic Display (FLD)</h2>
+                    <div class="display-info">
+                        <span id="fld-board">DeathStar 40 LED</span> • 
+                        <span>8×10 Matrix</span>
+                    </div>
+                    <canvas id="fld-canvas" class="led-display"></canvas>
+                </div>
+                
+                <div class="display-panel">
+                    <h2>Rear Logic Display (RLD)</h2>
+                    <div class="display-info">
+                        <span id="rld-board">Imahara 112 LED</span> • 
+                        <span>4×28 Matrix</span>
+                    </div>
+                    <canvas id="rld-canvas" class="led-display"></canvas>
+                </div>
+            </div>
+            
+            <!-- Animation Panel -->
+            <div class="animation-panel">
+                <h3>Animation</h3>
+                <div id="animation-buttons" class="animation-grid">
+                    <!-- Populated by JavaScript -->
+                </div>
+            </div>
+        </div>
+        
+        <!-- Second Row: Settings -->
+        <div class="second-row">
+            <!-- Global Settings -->
+            <div class="settings-panel">
+                <h3>Global Settings</h3>
+                <div class="parameter-controls">
+                    <div class="param-row">
+                        <label for="speed">Animation Speed:</label>
+                        <input type="range" id="speed" min="0" max="9" value="5">
+                        <span id="speed-value">5</span>
+                    </div>
+                    
+                    <div class="param-row">
+                        <label for="target-display">Target Display:</label>
+                        <select id="target-display">
+                            <option value="BOTH">Both Displays</option>
+                            <option value="FLD">Front Only</option>
+                            <option value="RLD">Rear Only</option>
+                        </select>
+                    </div>
+                    
+                    <div class="param-row">
+                        <label for="duration">Duration (0=∞):</label>
+                        <input type="number" id="duration" min="0" max="99" value="0">
+                        <span>seconds</span>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- FLD Settings -->
+            <div class="settings-panel">
+                <h3>Front Logic Display Settings</h3>
+                <div class="parameter-controls">
+                    <div class="param-row">
+                        <label for="fld-brightness">Brightness:</label>
+                        <input type="range" id="fld-brightness" min="0" max="255" value="255">
+                        <span id="fld-brightness-value">255</span>
+                    </div>
+                    
+                    <div class="param-row">
+                        <label for="fld-hue">Hue:</label>
+                        <input type="range" id="fld-hue" min="0" max="255" value="0">
+                        <span id="fld-hue-value">0</span>
+                    </div>
+                    
+                    <div class="param-row">
+                        <label for="fld-fade">Fade:</label>
+                        <input type="range" id="fld-fade" min="0" max="255" value="128">
+                        <span id="fld-fade-value">128</span>
+                    </div>
+                    
+                    <div class="param-row">
+                        <label for="fld-delay">Pause:</label>
+                        <input type="range" id="fld-delay" min="0" max="255" value="10">
+                        <span id="fld-delay-value">10</span>
+                    </div>
+                    
+                    <div class="param-row">
+                        <label for="fld-palette">Palette:</label>
+                        <select id="fld-palette">
+                            <option value="0">Front Default</option>
+                            <option value="1">Rear Default</option>
+                            <option value="2">Red/Orange/Yellow</option>
+                            <option value="3">Green/Cyan</option>
+                            <option value="4">Blue/Purple</option>
+                            <option value="5">Custom</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- RLD Settings -->
+            <div class="settings-panel">
+                <h3>Rear Logic Display Settings</h3>
+                <div class="parameter-controls">
+                    <div class="param-row">
+                        <label for="rld-brightness">Brightness:</label>
+                        <input type="range" id="rld-brightness" min="0" max="255" value="255">
+                        <span id="rld-brightness-value">255</span>
+                    </div>
+                    
+                    <div class="param-row">
+                        <label for="rld-hue">Hue:</label>
+                        <input type="range" id="rld-hue" min="0" max="255" value="0">
+                        <span id="rld-hue-value">0</span>
+                    </div>
+                    
+                    <div class="param-row">
+                        <label for="rld-fade">Fade:</label>
+                        <input type="range" id="rld-fade" min="0" max="255" value="128">
+                        <span id="rld-fade-value">128</span>
+                    </div>
+                    
+                    <div class="param-row">
+                        <label for="rld-delay">Pause:</label>
+                        <input type="range" id="rld-delay" min="0" max="255" value="10">
+                        <span id="rld-delay-value">10</span>
+                    </div>
+                    
+                    <div class="param-row">
+                        <label for="rld-palette">Palette:</label>
+                        <select id="rld-palette">
+                            <option value="0">Front Default</option>
+                            <option value="1" selected>Rear Default</option>
+                            <option value="2">Red/Orange/Yellow</option>
+                            <option value="3">Green/Cyan</option>
+                            <option value="4">Blue/Purple</option>
+                            <option value="5">Custom</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Third Row: Commands and Actions -->
+        <div class="third-row">
+            <!-- MarcDuino Commands -->
+            <div class="control-group command-group">
+                <h3>MarcDuino Commands</h3>
+                <div class="command-output">
+                    <textarea id="command-output" readonly rows="3" 
+                        placeholder="Select an animation to see commands"></textarea>
+                    <button id="copy-commands" class="button secondary">Copy</button>
+                </div>
+            </div>
+            
+            <!-- Action Buttons -->
+            <div class="control-group action-group">
+                <h3>Actions</h3>
+                <div class="action-buttons">
+                    <button id="stop-animation" class="button danger">Stop</button>
+                    <button id="reset-settings" class="button secondary">Reset</button>
+                </div>
+            </div>
+        </div>
+        
+        <footer>
+            <p>Part of the C2B5 Astromech Control System</p>
+        </footer>
+    </div>
+    
+    <script src="bundle.js"></script>
+</body>
+</html>
