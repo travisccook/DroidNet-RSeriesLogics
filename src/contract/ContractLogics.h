@@ -149,6 +149,16 @@ inline bool ContractRender(LogicEngineRenderer& r) {
           r.setPixelRGB(x, y, ((H - 1 - y) < lit) ? c : CRGB(0, 0, 0));
       break;
     }
+    case CE_COMET: {
+      int head = fxHead(now - g.startMs, g.speed, W);
+      for (int x = 0; x < W; x++) {
+        uint8_t cb = fxCometBright(x, head, W);
+        uint8_t v = (uint8_t)(((uint16_t)bb * cb) / 255);
+        CRGB c = _scaled(g.color, v);
+        for (int y = 0; y < H; y++) r.setPixelRGB(x, y, c);
+      }
+      break;
+    }
     case CE_SOLID:
     default:
       _fill(r, _scaled(g.color, bb));
