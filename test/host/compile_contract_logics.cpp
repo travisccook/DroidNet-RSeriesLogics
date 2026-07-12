@@ -1,6 +1,8 @@
-// Host TYPE-CHECK of the firmware layer ContractLogics.h against mock_engine.h.
-// Not a behavioral test — it only proves the firmware C++ compiles with the verified
-// engine API signatures (catches typos / wrong arity / type errors before the bench).
+// Host check of the firmware layer ContractLogics.h against mock_engine.h.
+// Mostly a TYPE-CHECK (proves the firmware C++ compiles with the verified engine API
+// signatures — catches typos / wrong arity / type errors before the bench), plus a
+// focused behavioral guard that a scored NATIVE section threads its native code into
+// the ScoreEntry (the cross-fork drift the 2026-07-12 fork audit fixed on PSI/Flthy).
 #include "mock_engine.h"
 #include "../../src/contract/ContractLogics.h"
 #include <cstdio>
@@ -25,6 +27,15 @@ int main() {
   // replicate the MARCDUINO_ACTION(Contract, !, ...) body verbatim to type-check it
   { ParsedContract q; if (contractParse(Marcduino::getCommand(), q)) applyContract(q); }
 
-  printf("ContractLogics.h type-check OK\n");
+  // behavioral guard: a scored NATIVE section must thread its native code into the
+  // ScoreEntry (regression guard for the PSI/Flthy drift where nativeCode stayed -1).
+  { ParsedContract p; if (contractParse("LFA:i=native:104,at=64", p)) applyContract(p); }
+  if (gScoreLen[0] == 0 || gScore[0][gScoreLen[0] - 1].nativeCode != 104
+      || gScore[0][gScoreLen[0] - 1].effect != CE_NATIVE) {
+    printf("FAIL: RSeries scored native section did not thread nativeCode\n");
+    return 1;
+  }
+
+  printf("ContractLogics.h type-check + score-native guard OK\n");
   return 0;
 }
