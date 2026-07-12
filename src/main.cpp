@@ -438,6 +438,7 @@ enum
 #include "effects/MeatBallsEffect.h"
 #include "effects/PlasmaEffect.h"
 #include "effects/ColorWheel.h"
+#include "contract/ContractLogics.h"   // DroidNet Driveable-Animation Contract (fork-owned)
 
 LogicEffect CustomLogicEffectSelector(unsigned selectSequence)
 {
@@ -447,9 +448,11 @@ LogicEffect CustomLogicEffectSelector(unsigned selectSequence)
         LogicEffectMetaBalls,
         LogicEffectFractal,
         LogicEffectFadeAndScroll,
-        LogicEffectColorWheel
+        LogicEffectColorWheel,
+        ContractRender          // id 106 — DroidNet contract single-dispatch renderer
     };
-    if (selectSequence >= 100 && selectSequence-100 <= SizeOfArray(sCustomLogicEffects))
+    // NOTE: '<' not '<=' — the original '<=' read one slot past the array (latent OOB).
+    if (selectSequence >= 100 && selectSequence-100 < SizeOfArray(sCustomLogicEffects))
     {
         return LogicEffect(sCustomLogicEffects[selectSequence-100]);
     }
@@ -1090,6 +1093,7 @@ void setup()
 
     RLD_setLogicEffectSelector(CustomLogicEffectSelector);
     FLD_setLogicEffectSelector(CustomLogicEffectSelector);
+    contractSetup();   // DroidNet contract: wire level provider etc. (Plan 2)
 
 #ifdef LIVE_STREAM
     if (udp.listen(1234)) {
