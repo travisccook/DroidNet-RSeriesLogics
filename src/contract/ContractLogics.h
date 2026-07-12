@@ -159,6 +159,47 @@ inline bool ContractRender(LogicEngineRenderer& r) {
       }
       break;
     }
+    case CE_CHASE: {
+      uint32_t el = now - g.startMs;
+      CRGB on = _scaled(g.color, bb), off(0, 0, 0);
+      for (int x = 0; x < W; x++) {
+        CRGB c = fxChaseLit(x, el, g.speed) ? on : off;
+        for (int y = 0; y < H; y++) r.setPixelRGB(x, y, c);
+      }
+      break;
+    }
+    case CE_WIPE: {
+      uint32_t el = now - g.startMs;
+      CRGB on = _scaled(g.color, bb), off(0, 0, 0);
+      for (int x = 0; x < W; x++) {
+        CRGB c = fxWipeLit(x, el, g.speed, W) ? on : off;
+        for (int y = 0; y < H; y++) r.setPixelRGB(x, y, c);
+      }
+      break;
+    }
+    case CE_GRADIENT: {
+      uint32_t el = now - g.startMs;
+      for (int x = 0; x < W; x++) {
+        uint8_t hue = fxGradientHue(x, W, 0, el, g.speed);   // base hue 0, color-independent (like rainbow)
+        RGB c = fxHsv2rgb(hue, 255, bb);
+        for (int y = 0; y < H; y++) r.setPixelRGB(x, y, CRGB(c.r, c.g, c.b));
+      }
+      break;
+    }
+    case CE_COLORCYCLE: {
+      RGB c = fxHsv2rgb(fxCycleHue(0, now - g.startMs, g.speed), 255, bb);
+      _fill(r, CRGB(c.r, c.g, c.b));
+      break;
+    }
+    case CE_TWINKLE: {
+      for (int y = 0; y < H; y++)
+        for (int x = 0; x < W; x++) {
+          uint8_t tb = fxTwinkleBright(y * W + x, now, g.speed);
+          uint8_t v = (uint8_t)(((uint16_t)bb * tb) / 255);
+          r.setPixelRGB(x, y, _scaled(g.color, v));
+        }
+      break;
+    }
     case CE_SOLID:
     default:
       _fill(r, _scaled(g.color, bb));

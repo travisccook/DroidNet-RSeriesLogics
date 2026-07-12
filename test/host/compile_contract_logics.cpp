@@ -15,6 +15,8 @@ int main() {
     "LRA:i=sparkle,c=00FF00,s=200", "LFA:i=meter", "LFA:i=solid,c=3B82F6,at=0,am=1",
     "LFA:i=fire,c=FF2A00,at=32,am=3", "**X", "**M:v=show", "**M:v=idle", "LFA:i=native:105",
     "L*A:i=comet,c=3B82F6,s=200",
+    "L*A:i=chase,c=3B82F6,s=200", "L*A:i=wipe,c=3B82F6,s=200", "L*A:i=gradient,s=200",
+    "L*A:i=colorcycle,s=200", "L*A:i=twinkle,c=3B82F6,s=200",
   };
   for (const char* s : cmds) { ParsedContract p; if (contractParse(s, p)) applyContract(p); }
 
