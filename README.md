@@ -51,15 +51,33 @@ WiFi setup, colour tables). Read that first. This README only covers what the fo
 
 **No code in this fork has ever run on a real board. Not once.**
 
-Verification is host-side only:
+Be precise about what is and is not verified, because the two are easy to blur:
 
-- `bash test/host/run.sh` — 154 checks against the wire parser, beat clock and effect math, plus a
-  type-check of the render layer against a mock of the engine API.
-- That is it. No bench flash, no scope, no LEDs, no droid.
+**What IS verified.** It cross-compiles for the real microcontroller. `pio run` builds a complete
+ESP32 firmware image with the real xtensa toolchain, and the real linker signs off on it:
+**1,132,153 B of flash (57.6%)** and 63,324 B of SRAM (19.3%). Plus `bash test/host/run.sh` — 341
+checks against the wire parser, beat clock and effect math, plus a type-check of the render layer
+against a mock of the engine API, and it now finishes by doing that cross-compile itself.
 
-Nothing here has been compiled by PlatformIO for the ESP32, let alone flashed. Before this goes
-anywhere near a droid: build it, bench it on a bare board with the display panels disconnected from
-anything you care about, and check current draw. The stock firmware from upstream is the safe,
+This used to say the code had never been compiled for the ESP32 at all, and that was the honest
+state. It is no longer. It is worth saying why it matters: the first real build immediately caught a
+bug no mock could see — FastLED declares `RGB` as an *enumerator* of `fl::EOrder`, which name-hides a
+`struct RGB`, and our shared contract core defined exactly that struct. It could never have compiled
+on this board. The mock did not model `EOrder`, so the type-check passed happily for months.
+
+**What is NOT verified.** Everything only a real board can tell you. **A successful link is not a
+bench test.** No bench flash, no scope, no LEDs, no droid. No timing, no brightness, no current draw
+has ever been observed. The code has never executed a single instruction outside a host test.
+
+Note also that only the `wlogicengine32` (plain ESP32) environment can be built. The
+`wlogicengine32s3` env cannot: upstream pins `platform-espressif32` v5.2.0, which requires
+`espressif/toolchain-riscv32-esp @ 8.4.0+2021r2-patch3`, and that package no longer resolves from the
+PlatformIO registry. It fails in the tool manager before a single source file is read — an upstream
+packaging problem, not a fault in this fork's code — and re-pinning the platform would change the
+toolchain for the ESP32 env too, which we are in no position to re-validate on hardware.
+
+Before this goes anywhere near a droid: bench it on a bare board with the display panels disconnected
+from anything you care about, and check current draw. The stock firmware from upstream is the safe,
 proven thing; this is not, yet.
 
 ---
@@ -180,17 +198,27 @@ headers. The other four are documentation (this README, `README_UPSTREAM.md`, `D
 
 ## Building and testing
 
-Host tests (no hardware, no ESP32 toolchain):
-
 ```sh
 bash test/host/run.sh
-# [1/2] contract_core parser unit tests -> OK  154/154 checks passed
-# [2/2] ContractLogics.h firmware type-check -> OK
+# [1/4] contract_core parser unit tests        -> OK  341/341 checks passed
+# [2/4] ContractLogics.h firmware type-check   -> OK
+# [3/4] Marcduino command-buffer width guard   -> OK
+# [4/4] REAL cross-compile (ESP32)             -> OK   <- needs PlatformIO; skips cleanly without it
 ```
 
-Firmware (PlatformIO): `wlogicengine32` (ESP32) and `wlogicengine32s3` (ESP32-S3). See
-[README_UPSTREAM.md](README_UPSTREAM.md) for the real build and flashing instructions — they are
-unchanged.
+Stages 1-3 need no hardware and no toolchain. Stage 4 is the real cross-compile: it is what makes
+"it compiles" a claim about the firmware rather than a claim about our mock. If PlatformIO is not
+installed it skips cleanly and tells you what you did not check.
+
+Firmware (PlatformIO): `pio run` builds `wlogicengine32` (ESP32). The `wlogicengine32s3` (ESP32-S3)
+env cannot currently be built — see the warning above; it is an upstream platform pin, not our code.
+See [README_UPSTREAM.md](README_UPSTREAM.md) for the real build and flashing instructions — they are
+otherwise unchanged.
+
+One fork-owned change to `platformio.ini`: `build_src_filter` gains `-<test/>`. `src_dir` is the repo
+root here and that filter *replaces* PlatformIO's default, so the default's implicit `-<test/>` was
+gone — meaning this fork's host suite (clang, C++17, its own `main()`) was being swept into the ESP32
+firmware image.
 
 ---
 
