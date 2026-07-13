@@ -46,13 +46,19 @@ struct ContractUnit {
   uint32_t startMs = 0;
   byte     baseSeq = FX_CONTRACT;       // base look seq (106, or a native id for native:<code>)
   bool     armed = false;
-  // verb P (pulse) overlay
+  // The ONE overlay (v1.2). Armed from TWO triggers — a live verb P, and a Phase-2
+  // score entry's own ae=/ac=/ad= on an accent beat — so a mirrored show and a
+  // delivered blueprint fire the SAME effect-swap accent.
   bool     pulseActive = false;
+  ContractEffect pulseFx = CE_NONE;     // CE_NONE == the v1.1 solid fill (verb P with no i=)
   RGB      pulseColor{255, 255, 255};
   uint32_t pulseDurMs = 0, pulseStartMs = 0;
   // Phase-2 score cursor
   int      curSection = -1;
   int32_t  sectionStart = 0, sectionEnd = 0;
+  // v1.2 once-per-beat edge guard for the board-side accent self-fire. BEAT_NONE ==
+  // "no beat accented yet"; every show boundary resets it (see applyContractToUnit).
+  int32_t  lastAccentBeat = BEAT_NONE;
 };
 static ContractUnit gContract[2];
 static bool      gShowMode = false;
@@ -95,6 +101,32 @@ static inline uint8_t _beatBright(const ContractUnit& g, const BeatPos& bp) {
   return envBright(g.bright, g.beatMod, amt);
 }
 
+// ---- v1.2: THE single overlay-arming path. Verb P (live, Phase-1) and the board-side
+// score accent (autonomous, Phase-2) both come through here, so the two delivery paths
+// cannot drift apart. fx == CE_NONE renders as the v1.1 solid fill.
+//
+// STROBE CAP (unchanged policy, now enforced for BOTH triggers): an overlay may not
+// RESTART more often than every 2 * STROBE_MIN_STATE_MS, so a scored am=2 at a very
+// high BPM silently drops the beats it cannot safely honour instead of strobing. The
+// duration is floored at STROBE_MIN_STATE_MS so a state is never shorter than the cap.
+static inline void _fireAccent(uint8_t u, ContractEffect fx, const RGB& c, uint32_t durMs) {
+  ContractUnit& g = gContract[u];
+  uint32_t now = millis();
+  if (!g.pulseActive && g.pulseStartMs != 0 && (now - g.pulseStartMs) < 2 * STROBE_MIN_STATE_MS) return;
+  if (durMs < STROBE_MIN_STATE_MS) durMs = STROBE_MIN_STATE_MS;
+  g.pulseFx     = fx;
+  g.pulseColor  = c;
+  g.pulseDurMs  = durMs;
+  g.pulseStartMs = now;
+  g.pulseActive  = true;
+  _select(u, FX_CONTRACT); _reset(u);   // ensure ContractRender is active + retrigger
+}
+
+// Every show boundary (stop / mode idle / mode show / clock re-seed / score load) must
+// drop the beat-edge guard, or a stale edge from the previous show swallows the first
+// accent of the next one (or, after a re-anchor, re-fires an already-consumed beat).
+static inline void _resetAccentEdge(ContractUnit& g) { g.lastAccentBeat = BEAT_NONE; }
+
 // ---- the single fork effect fn: renders unit u's contract state each frame ----
 inline bool ContractRender(LogicEngineRenderer& r) {
   uint8_t u = (r.getID() == 1) ? 0 : 1;
@@ -105,27 +137,48 @@ inline bool ContractRender(LogicEngineRenderer& r) {
   // so section switching keeps running even while a NATIVE section look (which is
   // not rendered by ContractRender) is active.
 
-  // verb-P overlay: layer a solid pulse over the base, auto-restore on expiry.
+  // v1.2 OVERLAY: the accent is an EFFECT SWAP, not a solid fill. The switch below runs
+  // on a chosen SOURCE (eff/col/bri/t0) — the base look normally, the overlay while one is
+  // active — so the accent reuses every existing renderer at zero flash cost. Its timeline
+  // starts at pulseStartMs (the overlay owns its own t0; the base look's startMs is NEVER
+  // touched, so an am=2 accent cannot restart the base look every beat), and it rides the
+  // brightness CEILING rather than the pumped dip.
+  //
+  // BACKWARD COMPAT: with pulseActive == false this assigns eff=g.effect, col=g.color,
+  // bri=bb, t0=g.startMs — the switch then evaluates exactly the v1.1 expressions. And a
+  // verb P with no i= arms pulseFx = CE_SOLID, whose branch is _fill(_scaled(pulseColor,
+  // g.bright)) — literally the v1.1 overlay fill.
+  uint8_t bb = _beatBright(g, bp);
+  ContractEffect eff = g.effect;
+  RGB      col = g.color;
+  uint8_t  bri = bb;
+  uint32_t t0  = g.startMs;
   if (g.pulseActive) {
     if (now - g.pulseStartMs < g.pulseDurMs) {
-      _fill(r, _scaled(g.pulseColor, g.bright));
-      return true;
+      eff = (g.pulseFx == CE_NONE) ? CE_SOLID : g.pulseFx;   // CE_NONE == the legacy solid fill
+      col = g.pulseColor;
+      bri = g.bright;                                        // the accent rides the ceiling, not the dip
+      t0  = g.pulseStartMs;                                  // the overlay owns its own timeline
+    } else {
+      g.pulseActive = false;
+      if (g.baseSeq != FX_CONTRACT) { r.selectSequence(g.baseSeq); return true; }  // restore a native base
     }
-    g.pulseActive = false;
-    if (g.baseSeq != FX_CONTRACT) { r.selectSequence(g.baseSeq); return true; }  // restore a native base
   }
 
-  uint8_t bb = _beatBright(g, bp);
   int W = r.width(), H = r.height();
 
-  switch (g.effect) {
+  switch (eff) {
     case CE_OFF:
       _fill(r, CRGB(0, 0, 0));
       break;
     case CE_FLASH: {
       uint32_t half = STROBE_MIN_STATE_MS + (uint32_t)(255 - g.speed);   // >=160 ms/state (strobe cap)
-      bool on = ((now - g.startMs) % (2 * half)) < half;
-      _fill(r, on ? _scaled(g.color, g.bright) : CRGB(0, 0, 0));
+      bool on = ((now - t0) % (2 * half)) < half;
+      // v1.2 FIX: the lit state renders at the BEAT-PUMPED level (bri), not the raw ceiling.
+      // It was the only sustained look on this board that ignored the envelope, so an
+      // i=flash section pumped on the HPs/PSIs and sat flat on the Logics. During an
+      // overlay bri is the ceiling by design (an accent must not dip).
+      _fill(r, on ? _scaled(col, bri) : CRGB(0, 0, 0));
       break;
     }
     case CE_RAINBOW: {
@@ -134,13 +187,13 @@ inline bool ContractRender(LogicEngineRenderer& r) {
       int step = (W > 0) ? (255 / W) : 8;
       for (int y = 0; y < H; y++)
         for (int x = 0; x < W; x++)
-          r.setPixelRGB(x, y, CRGB(CHSV((uint8_t)(hbase + x * step), 255, bb)));
+          r.setPixelRGB(x, y, CRGB(CHSV((uint8_t)(hbase + x * step), 255, bri)));
       break;
     }
     case CE_SCAN: {
       uint32_t period = 60u * (uint32_t)(256 - g.speed) + 200u;
-      int pos = (W > 0) ? (int)(((now - g.startMs) % period) * (uint32_t)W / period) : 0;
-      CRGB c = _scaled(g.color, bb);
+      int pos = (W > 0) ? (int)(((now - t0) % period) * (uint32_t)W / period) : 0;
+      CRGB c = _scaled(col, bri);
       for (int y = 0; y < H; y++)
         for (int x = 0; x < W; x++)
           r.setPixelRGB(x, y, (x == pos) ? c : CRGB(0, 0, 0));
@@ -149,7 +202,7 @@ inline bool ContractRender(LogicEngineRenderer& r) {
     case CE_SPARKLE: {
       uint32_t blk = now / (uint32_t)(80 + (255 - g.speed) / 2);
       uint32_t density = 20u + (uint32_t)g.speed / 4u;                   // ~20..84 % lit
-      CRGB c = _scaled(g.color, bb);
+      CRGB c = _scaled(col, bri);
       for (int y = 0; y < H; y++)
         for (int x = 0; x < W; x++)
           r.setPixelRGB(x, y, (_hash3(x, y, blk) % 100u) < density ? c : CRGB(0, 0, 0));
@@ -157,25 +210,25 @@ inline bool ContractRender(LogicEngineRenderer& r) {
     }
     case CE_METER: {
       int lit = (H * (int)gLevel) / 255;                                 // fill from bottom
-      CRGB c = _scaled(g.color.r || g.color.g || g.color.b ? g.color : RGB{0, 255, 0}, bb);
+      CRGB c = _scaled(col.r || col.g || col.b ? col : RGB{0, 255, 0}, bri);
       for (int y = 0; y < H; y++)
         for (int x = 0; x < W; x++)
           r.setPixelRGB(x, y, ((H - 1 - y) < lit) ? c : CRGB(0, 0, 0));
       break;
     }
     case CE_COMET: {
-      int head = fxHead(now - g.startMs, g.speed, W);
+      int head = fxHead(now - t0, g.speed, W);
       for (int x = 0; x < W; x++) {
         uint8_t cb = fxCometBright(x, head, W);
-        uint8_t v = (uint8_t)(((uint16_t)bb * cb) / 255);
-        CRGB c = _scaled(g.color, v);
+        uint8_t v = (uint8_t)(((uint16_t)bri * cb) / 255);
+        CRGB c = _scaled(col, v);
         for (int y = 0; y < H; y++) r.setPixelRGB(x, y, c);
       }
       break;
     }
     case CE_CHASE: {
-      uint32_t el = now - g.startMs;
-      CRGB on = _scaled(g.color, bb), off(0, 0, 0);
+      uint32_t el = now - t0;
+      CRGB on = _scaled(col, bri), off(0, 0, 0);
       for (int x = 0; x < W; x++) {
         CRGB c = fxChaseLit(x, el, g.speed) ? on : off;
         for (int y = 0; y < H; y++) r.setPixelRGB(x, y, c);
@@ -183,8 +236,8 @@ inline bool ContractRender(LogicEngineRenderer& r) {
       break;
     }
     case CE_WIPE: {
-      uint32_t el = now - g.startMs;
-      CRGB on = _scaled(g.color, bb), off(0, 0, 0);
+      uint32_t el = now - t0;
+      CRGB on = _scaled(col, bri), off(0, 0, 0);
       for (int x = 0; x < W; x++) {
         CRGB c = fxWipeLit(x, el, g.speed, W) ? on : off;
         for (int y = 0; y < H; y++) r.setPixelRGB(x, y, c);
@@ -192,16 +245,16 @@ inline bool ContractRender(LogicEngineRenderer& r) {
       break;
     }
     case CE_GRADIENT: {
-      uint32_t el = now - g.startMs;
+      uint32_t el = now - t0;
       for (int x = 0; x < W; x++) {
         uint8_t hue = fxGradientHue(x, W, 0, el, g.speed);   // base hue 0, color-independent (like rainbow)
-        RGB c = fxHsv2rgb(hue, 255, bb);
+        RGB c = fxHsv2rgb(hue, 255, bri);
         for (int y = 0; y < H; y++) r.setPixelRGB(x, y, CRGB(c.r, c.g, c.b));
       }
       break;
     }
     case CE_COLORCYCLE: {
-      RGB c = fxHsv2rgb(fxCycleHue(0, now - g.startMs, g.speed), 255, bb);
+      RGB c = fxHsv2rgb(fxCycleHue(0, now - t0, g.speed), 255, bri);
       _fill(r, CRGB(c.r, c.g, c.b));
       break;
     }
@@ -209,14 +262,16 @@ inline bool ContractRender(LogicEngineRenderer& r) {
       for (int y = 0; y < H; y++)
         for (int x = 0; x < W; x++) {
           uint8_t tb = fxTwinkleBright(y * W + x, now, g.speed);
-          uint8_t v = (uint8_t)(((uint16_t)bb * tb) / 255);
-          r.setPixelRGB(x, y, _scaled(g.color, v));
+          uint8_t v = (uint8_t)(((uint16_t)bri * tb) / 255);
+          r.setPixelRGB(x, y, _scaled(col, v));
         }
       break;
     }
     case CE_SOLID:
     default:
-      _fill(r, _scaled(g.color, bb));
+      // (CE_PULSE has no dedicated renderer on this board and lands here as a solid —
+      // a pre-existing cross-fork divergence vs Flthy's triangle breathe, unchanged by v1.2.)
+      _fill(r, _scaled(col, bri));
       break;
   }
   return true;   // MUST return true (LogicEngine.h:820 reverts to NORMAL on false)
@@ -238,8 +293,20 @@ inline void applyContractToUnit(uint8_t u, const ParsedContract& p) {
         e.speed  = pr.hasSpeed ? pr.speed : 128;
         e.beatMod = pr.hasBeatMod ? pr.beatMod : 0;
         e.accentMode = pr.hasAm ? pr.accentMode : 0;
+        // v1.2: the accent the board fires ITSELF on this section's accent beats.
+        // No ae= => accentFx stays CE_NONE => the entry is bit-identical to v1.1 and the
+        // beat-edge trigger never arms the overlay for it.
+        if (pr.hasAccentFx) {
+          e.accentFx = pr.accentFx;               // parse already rejected native/stateful
+          e.accentColor = pr.hasAccentColor ? pr.accentColor : e.color;   // ac= resolved AT INSERT
+          uint16_t ad = pr.hasAccentDur ? pr.accentDurMs : 180;           // ad= default 180 ms
+          uint16_t t10 = (uint16_t)(ad / 10u);
+          if (t10 == 0) t10 = 18;                 // never a zero-length accent -> the 180 ms default
+          e.accentDur10 = (uint8_t)(t10 > 255u ? 255u : t10);             // ad<=2550 at parse
+        }
         gScoreLen[u] = scoreInsert(gScore[u], gScoreLen[u], SCORE_MAX, e);
         g.curSection = -1;                        // force re-eval on the next frame
+        _resetAccentEdge(g);                      // a new show is loading: drop any stale beat edge
         _select(u, FX_CONTRACT); _reset(u);       // ensure ContractRender drives the score
         break;
       }
@@ -262,17 +329,19 @@ inline void applyContractToUnit(uint8_t u, const ParsedContract& p) {
       break;
     }
     case CV_PULSE: {
-      if (!g.pulseActive && g.pulseStartMs != 0 && (now - g.pulseStartMs) < 2 * STROBE_MIN_STATE_MS) return;  // strobe cool-down
-      g.pulseColor  = pr.hasColor ? pr.color : RGB{255, 255, 255};
-      g.pulseDurMs  = pr.hasDur ? pr.durMs : 120;
+      // v1.2: verb P now goes through the SAME overlay path the scored accent uses, and it
+      // honours i= (an effect-swap accent, not just a solid fill). With no i= it arms
+      // CE_SOLID — bit-identical to the v1.1 fill. The strobe cool-down lives in _fireAccent.
       if (pr.hasBright) g.bright = _clampBright(pr.bright);
-      g.pulseStartMs = now;
-      g.pulseActive  = true;
-      _select(u, FX_CONTRACT); _reset(u);         // ensure ContractRender active + retrigger
+      _fireAccent(u, (pr.hasEffect && accentEffectAllowed(pr.effect)) ? pr.effect : CE_SOLID,
+                  pr.hasColor ? pr.color : RGB{255, 255, 255},
+                  pr.hasDur ? pr.durMs : 120);
       break;
     }
     case CV_CLOCK:
       beatClockSeed(gBeat, pr, now);              // one shared clock; !**C fans to both units
+      _resetAccentEdge(gContract[0]);             // the beat ORIGIN moved: a beat index from the
+      _resetAccentEdge(gContract[1]);             // old timeline must not gate the new one
       break;
     case CV_LEVEL:
       if (pr.hasLevel) gLevel = pr.level;         // drives CE_METER (contract meter reads gLevel)
@@ -283,12 +352,20 @@ inline void applyContractToUnit(uint8_t u, const ParsedContract& p) {
       break;
     }
     case CV_STOP:
-      g.armed = false; g.pulseActive = false; gScoreLen[u] = 0; g.curSection = -1;
+      g.armed = false; g.pulseActive = false;
+      scoreClear(gScoreLen[u], g.curSection);     // ONE place to clear the score...
+      _resetAccentEdge(g);                        // ...and to drop the beat edge with it
       _select(u, NATIVE_LIGHTSOUT);               // blackout + de-energize
       break;
     case CV_MODE:
-      if (pr.mode == 's')      { gShowMode = true;  g.armed = false; g.pulseActive = false; _select(u, NATIVE_LIGHTSOUT); }
-      else if (pr.mode == 'i') { gShowMode = false; g.armed = false; gScoreLen[u] = 0; g.curSection = -1; _select(u, NATIVE_NORMAL); }
+      if (pr.mode == 's')      { gShowMode = true;  g.armed = false; g.pulseActive = false;
+                                 _resetAccentEdge(g);   // a new show starts here (M:v=show is the
+                                                        // first line of Studio's load burst)
+                                 _select(u, NATIVE_LIGHTSOUT); }
+      else if (pr.mode == 'i') { gShowMode = false; g.armed = false;
+                                 scoreClear(gScoreLen[u], g.curSection);
+                                 _resetAccentEdge(g);
+                                 _select(u, NATIVE_NORMAL); }
       break;
     default: break;                               // Q -> optional, not in V1
   }
@@ -325,6 +402,24 @@ inline void contractTick() {
     } else {
       g.baseSeq = FX_CONTRACT; _select(u, FX_CONTRACT); _reset(u);
     }
+  }
+
+  // ---- v1.2: the board fires its OWN effect-swap accent, once per accent beat ----
+  // This is what makes a DELIVERED blueprint look like a LIVE-mirrored show: Phase-1 gets
+  // the accent from the Pi's verb P, Phase-2 gets it from here, and both arm the same
+  // overlay. Runs AFTER the section loop so a section starting on a downbeat accents on
+  // that very beat. Gated to the SCORE path only — a live verb-A never self-accents, so a
+  // board in Phase-1 cannot double-fire (the Pi's P plus a board-side edge).
+  for (uint8_t u = 0; u < 2; u++) {
+    ContractUnit& g = gContract[u];
+    // Consume the edge FIRST and UNCONDITIONALLY: a beat that does not accent must still
+    // retire its edge, or the next tick (same beat) re-tests and re-fires every frame.
+    if (!beatEdge(g.lastAccentBeat, bp.beatIndex)) continue;
+    if (gScoreLen[u] == 0 || g.curSection < 0) continue;         // no active section
+    const ScoreEntry& e = gScore[u][g.curSection];
+    if (e.accentFx == CE_NONE) continue;                         // v1.1 entry -> never accents
+    if (!beatAccentFires(e.accentMode, bp.barPos)) continue;     // SAME predicate as the pump
+    _fireAccent(u, e.accentFx, e.accentColor, (uint32_t)e.accentDur10 * 10u);
   }
 }
 

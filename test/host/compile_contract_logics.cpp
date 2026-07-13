@@ -6,13 +6,39 @@
 // SPDX-License-Identifier: LGPL-2.1-only
 //
 // Host check of the firmware layer ContractLogics.h against mock_engine.h.
-// Mostly a TYPE-CHECK (proves the firmware C++ compiles with the verified engine API
-// signatures — catches typos / wrong arity / type errors before the bench), plus a
-// focused behavioral guard that a scored NATIVE section threads its native code into
-// the ScoreEntry (the cross-fork drift the 2026-07-12 fork audit fixed on PSI/Flthy).
+// Part TYPE-CHECK (proves the firmware C++ compiles with the verified engine API
+// signatures — catches typos / wrong arity / type errors before the bench), part
+// BEHAVIORAL GUARD over the mock's recorded pixels:
+//   * a scored NATIVE section threads its native code into the ScoreEntry (the cross-fork
+//     drift the 2026-07-12 fork audit fixed on PSI/Flthy);
+//   * v1.2: the board fires its OWN effect-swap accent once per accent beat, never on a
+//     non-accent beat, never per frame, and NEVER for a v1.1 entry (no ae=);
+//   * v1.2: CE_FLASH's lit state is beat-pumped (it used to render at the raw ceiling).
 #include "mock_engine.h"
 #include "../../src/contract/ContractLogics.h"
 #include <cstdio>
+
+static int gFails = 0;
+#define CHECK(cond) do { if (!(cond)) { printf("FAIL :%d  %s\n", __LINE__, #cond); gFails++; } } while (0)
+
+static void send(const char* afterBang) {
+  ParsedContract p;
+  if (contractParse(afterBang, p)) applyContract(p);
+}
+// Wipe every fork-owned global so each scenario starts from power-on state.
+static void resetAll() {
+  for (uint8_t u = 0; u < 2; u++) { gContract[u] = ContractUnit{}; gScoreLen[u] = 0; }
+  gBeat = BeatClock{};
+  gShowMode = false;
+  gLevel = 0;
+}
+// Advance the board one tick and report whether an accent was armed ON THIS TICK.
+// (pulseStartMs == now is only true for an overlay armed at this instant; a still-running
+// overlay from an earlier beat was armed at an earlier millis.)
+static bool tickFired(uint8_t u) {
+  contractTick();
+  return gContract[u].pulseActive && gContract[u].pulseStartMs == _mock_millis;
+}
 
 int main() {
   // exercise every fork entry point / verb / effect so the compiler type-checks them
@@ -46,6 +72,213 @@ int main() {
     return 1;
   }
 
-  printf("ContractLogics.h type-check + score-native guard OK\n");
+  // =====================================================================================
+  // v1.2 GUARD 1 — the SCORED accent self-fires on the board, edge-triggered.
+  // A scored entry carries ae=/ac=/ad=; on every beat the SAME predicate the brightness
+  // pump uses (beatAccentFires) says is an accent beat, the board must arm the overlay
+  // itself — exactly once, without the Pi sending anything.
+  // 120 BPM => a beat every 500 ms; 4 ticks per beat prove it is an EDGE, not a level.
+  // =====================================================================================
+  // 1a. am=1 (downbeat only, bpb=4): beats 0,4,8 accent; 1,2,3,5,... must not.
+  resetAll();
+  _mock_millis = 100000;
+  send("**C:bpm=120,ph=0,bpb=4,beat=0");
+  send("LFA:i=solid,c=3b82f6,at=0,am=1,m=200,ae=flash,ac=ffffff,ad=200");
+  CHECK(gScoreLen[0] == 1);
+  CHECK(gScore[0][0].accentFx == CE_FLASH);
+  CHECK(gScore[0][0].accentColor.r == 0xff && gScore[0][0].accentColor.g == 0xff
+        && gScore[0][0].accentColor.b == 0xff);
+  CHECK(gScore[0][0].accentDur10 == 20);            // 200 ms / 10
+  {
+    LogicEngineRenderer rr; rr._id = 1;
+    int fires[12] = {0};
+    for (int k = 0; k < 12; k++)
+      for (int sub = 0; sub < 4; sub++) {           // FOUR ticks inside every beat
+        _mock_millis = 100000u + 500u * (uint32_t)k + 20u + 100u * (uint32_t)sub;
+        if (tickFired(0)) fires[k]++;
+        ContractRender(rr);                         // as mainLoop does — this retires an expired overlay
+      }
+    for (int k = 0; k < 12; k++) {
+      int want = (k % 4 == 0) ? 1 : 0;              // am=1 => barPos 0 only
+      if (fires[k] != want) {
+        printf("FAIL :%d  am=1 beat %d fired %d time(s), expected %d\n", __LINE__, k, fires[k], want);
+        gFails++;
+      }
+    }
+    CHECK(gContract[0].pulseFx == CE_FLASH);        // the EFFECT crossed the wire, not just a colour
+    CHECK(gContract[0].pulseColor.r == 0xff && gContract[0].pulseColor.b == 0xff);
+    CHECK(gContract[0].pulseDurMs == 200);
+    CHECK(!gContract[1].pulseActive);               // LFA addressed unit F only
+  }
+
+  // 1b. am=2 (every beat): all 12 beats accent, still exactly once each.
+  resetAll();
+  _mock_millis = 100000;
+  send("**C:bpm=120,ph=0,bpb=4,beat=0");
+  send("LFA:i=solid,c=3b82f6,at=0,am=2,m=200,ae=flash,ad=200");
+  CHECK(gScore[0][0].accentColor.r == 0x3b && gScore[0][0].accentColor.g == 0x82
+        && gScore[0][0].accentColor.b == 0xf6);     // no ac= => RESOLVED to the entry's c= at insert
+  {
+    LogicEngineRenderer rr; rr._id = 1;
+    int total = 0;
+    for (int k = 0; k < 12; k++) {
+      int fires = 0;
+      for (int sub = 0; sub < 4; sub++) {
+        _mock_millis = 100000u + 500u * (uint32_t)k + 20u + 100u * (uint32_t)sub;
+        if (tickFired(0)) fires++;
+        ContractRender(rr);
+      }
+      if (fires != 1) {
+        printf("FAIL :%d  am=2 beat %d fired %d time(s), expected 1\n", __LINE__, k, fires);
+        gFails++;
+      }
+      total += fires;
+    }
+    CHECK(total == 12);
+  }
+
+  // 1c. BACKWARD COMPAT: a v1.1 scored entry (no ae=) must NEVER arm the overlay.
+  resetAll();
+  _mock_millis = 100000;
+  send("**C:bpm=120,ph=0,bpb=4,beat=0");
+  send("LFA:i=solid,c=3b82f6,at=0,am=2,m=200");
+  CHECK(gScore[0][0].accentFx == CE_NONE);
+  {
+    LogicEngineRenderer rr; rr._id = 1;
+    int fires = 0; bool everActive = false;
+    for (int k = 0; k < 12; k++)
+      for (int sub = 0; sub < 4; sub++) {
+        _mock_millis = 100000u + 500u * (uint32_t)k + 20u + 100u * (uint32_t)sub;
+        if (tickFired(0)) fires++;
+        if (gContract[0].pulseActive) everActive = true;
+        ContractRender(rr);
+      }
+    CHECK(fires == 0);
+    CHECK(!everActive);
+    CHECK(gContract[0].pulseStartMs == 0);
+  }
+
+  // 1d. The accent is an EFFECT SWAP, not the v1.1 solid fill. ae=off over a RED base with
+  // no ac= (so the accent colour resolves to the base's own red): the v1.1 overlay would
+  // fill RED, the v1.2 overlay renders CE_OFF => BLACK. Then it must restore the base.
+  resetAll();
+  _mock_millis = 100000;
+  send("**C:bpm=120,ph=0,bpb=4,beat=0");
+  send("LFA:i=solid,c=FF0000,b=200,at=0,am=2,ae=off,ad=200");
+  {
+    LogicEngineRenderer rr; rr._id = 1;
+    _mock_millis = 100020;
+    contractTick();
+    CHECK(gContract[0].pulseActive);
+    CHECK(gContract[0].pulseFx == CE_OFF);
+    CHECK(gContract[0].pulseColor.r == 0xFF);       // a solid fill of pulseColor would be RED
+    ContractRender(rr);
+    CRGB during = rr.px(0, 0);
+    CHECK(during.r == 0 && during.g == 0 && during.b == 0);   // the swapped-in CE_OFF renders black
+    _mock_millis = 100020 + 210;                    // past ad=200 => the overlay expires
+    contractTick();
+    ContractRender(rr);
+    CRGB after = rr.px(0, 0);
+    CHECK(after.r > 0 && after.g == 0 && after.b == 0);       // base look restored (red)
+  }
+
+  // 1e. The beat edge must be dropped at EVERY show boundary, or a stale edge from the
+  // previous show swallows the next show's first accent.
+  resetAll();
+  _mock_millis = 100000;
+  send("**C:bpm=120,ph=0,bpb=4,beat=0");
+  gContract[0].lastAccentBeat = 42; send("**X");
+  CHECK(gContract[0].lastAccentBeat == BEAT_NONE);                      // stop
+  gContract[0].lastAccentBeat = 42; send("**M:v=idle");
+  CHECK(gContract[0].lastAccentBeat == BEAT_NONE);                      // mode idle
+  gContract[0].lastAccentBeat = 42; send("**M:v=show");
+  CHECK(gContract[0].lastAccentBeat == BEAT_NONE);                      // mode show
+  gContract[0].lastAccentBeat = 42; gContract[1].lastAccentBeat = 42;
+  send("**C:bpm=128,ph=0,bpb=4,beat=0");
+  CHECK(gContract[0].lastAccentBeat == BEAT_NONE);                      // clock re-seed
+  CHECK(gContract[1].lastAccentBeat == BEAT_NONE);                      // (the clock is shared)
+  gContract[0].lastAccentBeat = 42;
+  send("LFA:i=solid,c=3b82f6,at=0,am=2,m=200,ae=flash,ad=200");
+  CHECK(gContract[0].lastAccentBeat == BEAT_NONE);                      // score load
+
+  // 1f. …and that reset has to MATTER: after a re-anchor (Studio re-seeds the clock on every
+  // Play/seek) the new timeline's beat 0 must accent again, even though beat 0 of the old
+  // timeline already did.
+  resetAll();
+  _mock_millis = 100000;
+  send("**C:bpm=120,ph=0,bpb=4,beat=0");
+  send("LFA:i=solid,c=3b82f6,at=0,am=2,m=200,ae=flash,ad=200");
+  _mock_millis = 100020;
+  CHECK(tickFired(0));
+  CHECK(gContract[0].lastAccentBeat == 0);
+  _mock_millis = 101000;                            // well past the strobe cool-down
+  send("**C:bpm=120,ph=0,bpb=4,beat=0");            // re-anchor: this instant is beat 0 again
+  _mock_millis = 101020;
+  CHECK(tickFired(0));                              // beat 0 of the NEW timeline accents
+
+  // 1g. The strobe cap still governs the SELF-FIRED accent. 300 BPM is a beat every 200 ms —
+  // faster than the existing 2 * STROBE_MIN_STATE_MS (320 ms) re-arm floor — so the board must
+  // DROP the beats it cannot safely honour instead of strobing. Run a realistic ~10 ms frame
+  // loop (contractTick + ContractRender, as mainLoop does): the render pass is what retires an
+  // expired overlay, and the cool-down gate only bites once it has.
+  resetAll();
+  _mock_millis = 100000;
+  send("**C:bpm=300,ph=0,bpb=4,beat=0");
+  send("LFA:i=solid,c=3b82f6,at=0,am=2,m=200,ae=flash");   // ad omitted => the 180 ms default
+  CHECK(gScore[0][0].accentDur10 == 18);
+  {
+    LogicEngineRenderer rr; rr._id = 1;
+    int fires = 0;
+    uint32_t prevFire = 0, minGap = 0xFFFFFFFFu;
+    for (uint32_t t = 100000; t < 102400; t += 10) {        // 2400 ms == 12 beats @ 300 BPM
+      _mock_millis = t;
+      if (tickFired(0)) {
+        if (fires) { uint32_t gap = t - prevFire; if (gap < minGap) minGap = gap; }
+        prevFire = t; fires++;
+      }
+      ContractRender(rr);                                    // the engine's frame: expires the overlay
+    }
+    CHECK(fires > 0);                                        // not vacuous: it DOES accent…
+    CHECK(fires < 12);                                       // …but not on every 200 ms beat
+    CHECK(minGap >= 2 * STROBE_MIN_STATE_MS);                // never faster than the strobe cap
+    if (minGap < 2 * STROBE_MIN_STATE_MS)
+      printf("       (accents re-armed %u ms apart; the cap is %u ms)\n",
+             (unsigned)minGap, (unsigned)(2 * STROBE_MIN_STATE_MS));
+  }
+
+  // =====================================================================================
+  // v1.2 GUARD 2 — CE_FLASH is beat-pumped. It rendered its lit state at the raw ceiling
+  // (g.bright), the only sustained look on this board that ignored the shared envelope —
+  // so an i=flash section pumped on the HPs/PSIs and sat flat on the Logics.
+  // s=255 => half-period 160 ms (period 320). At 120 BPM (beat 500 ms) t=10 and t=460 are
+  // BOTH inside a lit half, but sit at opposite ends of the beat envelope.
+  // =====================================================================================
+  resetAll();
+  _mock_millis = 0;
+  send("**C:bpm=120,ph=0,bpb=4,beat=0");
+  send("L*A:i=flash,c=FF0000,s=255,b=200,m=200,am=2");
+  {
+    LogicEngineRenderer rf; rf._id = 1;
+    _mock_millis = 10;                    // 10 % 320 < 160 => LIT; beat phase ~0.02 => accent peak
+    ContractRender(rf);
+    int onEarly = rf.px(0, 0).r;
+    _mock_millis = 460;                   // 460 % 320 = 140 < 160 => LIT; beat phase 0.92 => floor
+    ContractRender(rf);
+    int onLate = rf.px(0, 0).r;
+    _mock_millis = 200;                   // 200 % 320 >= 160 => the DARK half
+    ContractRender(rf);
+    int off = rf.px(0, 0).r;
+    CHECK(!gContract[0].pulseActive);     // no overlay in play — this is the BASE look
+    CHECK(onEarly > 0);                   // non-vacuous: both samples really are lit…
+    CHECK(onLate > 0);
+    CHECK(onEarly > onLate + 40);         // …and the lit level tracks the beat envelope
+    CHECK(off == 0);                      // the dark half is still fully dark
+    if (onEarly <= onLate + 40)
+      printf("       (CE_FLASH lit level: early=%d late=%d — expected early to ride the accent)\n",
+             onEarly, onLate);
+  }
+
+  if (gFails) { printf("%d CHECK(s) FAILED\n", gFails); return 1; }
+  printf("ContractLogics.h type-check + score-native / score-accent / flash-pump guards OK\n");
   return 0;
 }

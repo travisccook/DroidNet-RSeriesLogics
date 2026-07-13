@@ -400,7 +400,12 @@ const ServoSettings servoSettings[] PROGMEM = {
 ServoDispatchPCA9685<SizeOfArray(servoSettings)> servoDispatch(servoSettings);
 ServoSequencer servoSequencer(servoDispatch);
 AnimationPlayer player(servoSequencer);
-MarcduinoSerial<> marcduinoSerial(player);
+// DroidNet contract v1.2: 96, not the library default of 64. A scored line carrying an
+// accent — e.g. !L*A:i=colorcycle,c=3b82f6,at=1234,am=2,m=200,ae=flash,ac=ffffff — runs to
+// 64+ chars, and MarcduinoSerial TRUNCATES SILENTLY at BUFFER_SIZE-1 and then processes the
+// truncated line (lib/Reeltwo/src/core/Marcduino.h:174). +32 bytes on an ESP32 is free.
+// (Zero lib/ edits: BUFFER_SIZE is a template parameter.)
+MarcduinoSerial<96> marcduinoSerial(player);
 
 /////////////////////////////////////////////////////////////////////////
 

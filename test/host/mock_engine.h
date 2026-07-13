@@ -33,7 +33,13 @@ struct LogicEngineRenderer {
   unsigned getID() const { return _id; }
   int width() const { return 8; }
   int height() const { return 10; }
-  void setPixelRGB(int, int, const CRGB&) {}
+  // The pixels are RECORDED (not discarded) so the host guards can assert on what a frame
+  // actually renders — the beat-pump level and the accent EFFECT SWAP are only visible here.
+  CRGB _px[10][8];
+  void setPixelRGB(int x, int y, const CRGB& c) {
+    if (x >= 0 && x < 8 && y >= 0 && y < 10) _px[y][x] = c;
+  }
+  CRGB px(int x, int y) const { return _px[y][x]; }
   void selectSequence(byte, int = 0, int = 0, int = 0) {}
   void resetEffect() {}
   void setBrightness(byte) {}
