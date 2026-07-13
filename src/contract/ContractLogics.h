@@ -43,7 +43,7 @@ static const int      SCORE_MAX = 16;              // sections per unit (a song 
 // Per-unit contract state. Index 0 = FLD (engine id 1), 1 = RLD (engine id 2).
 struct ContractUnit {
   ContractEffect effect = CE_SOLID;
-  RGB      color{0, 0, 0};
+  ContractRGB      color{0, 0, 0};
   uint8_t  speed = 128;
   uint8_t  bright = SAFE_MAX_BRIGHTNESS;
   uint8_t  beatMod = 0;
@@ -56,7 +56,7 @@ struct ContractUnit {
   // delivered blueprint fire the SAME effect-swap accent.
   bool     pulseActive = false;
   ContractEffect pulseFx = CE_NONE;     // CE_NONE == the v1.1 solid fill (verb P with no i=)
-  RGB      pulseColor{255, 255, 255};
+  ContractRGB      pulseColor{255, 255, 255};
   uint32_t pulseDurMs = 0, pulseStartMs = 0;
   // Strobe cool-down anchor: the millis of the last accent that was actually ARMED, kept
   // separately from pulseStartMs so the cap can be applied UNCONDITIONALLY (an overlay that
@@ -80,7 +80,7 @@ static int       gScoreLen[2] = {0, 0};
 static inline uint8_t _clampBright(int v) {
   return (uint8_t)(v < 0 ? 0 : (v > SAFE_MAX_BRIGHTNESS ? SAFE_MAX_BRIGHTNESS : v));
 }
-static inline CRGB _scaled(const RGB& c, uint8_t bri) {   // apply brightness (setPixelRGB bypasses fBri)
+static inline CRGB _scaled(const ContractRGB& c, uint8_t bri) {   // apply brightness (setPixelRGB bypasses fBri)
   return CRGB((uint16_t)c.r * bri / 255, (uint16_t)c.g * bri / 255, (uint16_t)c.b * bri / 255);
 }
 static inline void _fill(LogicEngineRenderer& r, const CRGB& c) {
@@ -128,7 +128,7 @@ static inline uint8_t _beatBright(const ContractUnit& g, const BeatPos& bp) {
 // leaves the overlay up when the next beat lands, and at 300 BPM the logics then re-armed every
 // 200 ms = 5 Hz. An accent restarting mid-overlay is exactly the flash a viewer sees, so the
 // cool-down cannot care whether one is currently up.
-static inline void _fireAccent(uint8_t u, ContractEffect fx, const RGB& c, uint32_t durMs) {
+static inline void _fireAccent(uint8_t u, ContractEffect fx, const ContractRGB& c, uint32_t durMs) {
   ContractUnit& g = gContract[u];
   uint32_t now = millis();
   if (g.pulseLastMs != 0 && (uint32_t)(now - g.pulseLastMs) < 2 * STROBE_MIN_STATE_MS) return;
@@ -170,7 +170,7 @@ inline bool ContractRender(LogicEngineRenderer& r) {
   // g.bright)) — literally the v1.1 overlay fill.
   uint8_t bb = _beatBright(g, bp);
   ContractEffect eff = g.effect;
-  RGB      col = g.color;
+  ContractRGB      col = g.color;
   uint8_t  bri = bb;
   uint32_t t0  = g.startMs;
   if (g.pulseActive) {
@@ -230,7 +230,7 @@ inline bool ContractRender(LogicEngineRenderer& r) {
     }
     case CE_METER: {
       int lit = (H * (int)gLevel) / 255;                                 // fill from bottom
-      CRGB c = _scaled(col.r || col.g || col.b ? col : RGB{0, 255, 0}, bri);
+      CRGB c = _scaled(col.r || col.g || col.b ? col : ContractRGB{0, 255, 0}, bri);
       for (int y = 0; y < H; y++)
         for (int x = 0; x < W; x++)
           r.setPixelRGB(x, y, ((H - 1 - y) < lit) ? c : CRGB(0, 0, 0));
@@ -268,13 +268,13 @@ inline bool ContractRender(LogicEngineRenderer& r) {
       uint32_t el = now - t0;
       for (int x = 0; x < W; x++) {
         uint8_t hue = fxGradientHue(x, W, 0, el, g.speed);   // base hue 0, color-independent (like rainbow)
-        RGB c = fxHsv2rgb(hue, 255, bri);
+        ContractRGB c = fxHsv2rgb(hue, 255, bri);
         for (int y = 0; y < H; y++) r.setPixelRGB(x, y, CRGB(c.r, c.g, c.b));
       }
       break;
     }
     case CE_COLORCYCLE: {
-      RGB c = fxHsv2rgb(fxCycleHue(0, now - t0, g.speed), 255, bri);
+      ContractRGB c = fxHsv2rgb(fxCycleHue(0, now - t0, g.speed), 255, bri);
       _fill(r, CRGB(c.r, c.g, c.b));
       break;
     }
@@ -309,7 +309,7 @@ inline void applyContractToUnit(uint8_t u, const ParsedContract& p) {
         e.atBeat = pr.atBeat;
         e.effect = pr.hasEffect ? pr.effect : CE_SOLID;
         e.nativeCode = pr.hasEffect ? pr.nativeCode : -1;
-        e.color  = pr.hasColor ? pr.color : RGB{0, 0, 0};
+        e.color  = pr.hasColor ? pr.color : ContractRGB{0, 0, 0};
         e.speed  = pr.hasSpeed ? pr.speed : 128;
         e.beatMod = pr.hasBeatMod ? pr.beatMod : 0;
         e.accentMode = pr.hasAm ? pr.accentMode : 0;
@@ -354,7 +354,7 @@ inline void applyContractToUnit(uint8_t u, const ParsedContract& p) {
       // CE_SOLID — bit-identical to the v1.1 fill. The strobe cool-down lives in _fireAccent.
       if (pr.hasBright) g.bright = _clampBright(pr.bright);
       _fireAccent(u, (pr.hasEffect && accentEffectAllowed(pr.effect)) ? pr.effect : CE_SOLID,
-                  pr.hasColor ? pr.color : RGB{255, 255, 255},
+                  pr.hasColor ? pr.color : ContractRGB{255, 255, 255},
                   pr.hasDur ? pr.durMs : 120);
       break;
     }

@@ -8,16 +8,17 @@
 #   1. contract_core.h parser unit tests
 #   2. ContractLogics.h firmware-layer type-check against a mock of the engine API
 #   3. Marcduino command-buffer width guard (the v1.2 accent keys push a scored line past 63)
+#   4. REAL cross-compile for the ESP32 (optional; needs PlatformIO)
 set -e
 cd "$(dirname "$0")"
-echo "[1/3] contract_core parser unit tests"
+echo "[1/4] contract_core parser unit tests"
 clang++ -std=c++17 -Wall -Wextra -O0 test_contract_core.cpp -o /tmp/rseries_contract_test
 /tmp/rseries_contract_test
-echo "[2/3] ContractLogics.h firmware type-check"
+echo "[2/4] ContractLogics.h firmware type-check"
 clang++ -std=c++17 -Wall -Wextra compile_contract_logics.cpp -o /tmp/rseries_fw_syntax
 /tmp/rseries_fw_syntax
 
-echo "[3/3] Marcduino command-buffer width guard"
+echo "[3/4] Marcduino command-buffer width guard"
 # lib/Reeltwo/src/core/Marcduino.h:173-175 — MarcduinoSerial::animate() reads a byte and:
 #     else if (fPos < SizeOfArray(fBuffer)-1) fBuffer[fPos++] = ch;
 # Every byte past that is DROPPED ON THE FLOOR, with no error and no flag; on the next CR it
@@ -89,3 +90,42 @@ if [ "$WIDTH" -lt "$need" ]; then
   exit 1
 fi
 echo "MarcduinoSerial BUFFER_SIZE=$WIDTH >= $need (worst v1.2 scored line ${#worst} chars) OK"
+
+echo "[4/4] REAL cross-compile (ESP32 (wlogicengine32)) -- optional"
+# THIS is the stage that makes "it compiles" a claim about the FIRMWARE rather than a claim
+# about our mock. Stages 1-3 are host checks: they prove the contract logic and they pin the
+# board API against a HAND-WRITTEN MOCK -- and a mock is only ever as honest as its author.
+# This one was not honest. The first real avr-gcc/xtensa build caught two things stages 1-3
+# could never see, by construction:
+#   * FastLED declares RGB as an ENUMERATOR of fl::EOrder, which name-hides a `struct RGB`.
+#     Our shared core defined exactly that struct. Every plain use of the type failed to
+#     compile on both FastLED boards. The mocks never modelled EOrder, so the type-check
+#     passed happily.
+#   * fill_column() is DEFINED in the PSI firmware but declared in no header, and our include
+#     point sits above the definition. The mock DEFINED it, so the name was always in scope.
+# (Both are fixed. The lesson is why this stage exists.)
+#
+# OPTIONAL because it needs PlatformIO and a ~200 MB toolchain. Skipped cleanly without it:
+# stages 1-3 still run and still mean something -- just strictly less than they appear to.
+PIO="${PIO:-$HOME/.platformio/penv/bin/pio}"
+[ -x "$PIO" ] || PIO="$(command -v pio 2>/dev/null || true)"
+if [ -z "$PIO" ] || [ ! -x "$PIO" ]; then
+  echo "SKIP: PlatformIO not found, so NOTHING here was compiled for the real MCU."
+  echo "      Stages 1-3 passed, but they only type-check against our mock."
+  echo "      Install it and re-run for the real check:  pip install platformio"
+  echo "      Or point this at an existing install:      PIO=/path/to/pio $0"
+  exit 0
+fi
+echo "using $PIO"
+( cd ../.. && "$PIO" run -e wlogicengine32 )
+echo "cross-compiles for the real MCU (ESP32 (wlogicengine32)) OK"
+echo "    (a successful LINK is not a bench test: this firmware has never been flashed.)"
+echo
+echo "    NOTE: only the wlogicengine32 (plain ESP32) env is built. The wlogicengine32s3"
+echo "    env cannot be built here at all: upstream pins platform-espressif32 v5.2.0, which"
+echo "    wants espressif/toolchain-riscv32-esp @ 8.4.0+2021r2-patch3, and that package is"
+echo "    no longer resolvable from the registry. That failure happens in PlatformIO's tool"
+echo "    manager BEFORE a single source file is read, so it is an upstream packaging issue,"
+echo "    not a fault in this fork's code. Left alone deliberately: re-pinning the platform"
+echo "    would change the toolchain for the ESP32 env too, and we are not in a position to"
+echo "    re-validate that on hardware."
