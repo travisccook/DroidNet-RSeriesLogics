@@ -78,3 +78,12 @@ is the DroidNet layer (`git log --oneline 6bba8b1..HEAD`).
   function, so sections keep advancing even while a `native:<code>` section look (which
   `ContractRender` does not draw) is on screen.
 - `!` is the fork's only command prefix, and it was chosen because every stock parser ignores it.
+- **`STROBE_MIN_STATE_MS = 170` is a safety limit, not a tuning knob.** An accent overlay may not
+  restart more often than every `2 * 170 = 340 ms` (≤ 2.94 flashes/sec, inside the ≤ 3 flashes/sec
+  photosensitivity guidance), the cool-down is anchored on `pulseLastMs` **unconditionally** — an
+  overlay that is still on screen is not an exemption — and all three board forks must use the same
+  number. `test/host/` fails if any of that stops being true.
+- **`MarcduinoSerial<96>`, not the library default of 64.** `Marcduino.h` drops overflow bytes
+  silently and then processes the truncated line, and a truncated contract line still parses — so
+  the board would quietly play a *different* show. The longest line Studio can emit is 90 chars;
+  `test/host/run.sh` recomputes that and fails if the buffer cannot hold it.

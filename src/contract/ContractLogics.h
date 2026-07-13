@@ -29,7 +29,12 @@
 #include "contract_core.h"
 
 static const uint8_t  SAFE_MAX_BRIGHTNESS = 200;   // heat/USB clamp (fork spec §11)
-static const uint32_t STROBE_MIN_STATE_MS = 160;   // >=160 ms/state => <= ~3 Hz (fork spec §11)
+// PHOTOSENSITIVITY (fork spec §11). >=170 ms/state => an accent may not RESTART more often
+// than every 2 * 170 = 340 ms, i.e. <= 2.94 flashes/sec, inside the <= 3 flashes/sec
+// guidance. This was 160 (a 320 ms floor => 3.13 Hz — over the line, and the only one of the
+// three boards that was), while PSI and Flthy both used 170. The three boards fire the same
+// show at the same instant; the cap must be the SAME number on all three.
+static const uint32_t STROBE_MIN_STATE_MS = 170;   // >=170 ms/state => <= ~2.9 Hz (fork spec §11)
 static const byte     FX_CONTRACT   = 106;         // single fork effect id (appended in main.cpp)
 static const byte     NATIVE_LIGHTSOUT = 14;       // native blackout / de-energize
 static const byte     NATIVE_NORMAL = 0;           // native idle shimmer
@@ -53,6 +58,10 @@ struct ContractUnit {
   ContractEffect pulseFx = CE_NONE;     // CE_NONE == the v1.1 solid fill (verb P with no i=)
   RGB      pulseColor{255, 255, 255};
   uint32_t pulseDurMs = 0, pulseStartMs = 0;
+  // Strobe cool-down anchor: the millis of the last accent that was actually ARMED, kept
+  // separately from pulseStartMs so the cap can be applied UNCONDITIONALLY (an overlay that
+  // is still on screen must not be a hole in it). Mirrors Flthy's u.pulseLastMs.
+  uint32_t pulseLastMs = 0;
   // Phase-2 score cursor
   int      curSection = -1;
   int32_t  sectionStart = 0, sectionEnd = 0;
@@ -105,19 +114,30 @@ static inline uint8_t _beatBright(const ContractUnit& g, const BeatPos& bp) {
 // score accent (autonomous, Phase-2) both come through here, so the two delivery paths
 // cannot drift apart. fx == CE_NONE renders as the v1.1 solid fill.
 //
-// STROBE CAP (unchanged policy, now enforced for BOTH triggers): an overlay may not
-// RESTART more often than every 2 * STROBE_MIN_STATE_MS, so a scored am=2 at a very
-// high BPM silently drops the beats it cannot safely honour instead of strobing. The
-// duration is floored at STROBE_MIN_STATE_MS so a state is never shorter than the cap.
+// STROBE CAP (SAFETY — photosensitivity, enforced for BOTH triggers): an overlay may not
+// RESTART more often than every 2 * STROBE_MIN_STATE_MS (340 ms => <= 2.94 flashes/sec), so a
+// scored am=2 at a very high BPM silently drops the beats it cannot safely honour instead of
+// strobing. The duration is floored at STROBE_MIN_STATE_MS so a state is never shorter than
+// the cap.
+//
+// The gate anchors on pulseLastMs UNCONDITIONALLY (Flthy's shape). It used to read
+//     !g.pulseActive && g.pulseStartMs != 0 && (now - g.pulseStartMs) < 2 * STROBE_MIN_STATE_MS
+// and that `!g.pulseActive` short-circuit was a HOLE STRAIGHT THROUGH THE CAP: while an overlay
+// was still on screen the whole test was skipped, so every re-arm was accepted. It is reachable
+// with ordinary Studio output — any accent longer than the beat (e.g. ae=flash,ad=2550 with am=2)
+// leaves the overlay up when the next beat lands, and at 300 BPM the logics then re-armed every
+// 200 ms = 5 Hz. An accent restarting mid-overlay is exactly the flash a viewer sees, so the
+// cool-down cannot care whether one is currently up.
 static inline void _fireAccent(uint8_t u, ContractEffect fx, const RGB& c, uint32_t durMs) {
   ContractUnit& g = gContract[u];
   uint32_t now = millis();
-  if (!g.pulseActive && g.pulseStartMs != 0 && (now - g.pulseStartMs) < 2 * STROBE_MIN_STATE_MS) return;
+  if (g.pulseLastMs != 0 && (uint32_t)(now - g.pulseLastMs) < 2 * STROBE_MIN_STATE_MS) return;
   if (durMs < STROBE_MIN_STATE_MS) durMs = STROBE_MIN_STATE_MS;
   g.pulseFx     = fx;
   g.pulseColor  = c;
   g.pulseDurMs  = durMs;
-  g.pulseStartMs = now;
+  g.pulseStartMs = now;                 // ALWAYS retrigger (defeats a re-send no-op)
+  g.pulseLastMs  = now;                 // the cool-down anchor: set on every accent that ARMS
   g.pulseActive  = true;
   _select(u, FX_CONTRACT); _reset(u);   // ensure ContractRender is active + retrigger
 }
@@ -172,7 +192,7 @@ inline bool ContractRender(LogicEngineRenderer& r) {
       _fill(r, CRGB(0, 0, 0));
       break;
     case CE_FLASH: {
-      uint32_t half = STROBE_MIN_STATE_MS + (uint32_t)(255 - g.speed);   // >=160 ms/state (strobe cap)
+      uint32_t half = STROBE_MIN_STATE_MS + (uint32_t)(255 - g.speed);   // >=170 ms/state (strobe cap)
       bool on = ((now - t0) % (2 * half)) < half;
       // v1.2 FIX: the lit state renders at the BEAT-PUMPED level (bri), not the raw ceiling.
       // It was the only sustained look on this board that ignored the envelope, so an

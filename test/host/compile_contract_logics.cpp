@@ -13,6 +13,8 @@
 //     drift the 2026-07-12 fork audit fixed on PSI/Flthy);
 //   * v1.2: the board fires its OWN effect-swap accent once per accent beat, never on a
 //     non-accent beat, never per frame, and NEVER for a v1.1 entry (no ae=);
+//   * SAFETY (photosensitivity): the accent strobe cap is >= 340 ms between STARTS and is
+//     enforced UNCONDITIONALLY — a re-arm while an overlay is still on screen is REJECTED;
 //   * v1.2: CE_FLASH's lit state is beat-pumped (it used to render at the raw ceiling).
 #include "mock_engine.h"
 #include "../../src/contract/ContractLogics.h"
@@ -217,7 +219,7 @@ int main() {
   CHECK(tickFired(0));                              // beat 0 of the NEW timeline accents
 
   // 1g. The strobe cap still governs the SELF-FIRED accent. 300 BPM is a beat every 200 ms —
-  // faster than the existing 2 * STROBE_MIN_STATE_MS (320 ms) re-arm floor — so the board must
+  // faster than the 2 * STROBE_MIN_STATE_MS (340 ms) re-arm floor — so the board must
   // DROP the beats it cannot safely honour instead of strobing. Run a realistic ~10 ms frame
   // loop (contractTick + ContractRender, as mainLoop does): the render pass is what retires an
   // expired overlay, and the cool-down gate only bites once it has.
@@ -247,10 +249,122 @@ int main() {
   }
 
   // =====================================================================================
+  // v1.2 GUARD 1S — THE STROBE CAP IS A SAFETY LIMIT (photosensitivity), so pin it as an
+  // ABSOLUTE number of milliseconds rather than trusting whatever the constant happens to
+  // say. 1g above asserts `minGap >= 2 * STROBE_MIN_STATE_MS`, which is true for ANY value
+  // of the constant — it cannot notice the constant itself being lowered.
+  // =====================================================================================
+  {
+    const uint32_t coolDownMs = 2u * STROBE_MIN_STATE_MS;    // shortest allowed gap between STARTS
+    if (coolDownMs < 340u) {
+      printf("FAIL :%d  the accent cool-down is %u ms => up to %.2f flashes/sec, above the "
+             "<= 3 flashes/sec photosensitivity guidance.\n", __LINE__,
+             (unsigned)coolDownMs, 1000.0 / (double)coolDownMs);
+      printf("          STROBE_MIN_STATE_MS must be >= 170 (it is %u).\n",
+             (unsigned)STROBE_MIN_STATE_MS);
+      gFails++;
+    }
+    if (STROBE_MIN_STATE_MS != 170u) {
+      printf("FAIL :%d  STROBE_MIN_STATE_MS is %u; PSI and Flthy both use 170. The three boards "
+             "flash the SAME show at the SAME instant, so the cap has to be the same number on "
+             "all three or the fastest board sets the real flash rate.\n", __LINE__,
+             (unsigned)STROBE_MIN_STATE_MS);
+      gFails++;
+    }
+  }
+
+  // =====================================================================================
+  // v1.2 GUARD 1H — SAFETY: the cool-down must be anchored UNCONDITIONALLY. The gate used to
+  // be `!pulseActive && pulseStartMs != 0 && ...`; that `!pulseActive` short-circuit meant an
+  // overlay that was STILL ON SCREEN skipped the cap entirely, so every re-arm was accepted.
+  //
+  // 1h-1 — the LIVE path (verb P). A 1000 ms accent is armed, then re-armed 200 ms later
+  // (5 Hz) while it is demonstrably still up. It must be DROPPED. Then 400 ms after the
+  // accepted one (2.5 Hz) must still PASS, mid-overlay — the cap must not be over-tight
+  // either, or a Studio show stutters on alternate beats and just looks broken.
+  // =====================================================================================
+  resetAll();
+  {
+    _mock_millis = 500000;
+    const uint32_t t = _mock_millis;
+    send("L*A:i=solid,c=FF0000,b=200");                  // a base look on both units
+    send("LFP:c=FFFFFF,d=1000");                         // accent #1: white, 1000 ms
+    CHECK(gContract[0].pulseActive);
+    CHECK(gContract[0].pulseStartMs == t);
+    CHECK(gContract[0].pulseDurMs == 1000);
+    CHECK(gContract[0].pulseColor.r == 0xFF && gContract[0].pulseColor.g == 0xFF);
+
+    _mock_millis = t + 200;                              // 200 ms later == 5 flashes/sec
+    // NOT VACUOUS: the overlay really is still up at this instant, which is the whole point —
+    // this is precisely the state the old gate short-circuited on.
+    CHECK(gContract[0].pulseActive);
+    CHECK(_mock_millis - gContract[0].pulseStartMs < gContract[0].pulseDurMs);
+    send("LFP:c=00FF00,d=1000");                         // re-arm attempt: green
+    if (gContract[0].pulseStartMs != t || gContract[0].pulseColor.g != 0xFF
+        || gContract[0].pulseColor.r != 0xFF) {
+      printf("FAIL :%d  an accent only 200 ms after the previous one was ACCEPTED because an "
+             "overlay was still active — 5 flashes/sec, over the <= 3 flashes/sec cap. The "
+             "cool-down must not be gated on !pulseActive.\n", __LINE__);
+      gFails++;
+    }
+
+    _mock_millis = t + 400;                              // 400 ms after the accepted start == 2.5 Hz
+    CHECK(gContract[0].pulseActive);                     // still mid-overlay (1000 ms accent)
+    send("LFP:c=00FF00,d=1000");                         // must PASS: 400 >= 340
+    if (gContract[0].pulseStartMs != t + 400 || gContract[0].pulseColor.r != 0x00
+        || gContract[0].pulseColor.g != 0xFF) {
+      printf("FAIL :%d  the cool-down DROPPED a legal 2.5 Hz accent (400 ms gap) — over-tight, "
+             "a Studio-authored show would stutter on alternate beats.\n", __LINE__);
+      gFails++;
+    }
+  }
+
+  // 1h-2 — the SCORED path (the board's own beat edge), in the shape Studio can actually emit:
+  // an accent LONGER than the beat. ae=flash,ad=2550 with am=2 at 300 BPM means the overlay is
+  // ALWAYS still active when the next beat lands, so ContractRender never retires it and the old
+  // `!pulseActive` gate was bypassed on every single beat — the logics re-armed every 200 ms
+  // (5 Hz). 1g cannot see this: its ad defaults to 180 ms, which expires before the next beat.
+  resetAll();
+  _mock_millis = 100000;
+  send("**C:bpm=300,ph=0,bpb=4,beat=0");
+  send("LFA:i=solid,c=3b82f6,at=0,am=2,m=200,ae=flash,ac=ffffff,ad=2550");
+  CHECK(gScore[0][0].accentDur10 == 255);                 // 2550 ms / 10
+  {
+    LogicEngineRenderer rr; rr._id = 1;
+    int fires = 0, firesMidOverlay = 0;
+    uint32_t prevFire = 0, minGap = 0xFFFFFFFFu;
+    for (uint32_t t = 100000; t < 102400; t += 10) {      // 2400 ms == 12 beats @ 300 BPM
+      _mock_millis = t;
+      const bool overlayUp = gContract[0].pulseActive
+                          && (t - gContract[0].pulseStartMs) < gContract[0].pulseDurMs;
+      if (tickFired(0)) {
+        if (fires) {
+          uint32_t gap = t - prevFire; if (gap < minGap) minGap = gap;
+          if (overlayUp) firesMidOverlay++;               // re-armed while one was on screen
+        }
+        prevFire = t; fires++;
+      }
+      ContractRender(rr);                                  // the engine's frame
+    }
+    CHECK(fires > 1);                                      // not vacuous: it DOES re-accent…
+    CHECK(fires < 12);                                     // …but not on all 12 of the 200 ms beats
+    // …and every re-accent happened while the 2550 ms overlay was STILL UP, so this scenario
+    // really does exercise the path the old gate short-circuited (if this is 0 the guard is
+    // vacuous and proves nothing).
+    CHECK(firesMidOverlay == fires - 1);
+    if (minGap < 340u) {
+      printf("FAIL :%d  a scored ad=2550 accent at 300 BPM re-armed every %u ms (%.2f flashes/sec) "
+             "— the overlay was still active, so the cool-down was bypassed. The cap is 340 ms.\n",
+             __LINE__, (unsigned)minGap, 1000.0 / (double)minGap);
+      gFails++;
+    }
+  }
+
+  // =====================================================================================
   // v1.2 GUARD 2 — CE_FLASH is beat-pumped. It rendered its lit state at the raw ceiling
   // (g.bright), the only sustained look on this board that ignored the shared envelope —
   // so an i=flash section pumped on the HPs/PSIs and sat flat on the Logics.
-  // s=255 => half-period 160 ms (period 320). At 120 BPM (beat 500 ms) t=10 and t=460 are
+  // s=255 => half-period 170 ms (period 340). At 120 BPM (beat 500 ms) t=10 and t=460 are
   // BOTH inside a lit half, but sit at opposite ends of the beat envelope.
   // =====================================================================================
   resetAll();
@@ -259,13 +373,13 @@ int main() {
   send("L*A:i=flash,c=FF0000,s=255,b=200,m=200,am=2");
   {
     LogicEngineRenderer rf; rf._id = 1;
-    _mock_millis = 10;                    // 10 % 320 < 160 => LIT; beat phase ~0.02 => accent peak
+    _mock_millis = 10;                    // 10 % 340 < 170 => LIT; beat phase ~0.02 => accent peak
     ContractRender(rf);
     int onEarly = rf.px(0, 0).r;
-    _mock_millis = 460;                   // 460 % 320 = 140 < 160 => LIT; beat phase 0.92 => floor
+    _mock_millis = 460;                   // 460 % 340 = 120 < 170 => LIT; beat phase 0.92 => floor
     ContractRender(rf);
     int onLate = rf.px(0, 0).r;
-    _mock_millis = 200;                   // 200 % 320 >= 160 => the DARK half
+    _mock_millis = 200;                   // 200 % 340 >= 170 => the DARK half
     ContractRender(rf);
     int off = rf.px(0, 0).r;
     CHECK(!gContract[0].pulseActive);     // no overlay in play — this is the BASE look
@@ -279,6 +393,7 @@ int main() {
   }
 
   if (gFails) { printf("%d CHECK(s) FAILED\n", gFails); return 1; }
-  printf("ContractLogics.h type-check + score-native / score-accent / flash-pump guards OK\n");
+  printf("ContractLogics.h type-check + score-native / score-accent / strobe-cap / "
+         "flash-pump guards OK\n");
   return 0;
 }
