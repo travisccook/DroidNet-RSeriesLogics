@@ -153,7 +153,8 @@ was latent upstream because nothing ever selected the last id; adding effect 106
 That is the only line of upstream code this fork changes.
 
 Run `git diff b47a5f9..HEAD --stat` if you want the exact split (`b47a5f9` is the baseline import):
-**13 files, 1,754 insertions.** Nine of those files are code — the six new ones above, the
+**13 files, 1,754 insertions, 181 deletions** (the deletions are almost entirely the documentation
+rewrite; only two are code, both in `src/main.cpp`). Nine of those files are code — the six new ones above, the
 seven-line edit to `src/main.cpp`, and comment-only LGPL §2(b) notices on the two vendored Reeltwo
 headers. The other four are documentation (this README, `README_UPSTREAM.md`, `DROIDNET_FORK.md`,
 `README_C2B5.md`).
