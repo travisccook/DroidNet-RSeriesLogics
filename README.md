@@ -1,219 +1,217 @@
-# WLogicEngine32 1.0
-Code originally by Joymonkey, updated by Rimim. 
-With portions inspired by / lifted from IOIIOOO, Curiousmarc, Mowee, Flthymcnasty, and others!  
+# DroidNet-RSeriesLogics
 
-Works with WReactor32 Boards (ESP32 - Lolin D32 Pro).
+An additive fork of **[WLogicEngine32](https://github.com/reeltwo/WLogicEngine32)** — the RSeries
+Logic Engine firmware, originally written by **Joymonkey** (Paul Murphy) and updated and maintained
+by **Rimim** (Mimir Reynisson).
 
-![WReactor32](https://github.com/joymonkey/logicengine/raw/master/docs/img/WREACTOR32-PCB.png)
+Almost everything in this repository is their work. This fork adds one small layer (about 700 lines
+across two headers plus a host test harness) so an external tool can drive the logic displays in
+time with music. Everything the firmware already did, it still does, unchanged.
 
-You can find the Astromech parts run for the RSeries LogicEngine here:
+---
 
-https://astromech.net/forums/showthread.php?40649-RSeries-Logic-Engine-dome-lighting-kit-250-(Jan-2021)-Open
+## The original project
 
-Firmware is updatable via an SD card (or OTA through the web interface). For future updates, copy the new LEngine.bin firmware file onto an SD card, insert it and on the next power-up the board will update itself. This makes it much simpler for the average builder to update as you no longer need a full Arduino development environment set up just to compile and upload an update. The firmware will be deleted from the SD card after a successful update.
+[reeltwo/WLogicEngine32](https://github.com/reeltwo/WLogicEngine32) is the firmware for the
+WReactor32 board (ESP32 / Lolin D32 Pro) that runs the **RSeries Logic Engine** dome lighting kit —
+the front and rear logic displays on an astromech droid. It came out of the
+[astromech.net parts runs](https://astromech.net/forums/showthread.php?40649-RSeries-Logic-Engine-dome-lighting-kit-250-(Jan-2021)-Open),
+and it descends from Joymonkey's original [logicengine](https://github.com/joymonkey/logicengine)
+project, which started this whole lineage.
 
-Logic settings are adjustable using the buttons and trimpot on the board, so a droid can easily be configured with different color palettes, brightness levels and pattern speeds.
+If you use this fork, go star and support the original. Some specific things in it that are worth
+your attention:
 
-You can find more information on the Wiki here:
+- **It is built on [Reeltwo](https://github.com/reeltwo/Reeltwo)** (also by Rimim), which is a
+  genuinely good piece of embedded C++: a whole device and animation framework with a clean
+  renderer abstraction (`LogicEngineRenderer`), a sequence system, Marcduino/JawaLite command
+  dispatch, and a settings/menu stack. It is vendored here in `lib/Reeltwo`.
 
-https://github.com/joymonkey/logicengine/wiki/WReactor32
+- **The extension seam is why this fork is so small.** Reeltwo exposes
+  `CustomLogicEffectSelector`: any sequence id at or above 100 is handed off to firmware-supplied
+  effect functions. Rimim designed a hook for exactly this kind of addition years ago, so our whole
+  render layer plugs in as effect id 106 without modifying a single line of the vendored library.
+  That is good API design paying off later for a stranger, and it is the nicest thing in this fork.
 
+- **Firmware updates without a toolchain.** Drop `LEngine.bin` on an SD card, power up, and the
+  board flashes itself (or update over the air through the built-in web interface). The average
+  builder never needs to install Arduino or PlatformIO to take an update. That is real
+  thoughtfulness about the actual person holding the droid.
 
-**********
+- **Configuration on the board itself.** Colours, brightness and pattern speeds are adjustable with
+  the buttons and trimpot, no computer required.
 
-# REQUIREMENTS
+The upstream project's own README is preserved here as **[README_UPSTREAM.md](README_UPSTREAM.md)** —
+that is where the real firmware documentation lives (Marcduino commands, `~RTLE` sequence codes,
+WiFi setup, colour tables). Read that first. This README only covers what the fork adds.
 
-Arduino IDE: https://www.arduino.cc/en/Main/Software  (1.8.13 or higher)
-FastLED: https://github.com/FastLED/FastLED/releases  (3.5.0 or higher)
-Reeltwo: https://github.com/reeltwo/Reeltwo/releases  (1.1 or higher)
+---
 
-**********
+## NEVER RUN THIS ON HARDWARE YET
 
-The default WiFi credentials are:
+**No code in this fork has ever run on a real board. Not once.**
 
-SSID: R2D2  
-Password: Astromech 
+Verification is host-side only:
 
-You can and should change this using the web interface. The default web address of the firmware is http://192.168.4.1
+- `bash test/host/run.sh` — 154 checks against the wire parser, beat clock and effect math, plus a
+  type-check of the render layer against a mock of the engine API.
+- That is it. No bench flash, no scope, no LEDs, no droid.
 
-If you hold the WiFi Reset button for >2 seconds it will toggle the WiFi on/off and reboot the board.
+Nothing here has been compiled by PlatformIO for the ESP32, let alone flashed. Before this goes
+anywhere near a droid: build it, bench it on a bare board with the display panels disconnected from
+anything you care about, and check current draw. The stock firmware from upstream is the safe,
+proven thing; this is not, yet.
 
-If you hold the WiFi Reset button for >5 seconds it will reset the WiFi credentials to the default and enable WiFi.
+---
 
-The Serial1 TTL header is by default a Marcduino serial command receiver running at 9600 baud. It will forward any serial data to Serial2 at 9600 baud. Allowing you to daisy chain the WLogicEngine32 board with other Marcdunio compatible serial devices.
+## What this fork adds
 
-I2C does not work. As the ESP32 can only act as an I2C master device (address 0).
+A **Driveable-Animation Contract**: a small wire grammar so a host (Cantina Studio — a music
+analysis and dome lighting authoring tool) can drive the logic displays in time with a song.
 
-**********
+```text
+!<cls><unit><verb>[:k=v,k=v,...]
 
-# Marcduino Commands Supported
+cls    L = logic displays   P = PSI   H = holoprojectors   * = all
+unit   F = front   R = rear   T = top/HP   * = all
+verb   A = animate (set the base look)      P = pulse (a beat accent)
+       C = beat-clock seed                  B = brightness
+       L = level (energy 0-255)             X = stop
+       M = mode (show / idle)               Q = query
 
-The prefix @ is optional and is ignored. All Marcduino commands are terminated by \r (carriage return).
+example:  !LFA:i=comet,c=ff8800,s=200,m=64,am=1
+          front logics -> comet, orange, fast, beat-modulated
+```
 
-## @1T1 - Front Logics set to Normal
+The `!` prefix was chosen **because every stock board parser already ignores it.** That is the whole
+trick, and it is what makes this layer additive rather than invasive.
 
-## @1T2 - Front Logics set to Flashing Color (06)
+What it buys:
 
-## @1T3 - Front Logics set to Alarm (01)
+- **Arbitrary RGB** (`c=ff8800`), not just the palette indices the native commands take.
+- **Beat-locked accents** — the host seeds a beat clock (`!**C:bpm=,ph=,bpb=`) once and the board
+  stays in phase with the music on its own.
+- **Autonomous section playback** — the host pushes a compact "score" (looks scheduled at beat
+  indices), then the board plays the whole song by itself with no further traffic.
+- **Six new parametric effects** rendered along a per-board 1-D strand: `comet`, `chase`, `wipe`,
+  `gradient`, `colorcycle`, `twinkle` — alongside `solid`, `flash`, `rainbow`, `scan`, `sparkle`,
+  `meter`, and a `native:<code>` escape hatch that hands a section straight back to an iconic stock
+  sequence.
 
-## @1T4 - Front Logics set to Failure (02)
+**Every native command still works exactly as before.** `~RTLE…`, `@nT…`, `#LE…`, JawaLite, the web
+interface, the SD-card updater, the menus — all untouched. This is backward-compatible and it is not
+a rewrite. If you never send a `!` command, this firmware behaves like the stock firmware.
 
-## @1T5 - Front Logics set to Red Alert (11)
+---
 
-## @1T6 - Front Logics set to Leia (03)
+## What is theirs and what is ours
 
-## @1T11 - Front Logics set to March (04)
+**Ours** (Travis Cook, 2026) — the entire fork layer:
 
-## @2T1 - Rear Logics set to Normal
+| Path | What it is | Lines |
+| --- | --- | --- |
+| `src/contract/contract_core.h` | Pure, dependency-free C++: wire parser, beat clock, effect math, score table. No Arduino, no FastLED, no Reeltwo. Byte-identical across the three DroidNet board forks. | 354 |
+| `src/contract/ContractLogics.h` | The RSeries render layer: maps the contract onto this board's LED primitives, registers as custom effect id 106. | 325 |
+| `test/host/*` | The host test harness (parser tests, engine mock, type-check). | ~480 |
+| `src/main.cpp` | **Four added lines and one bounds-check fix.** An `#include`, `ContractRender` appended to the custom-effect table, `contractSetup()` in `setup()`, `contractTick()` in `mainLoop()`. | 4 |
+| `DROIDNET_FORK.md`, this README | Fork docs. | — |
 
-## @2T2 - Rear Logics set to Flashing Color (06)
+The bounds-check fix in `main.cpp` is a one-character change to a pre-existing off-by-one in the
+custom-effect selector (`selectSequence-100 <= SizeOfArray(...)` read one slot past the array). It
+was latent upstream because nothing ever selected the last id; adding effect 106 would have hit it.
+That is the only line of upstream code this fork changes.
 
-## @2T3 - Rear Logics set to Alarm (01)
+**Theirs** — literally everything else:
 
-## @2T4 - Rear Logics set to Failure (02)
+- `src/main.cpp` (1,415 lines), `WebPages.h`, `MarcduinoLogics.h`, `logic-sequences.h`,
+  `pin-config.h`, `effects/`, `menus/`, `data/`, `scripts/`, `visualizer/`, `platformio.ini` —
+  Joymonkey and Rimim, with contributions from IOIIOOO, Curiousmarc, Mowee, Flthymcnasty and others.
+- `lib/Reeltwo` — Rimim.
+- `lib/FastLED`, `lib/Adafruit_NeoPixel` — their respective authors.
 
-## @2T5 - Rear Logics set to Red Alert (11)
+Run `git diff <first-commit>..HEAD --stat` if you want the exact split; it is eight files.
 
-## @2T6 - Rear Logics set to Leia (03)
+---
 
-## @2T11 - Rear Logics set to March (04)
+## Where this came from
 
-## @0T1 - All Logics set to Normal
+1. **Upstream:** `reeltwo/WLogicEngine32`, by Joymonkey and Rimim, on top of Rimim's Reeltwo library.
+   LGPL-2.1.
+2. **A private working collection** in which this firmware was customized for one specific droid
+   (call sign C2B5): better WiFi and AP-mode handling, multi-network support with priorities, an
+   `RSeries.local` mDNS hostname, SSID URL-decoding, and a modern web UI. Those changes are
+   documented in **[README_C2B5.md](README_C2B5.md)** and
+   **[docs/C2B5_CUSTOMIZATIONS.md](docs/C2B5_CUSTOMIZATIONS.md)**, and they are the reason two files
+   under `lib/Reeltwo` carry a "modified from upstream" notice (see the licence section). That
+   collection is private and stays private; it is not a repository you can visit, and nothing here
+   depends on it.
+3. **This repository:** that tree, plus the DroidNet contract layer. This is the first public
+   distribution of any of it.
 
-## @0T2 - All Logics set to Flashing Color (06)
+---
 
-## @0T3 - All Logics set to Alarm (01)
+## Building and testing
 
-## @0T4 - All Logics set to Failure (02)
+Host tests (no hardware, no ESP32 toolchain):
 
-## @0T5 - All Logics set to Red Alert (11)
+```sh
+bash test/host/run.sh
+# [1/2] contract_core parser unit tests -> OK  154/154 checks passed
+# [2/2] ContractLogics.h firmware type-check -> OK
+```
 
-## @0T6 - All Logics set to Leia (03)
+Firmware (PlatformIO): `wlogicengine32` (ESP32) and `wlogicengine32s3` (ESP32-S3). See
+[README_UPSTREAM.md](README_UPSTREAM.md) for the real build and flashing instructions — they are
+unchanged.
 
-## @0T11 - All Logics set to March (04)
+---
 
-## @1MHello - Set top front logics text to "Hello" and scroll left
+## Credits
 
-## @2MWorld - Set bottom front logics text to "World" and scroll left
+The firmware, and the great majority of the code here:
 
-## @3MAstromech - Set rear logics text to "Astromech" and scroll left
+- **Joymonkey (Paul Murphy)** — original Logic Engine and WLogicEngine32.
+- **Rimim (Mimir Reynisson)** — WLogicEngine32 updates and maintenance, and the Reeltwo library.
+- **IOIIOOO, Curiousmarc, Mowee, Flthymcnasty**, and others — named in upstream's own README as the
+  source of portions of the code and inspiration.
+- The **astromech.net** community and the RSeries Logic Engine parts runs.
+- **FastLED** and **Adafruit** (Phil "Paint Your Dragon" Burgess and contributors) for the LED
+  libraries vendored here.
 
-## @1P60 - Set front logics font to Latin
-
-## @2P60 - Set front logics font to Latin
-
-## @3P60 - Set rear logics font to Latin
-
-## @1P61 - Set front logics font to Aurabesh
-
-## @2P61 - Set front logics font to Aurabesh
-
-## @3P61 - Set rear logics font to Aurabesh
-
-# WLogicEngine32 specific Marcduino commands
-
-Additional you can select a sequence to run by sending:
-
-~RTLE followed by a integer in this format LEECSNN
-
-## L - the logic designator - if not provided, defaults to 0 (all)
-   0 - All  
-   1 - Front  
-   2 - Rear  
-
-## EE - the effect - use two digits if logic designator provided
-   00 - Reset to Normal  
-   01 - Alarm - flips between color and red  
-   02 - Failure - cycles colors and brightness fading  
-   03 - Leia - pale green  
-   04 - March - sequence timed to Imperial March  
-   05 - Single Color - single hue shown  
-   06 - Flashing Color - single hue on and off  
-   07 - Flip Flop Color - boards flip back and forth - similar to march  
-   08 - Flip Flop Alt - other direction of flips on back board, front is same to flip flop  
-   09 - Color Swap - switches between color specified and inverse compliment color  
-   10 - Rainbow - rotates through colors over time  
-   11 - Red Alert - shows color specified  
-   12 - Mic Bright - brightness of color specified back on mic input  
-   13 - Mic Rainbow - color goes from default specified through color range  
-   14 - Ligts out - slowly turn off all LEDs  
-   15 - Display Text  
-   16 - Text Scrolling Left  
-   17 - Text Scrolling Right  
-   18 - Text Scrolling Up  
-   19 - Roaming pixel  
-   21 - Vertial scan line  
-   22 - Fire  
-   23 - PSI style color wipe between two colors  
-   99 - Random  
-## C - color designator
-   1 - Red  
-   2 - Orange  
-   3 - Yellow  
-   4 - Green  
-   5 - Cyan (Aqua)  
-   6 - Blue  
-   7 - Purple  
-   8 - Magenta  
-   9 - Pink  
-   0 - Default color on alarm / default to red on many effects / color cycle on march / ignored on failure and rainbow  
-## S - speed or sensitivity (1-9 scale) with 5 generally considered default for speed
-   Flip Flop and Rainbow - 200ms x speed  
-   Flash - 250ms x speed  
-   March - 150ms x speed  
-   Color Swap - 350ms x speed  
-   Red Alert - sets mic sensitivity - as a fraction of speed / 10 - we recommend 3  
-   Mic Bright - sets minimum brightness - fraction of speed / 10  
-## NN - 2 digit time length in seconds
-   00 for continuous use on most  
-   00 for default length on Leia  
-   Not used on March or Failure  
-
- ## Some sequence examples:
- Note: Leading 0s drop off as these are long ints  
- Solid Red:  ~RTLE51000  
- Solid Orange: ~RTLE52000  
- Solid Yellow:  ~RTLE53000  
- Solid Green:  ~RTLE54000  
- Solid Cyan:  ~RTLE55000  
- Solid Blue:  ~RTLE56000  
- Solid Purple:  ~RTLE57000  
- Solid Magenta:  ~RTLE58000  
- Solid Pink: ~RTLE59000  
- Alarm (default):  ~RTLE10500  
- Failure: ~RTLE20000  
- Leia: ~RTLE30000  
- March:  ~RTLE40500  
- March (Red Only):  ~RTLE41500  
- Flash (Yellow): ~RTLE63500  
- Color Swap (pink): ~RTLE99500  
- Rainbow: ~RTLE100500  
- Red Alert: ~RTLE111300  
- Mic Bright (Green): ~RTLE124200  
- Mic Rainbow (Cyan): ~RTLE135000  
-
- ~RTLE54008 - solid green for 8 seconds  
- ~RTLE63315 - flashing yellow at slightly higher speed for 15 seconds  
- ~RTLE30008 - leia effect for only 8 seconds  
-
-**********
-
-# SOME OTHER USEFUL LINKS
-
-JawaLite Command Information: https://github.com/joymonkey/logicengine/wiki/JawaLite-Commands
-
-The Logic of Logic Displays:  https://github.com/joymonkey/logicengine/wiki/The-Logic-of-Logic-Displays
-
-Developer Notes: https://github.com/joymonkey/logicengine/wiki/Developer-Notes
-
-Calculate HSV Color Values:  http://rseries.net/logic2/hsv/
-
-Explanation of how "Tween" colors are implemented: http://rseries.net/logic2/color/?keys=4&tweens=4
-
-## Libraries Used
-
-<ul>
-<li>https://github.com/reeltwo/Reeltwo</li>
-<li>https://github.com/FastLED/FastLED</li>
-</ul>
+The contract layer: **Travis Cook**, 2026.
 
+---
+
+## Licence
+
+**This fork is LGPL-2.1, because upstream is.** WLogicEngine32 is licensed LGPL-2.1, the root
+[LICENSE](LICENSE) file is upstream's own (byte-identical, untouched), and LGPL-2.1 is copyleft. The
+contract layer is distributed as part of that work, so it carries **LGPL-2.1-only** headers
+(`src/contract/*`, `test/host/*`). There is no "or later" grant anywhere upstream, so none is
+claimed here.
+
+The header in `src/contract/contract_core.h` is shared verbatim with the other two DroidNet board
+forks and mentions a `LICENSE-DroidNet-Contract` file; that file lives in those (MIT-licensed) forks.
+In *this* repository the file is LGPL-2.1-only, per the root LICENSE. Travis Cook holds the copyright
+in the files he added and grants both, which is his to do.
+
+**Modified upstream files.** LGPL-2.1 §2(b) requires modified files to say so. Two vendored Reeltwo
+files were changed in place during the earlier C2B5 customization work:
+
+- `lib/Reeltwo/src/wifi/WifiAccess.h`
+- `lib/Reeltwo/src/wifi/WifiWebServer.h`
+
+Both now carry a "MODIFIED FROM UPSTREAM" notice at the top stating what changed and when. No other
+file under `lib/` has been touched by this fork.
+
+**Other licences in the tree.** This repository also vendors:
+
+- `lib/Reeltwo` — LGPL-2.1 (Rimim).
+- `lib/FastLED` — MIT.
+- `lib/Adafruit_NeoPixel` — LGPL-3.0. It is required, not vestigial: `LEDPixelEngine.h` includes it
+  on the `USE_LEDLIB == 0` path alongside FastLED, and it is not in `platformio.ini`'s `lib_deps`,
+  so the vendored copy is what satisfies the include.
+
+This LGPL-2.1 / LGPL-3.0 mix is upstream's pre-existing structure. This fork did not introduce it and
+has not tried to resolve it; it is stated here as fact so that anyone redistributing knows what is in
+the box.
