@@ -379,8 +379,13 @@ inline void applyContractToUnit(uint8_t u, const ParsedContract& p) {
       break;
     case CV_MODE:
       if (pr.mode == 's')      { gShowMode = true;  g.armed = false; g.pulseActive = false;
-                                 _resetAccentEdge(g);   // a new show starts here (M:v=show is the
-                                                        // first line of Studio's load burst)
+                                 // A new show starts HERE: M:v=show is the first line of
+                                 // Studio's load burst and its Resend re-sends that burst with
+                                 // no intervening X, so entering show mode must mean "forget the
+                                 // last show" — otherwise show B's sections MERGE into show A's
+                                 // (and are dropped outright once the table hits cap).
+                                 scoreClear(gScoreLen[u], g.curSection);
+                                 _resetAccentEdge(g);   // ...and no beat edge survives the boundary
                                  _select(u, NATIVE_LIGHTSOUT); }
       else if (pr.mode == 'i') { gShowMode = false; g.armed = false;
                                  scoreClear(gScoreLen[u], g.curSection);

@@ -392,8 +392,94 @@ int main() {
              onEarly, onLate);
   }
 
+  // =====================================================================================
+  // GUARD 3 — a RE-SENT show REPLACES the previous one; it must not ACCUMULATE into it.
+  // Studio's Deliver "Resend" re-pushes the load burst with NO intervening stop, and that
+  // burst is `!**M:v=show` FIRST and the scored A entries after it (web/studio/src/dome/
+  // blueprint-emit.js: `const load = ['!**M:v=show']`, then `load.push(...)` per section).
+  // So if v=show does not clear the score, show B is inserted INTO show A. Two distinct
+  // failure modes, one leg each — (a) the tables MERGE and the board plays A's sections in
+  // between B's; (b) once the table is at cap, scoreInsert() silently DROPS B entirely.
+  // =====================================================================================
+
+  // (a) MERGE — both shows fit under SCORE_MAX, so nothing is dropped and the interleave
+  //     is the only thing on trial. A: RED@0, PURPLE@200. B: GREEN@100, BLUE@300.
+  //     Merged, beat 250 lands on A's PURPLE@200; cleanly, it lands on B's GREEN@100.
+  resetAll();
+  _mock_millis = 700000;
+  {
+    uint32_t t0 = _mock_millis;                        // 120 BPM => 500 ms/beat
+    send("**C:bpm=120,ph=0,bpb=4,beat=0");
+    send("**M:v=show");
+    send("LFA:i=solid,c=FF0000,at=0");
+    send("LFA:i=solid,c=800080,at=200");
+    CHECK(gScoreLen[0] == 2);                          // non-vacuous: show A really did load…
+    _mock_millis = t0 + 210 * 500 + 10;
+    contractTick();
+    CHECK(gContract[0].curSection == 1);               // …and is genuinely PLAYING its 2nd
+    CHECK(gContract[0].color.r == 0x80 && gContract[0].color.g == 0x00
+          && gContract[0].color.b == 0x80);            //    section (purple) at beat 210
+
+    send("**M:v=show");                                // ---- the Resend. No stop. ----
+    if (gScoreLen[0] != 0)
+      printf("FAIL: M:v=show did not CLEAR the score (%d entries survived). Studio's Resend "
+             "sends v=show and then the new sections, so show B is now merging into show A.\n",
+             gScoreLen[0]);
+    CHECK(gScoreLen[0] == 0);
+    send("LFA:i=solid,c=00FF00,at=100");
+    send("LFA:i=solid,c=0000FF,at=300");
+    CHECK(gScoreLen[0] == 2);                          // exactly show B's two sections…
+    CHECK(gScoreLen[0] == 2 && gScore[0][0].atBeat == 100 && gScore[0][0].color.g == 0xFF);
+    CHECK(gScoreLen[0] == 2 && gScore[0][1].atBeat == 300 && gScore[0][1].color.b == 0xFF);
+    //                                                 // …so not ONE of show A's survived
+
+    _mock_millis = t0 + 250 * 500 + 10;                // beat 250
+    contractTick();
+    CHECK(gContract[0].curSection == 0);               // B's GREEN@100 is the active section
+    CHECK(gContract[0].color.g == 0xFF && gContract[0].color.r == 0x00
+          && gContract[0].color.b == 0x00);
+    if (gContract[0].color.g != 0xFF)
+      printf("FAIL: at beat 250 the re-sent show rendered r=%u g=%u b=%u — it is playing a "
+             "section from the PREVIOUS show (purple 800080 @200), which outlived the resend "
+             "and now sits between show B's sections.\n",
+             gContract[0].color.r, gContract[0].color.g, gContract[0].color.b);
+  }
+
+  // (b) CAP DROP — fill show A to SCORE_MAX, then resend. scoreInsert() returns unchanged
+  //     at cap, so with the score uncleared show B is discarded OUTRIGHT and the board
+  //     replays show A forever. B's sections sit BELOW A's beats so a merge could not hide
+  //     the drop behind a coincidentally-equal atBeat (scoreInsert replaces on exact match).
+  resetAll();
+  _mock_millis = 800000;
+  {
+    uint32_t t0 = _mock_millis;
+    send("**C:bpm=120,ph=0,bpb=4,beat=0");
+    send("**M:v=show");
+    for (int i = 0; i < SCORE_MAX; i++) {
+      char c[48]; snprintf(c, sizeof(c), "LFA:i=solid,c=FF0000,at=%d", i * 10);
+      send(c);
+    }
+    CHECK(gScoreLen[0] == SCORE_MAX);                  // non-vacuous: the table really IS full
+
+    send("**M:v=show");                                // ---- the Resend. No stop. ----
+    send("LFA:i=solid,c=00FF00,at=5");
+    send("LFA:i=solid,c=0000FF,at=15");
+    if (gScoreLen[0] != 2)
+      printf("FAIL: after a resend onto a FULL score the table holds %d entries, not show B's "
+             "2 — scoreInsert() silently dropped show B at the %d-entry cap.\n",
+             gScoreLen[0], SCORE_MAX);
+    CHECK(gScoreLen[0] == 2);
+
+    _mock_millis = t0 + 6 * 500 + 10;                  // beat 6 => show B's GREEN@5
+    contractTick();
+    CHECK(gContract[0].color.g == 0xFF && gContract[0].color.r == 0x00);
+    if (gContract[0].color.r == 0xFF)
+      printf("FAIL: the re-sent show is playing show A's RED section — every one of show B's "
+             "sections was dropped at the cap, so the board replays the FIRST show forever.\n");
+  }
+
   if (gFails) { printf("%d CHECK(s) FAILED\n", gFails); return 1; }
   printf("ContractLogics.h type-check + score-native / score-accent / strobe-cap / "
-         "flash-pump guards OK\n");
+         "flash-pump / show-resend guards OK\n");
   return 0;
 }

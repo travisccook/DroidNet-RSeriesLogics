@@ -87,3 +87,9 @@ is the DroidNet layer (`git log --oneline 6bba8b1..HEAD`).
   silently and then processes the truncated line, and a truncated contract line still parses — so
   the board would quietly play a *different* show. The longest line Studio can emit is 90 chars;
   `test/host/run.sh` recomputes that and fails if the buffer cannot hold it.
+- **The Phase-2 score is cleared at *every* show boundary — `X`, `M:v=idle`, and `M:v=show`.**
+  `v=show` is the one that is easy to miss, and it is the one the product actually hits: Studio's
+  Deliver **Resend** re-pushes the load burst (`!**M:v=show` first, then the scored `A` entries)
+  with no intervening stop. Clear it there and a resend *replaces* the show; forget to, and show B
+  is inserted **into** show A — the board plays A's sections in between B's, and once the table is
+  at `SCORE_MAX` `scoreInsert()` silently drops B outright and the board replays A forever.
