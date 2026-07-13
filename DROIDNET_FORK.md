@@ -20,7 +20,7 @@ accents, a host-seeded beat clock, and autonomous board-side section playback â€
 - **Role:** the RSeries board is the easiest of the three DroidNet board forks (PSI and Flthy HP
   are the other two), and is intended to be the first one proven on hardware.
 - **MCU/toolchain:** ESP32 (`wlogicengine32`) / ESP32-S3 (`wlogicengine32s3`), PlatformIO.
-- **GitHub remote:** TBD (set on publication).
+- **GitHub remote:** <https://github.com/travisccook/DroidNet-RSeriesLogics> (public).
 
 ## Status
 
@@ -36,8 +36,8 @@ Verified host-side only, via `bash test/host/run.sh`:
 Not done: a PlatformIO build for the ESP32, a bench flash, or any test with LEDs attached. Do not
 put this on a droid until that has happened.
 
-Fork head: `0584535` (see `git log --oneline b47a5f9..HEAD` for the layer's history; `b47a5f9` is
-the baseline import).
+Fork head: `main` in this repository. The baseline import is commit `6bba8b1`; every commit after it
+is the DroidNet layer (`git log --oneline 6bba8b1..HEAD`).
 
 ### What is in
 
