@@ -131,7 +131,7 @@ static inline uint8_t _beatBright(const ContractUnit& g, const BeatPos& bp) {
 static inline void _fireAccent(uint8_t u, ContractEffect fx, const ContractRGB& c, uint32_t durMs) {
   ContractUnit& g = gContract[u];
   uint32_t now = millis();
-  if (g.pulseLastMs != 0 && (uint32_t)(now - g.pulseLastMs) < 2 * STROBE_MIN_STATE_MS) return;
+  if (!strobeCoolDownExpired(g.pulseLastMs, now, 2 * STROBE_MIN_STATE_MS)) return;
   if (durMs < STROBE_MIN_STATE_MS) durMs = STROBE_MIN_STATE_MS;
   g.pulseFx     = fx;
   g.pulseColor  = c;
