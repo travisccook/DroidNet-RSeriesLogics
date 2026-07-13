@@ -71,14 +71,16 @@ static inline void _reset(uint8_t u)            { if (u == 0) { if (FLD) FLD->re
 static inline void _bright(uint8_t u, byte b)   { if (u == 0) { if (FLD) FLD->setBrightness(b); } else { if (RLD) RLD->setBrightness(b); } }
 
 // beat-modulated brightness for sustained looks (solid/rainbow/scan/sparkle/meter).
+// Level math lives in contract_core's envBright() — the SHARED envelope all three
+// boards render through (b= is the ceiling, m= is the dip depth). Do not reintroduce
+// a board-local floor here: it desyncs the Logics from the PSIs/HPs on every cue.
 static inline uint8_t _beatBright(const ContractUnit& g, const BeatPos& bp) {
   if (g.accentMode == 0 || g.beatMod == 0 || !gBeat.running) return g.bright;
   float prog = 0.0f;
   if (g.sectionEnd > g.sectionStart)
     prog = (float)(bp.beatIndex - g.sectionStart) / (float)(g.sectionEnd - g.sectionStart);
   uint8_t amt = beatAccentAmount(g.accentMode, bp, g.beatMod, prog);
-  float f = 0.4f + 0.6f * ((float)amt / 255.0f);          // pump: 40% floor -> full on the beat
-  return (uint8_t)((float)g.bright * f);
+  return envBright(g.bright, g.beatMod, amt);
 }
 
 // ---- the single fork effect fn: renders unit u's contract state each frame ----
