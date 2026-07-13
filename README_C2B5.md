@@ -28,7 +28,7 @@ The C2B5 version of RSeriesLogic includes custom features and optimizations tail
 - Real-time network management with add/remove/prioritize functions
 - WiFi status display showing connection details and saved networks
 - Proper handling of SSIDs containing spaces and special characters
-- **Automatic URL decoding of SSIDs** - Fixes issues where network names with spaces were stored as URL-encoded (e.g., "Imperial%20Archives" → "Imperial Archives")
+- **Automatic URL decoding of SSIDs** - Fixes issues where network names with spaces were stored as URL-encoded (e.g., "My%20Home%20Network" → "My Home Network")
 
 ## Configuration
 
