@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+# Part of the DroidNet Driveable-Animation Contract test harness, added to a fork of
+# reeltwo/WLogicEngine32 (Joymonkey, Rimim). Copyright (c) 2026 Travis Cook.
+# Distributed as part of that LGPL-2.1 work; see the LICENSE file at the repository root.
+# SPDX-License-Identifier: LGPL-2.1-only
+#
 # Host checks for the RSeries contract fork (no hardware / no ESP32 toolchain needed):
 #   1. contract_core.h parser unit tests
 #   2. ContractLogics.h firmware-layer type-check against a mock of the engine API

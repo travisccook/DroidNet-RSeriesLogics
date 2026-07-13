@@ -1,3 +1,10 @@
+// Part of the DroidNet Driveable-Animation Contract test harness, added to a fork of
+// reeltwo/WLogicEngine32 (Joymonkey, Rimim). Copyright (c) 2026 Travis Cook.
+// Distributed as part of that LGPL-2.1 work; you may redistribute and/or modify it
+// under the terms of the GNU Lesser General Public License, version 2.1. No warranty;
+// see the LICENSE file at the repository root.
+// SPDX-License-Identifier: LGPL-2.1-only
+//
 // Host check of the firmware layer ContractLogics.h against mock_engine.h.
 // Mostly a TYPE-CHECK (proves the firmware C++ compiles with the verified engine API
 // signatures — catches typos / wrong arity / type errors before the bench), plus a
