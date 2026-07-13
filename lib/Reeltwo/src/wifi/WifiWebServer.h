@@ -1,3 +1,26 @@
+/* ==========================================================================
+ * MODIFIED FROM UPSTREAM.
+ *
+ * Original: reeltwo/Reeltwo, src/wifi/WifiWebServer.h, by Mimir Reynisson (Rimim).
+ *           https://github.com/reeltwo/Reeltwo  — LGPL-2.1.
+ *
+ * This copy is NOT the upstream file. It was changed for the C2B5 droid build
+ * (2024-2025, prior to this fork; first published here in 2026). The changes are
+ * small and confined to the JavaScript this class emits into the generated web UI:
+ *
+ *   - removed the stray "{Connection: close};" fragment that upstream appends to
+ *     the generated handler functions (WSlider, WCheckbox, WButton, WTextField,
+ *     WNumberField, WSelect, WPassword, WLabel) and to the closing <script> block;
+ *   - fixed the over-quoting of the WButton href form, which emitted
+ *     window.location.href='"page?id=true&"' instead of 'page?id=true'.
+ *
+ * No behavioural change to the C++ API or the server itself.
+ *
+ * See README_C2B5.md at the repository root. Every other file under
+ * lib/Reeltwo is unmodified upstream.
+ *
+ * This notice is required by LGPL-2.1 section 2(b).
+ * ========================================================================== */
 #ifndef WifiWebServer_h
 #define WifiWebServer_h
 

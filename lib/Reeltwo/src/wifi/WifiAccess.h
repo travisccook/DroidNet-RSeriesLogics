@@ -1,3 +1,29 @@
+/* ==========================================================================
+ * MODIFIED FROM UPSTREAM.
+ *
+ * Original: reeltwo/Reeltwo, src/wifi/WifiAccess.h, by Mimir Reynisson (Rimim).
+ *           https://github.com/reeltwo/Reeltwo  — LGPL-2.1.
+ *
+ * This copy is NOT the upstream file. It was changed for the C2B5 droid build
+ * (2024-2025, prior to this fork; first published here in 2026). The changes
+ * replace upstream's single-network WifiAccess with a multi-network manager:
+ *
+ *   - saved-network list with priorities (addSavedNetwork / removeSavedNetwork /
+ *     clearSavedNetworks / getSavedNetworks), plus a WifiNetwork struct;
+ *   - network scanning (startScan / isScanComplete / getScannedNetworks /
+ *     isScanInProgress), plus a ScannedNetwork struct;
+ *   - explicit AP vs client mode handling, with a configurable AP-fallback
+ *     timeout (setAPFallback / setAPFallbackTimeout) instead of upstream's
+ *     unconditional softAP-or-join logic;
+ *   - reworked animate()/connection state machine: connect attempts walk the
+ *     saved list, use scan results for channel/BSSID, and fall back to AP mode
+ *     on timeout.
+ *
+ * See README_C2B5.md at the repository root. Every other file under
+ * lib/Reeltwo is unmodified upstream.
+ *
+ * This notice is required by LGPL-2.1 section 2(b).
+ * ========================================================================== */
 #ifndef WifiAccess_h
 #define WifiAccess_h
 
