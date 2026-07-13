@@ -106,14 +106,45 @@ a rewrite. If you never send a `!` command, this firmware behaves like the stock
 
 ## What is theirs and what is ours
 
-**Ours** (Travis Cook, 2026) — the entire fork layer:
+Three layers, in the order they were written. The middle one matters: some of what is in this tree
+is neither upstream's nor part of the contract layer, and upstream should not be credited — or
+blamed — for it.
+
+**Theirs** — the firmware itself, and the great majority of the code here:
+
+- `src/main.cpp` (1,415 lines — this is upstream's `WLogicEngine32.ino`, relocated), `WebPages.h`,
+  `MarcduinoLogics.h`, `logic-sequences.h`, `pin-config.h`, `Screens.h`, `web-images.h`,
+  `effects/`, `menus/`, `Makefile`, `platformio.ini` — Joymonkey and Rimim, with contributions from
+  IOIIOOO, Curiousmarc, Mowee, Flthymcnasty and others.
+- `lib/Reeltwo` — Rimim.
+- `lib/FastLED`, `lib/Adafruit_NeoPixel` — their respective authors.
+- `README_UPSTREAM.md` — upstream's own README, preserved here.
+
+A few of those files carry in-place edits made downstream (see the next block, and the licence
+section); the code in them is upstream's.
+
+**Earlier C2B5 droid customization** (Travis Cook, pre-dating this fork) — downstream work that came
+with the tree this fork was seeded from. It is *not* upstream's:
+
+| Path | What it is |
+| --- | --- |
+| `data/modern/` | The C2B5 web UI — `index.html` and `wifi.html`, the only tracked files under `data/`. |
+| `scripts/` | PlatformIO build hooks, the HTML-to-header compressor that embeds that UI, and a JavaScript validator. |
+| `visualizer/` | A browser LED-matrix preview tool for the FLD/RLD displays (`"author": "C2B5 Project"`). Not firmware; not upstream. |
+| `README_C2B5.md`, `docs/C2B5_CUSTOMIZATIONS.md`, `wapi_test_routes.h`, `wapi_debugging_guide.md`, root `package.json`, `.clang-tidy` | Notes, debug routes and tooling from the same work. |
+| in-place edits | `src/main.cpp` (multi-network WiFi with priorities, `RSeries.local` mDNS, SSID URL-decoding, C2B5 debug output), `WebPages.h`, `platformio.ini`, and the two `lib/Reeltwo/src/wifi/` headers named in the licence section. |
+
+None of that is upstream's, and none of it is part of the contract layer. It is described in
+[README_C2B5.md](README_C2B5.md) and [docs/C2B5_CUSTOMIZATIONS.md](docs/C2B5_CUSTOMIZATIONS.md).
+
+**Ours** (Travis Cook, 2026) — the fork layer this repository exists for:
 
 | Path | What it is | Lines |
 | --- | --- | --- |
-| `src/contract/contract_core.h` | Pure, dependency-free C++: wire parser, beat clock, effect math, score table. No Arduino, no FastLED, no Reeltwo. Byte-identical across the three DroidNet board forks. | 354 |
-| `src/contract/ContractLogics.h` | The RSeries render layer: maps the contract onto this board's LED primitives, registers as custom effect id 106. | 325 |
-| `test/host/*` | The host test harness (parser tests, engine mock, type-check). | ~480 |
-| `src/main.cpp` | **Four added lines and one bounds-check fix.** An `#include`, `ContractRender` appended to the custom-effect table, `contractSetup()` in `setup()`, `contractTick()` in `mainLoop()`. | 4 |
+| `src/contract/contract_core.h` | Pure, dependency-free C++: wire parser, beat clock, effect math, score table. No Arduino, no FastLED, no Reeltwo. Byte-identical across the three DroidNet board forks. | 362 |
+| `src/contract/ContractLogics.h` | The RSeries render layer: maps the contract onto this board's LED primitives, registers as custom effect id 106. | 337 |
+| `test/host/*` | The host test harness (parser tests, engine mock, type-check). | 506 |
+| `src/main.cpp` | **Four added lines and one bounds-check fix.** An `#include`, `ContractRender` appended to the custom-effect table, `contractSetup()` in `setup()`, `contractTick()` in `mainLoop()`. | +7 / −2 |
 | `DROIDNET_FORK.md`, this README | Fork docs. | — |
 
 The bounds-check fix in `main.cpp` is a one-character change to a pre-existing off-by-one in the
@@ -121,15 +152,11 @@ custom-effect selector (`selectSequence-100 <= SizeOfArray(...)` read one slot p
 was latent upstream because nothing ever selected the last id; adding effect 106 would have hit it.
 That is the only line of upstream code this fork changes.
 
-**Theirs** — literally everything else:
-
-- `src/main.cpp` (1,415 lines), `WebPages.h`, `MarcduinoLogics.h`, `logic-sequences.h`,
-  `pin-config.h`, `effects/`, `menus/`, `data/`, `scripts/`, `visualizer/`, `platformio.ini` —
-  Joymonkey and Rimim, with contributions from IOIIOOO, Curiousmarc, Mowee, Flthymcnasty and others.
-- `lib/Reeltwo` — Rimim.
-- `lib/FastLED`, `lib/Adafruit_NeoPixel` — their respective authors.
-
-Run `git diff <first-commit>..HEAD --stat` if you want the exact split; it is eight files.
+Run `git diff b47a5f9..HEAD --stat` if you want the exact split (`b47a5f9` is the baseline import):
+**13 files, 1,754 insertions.** Nine of those files are code — the six new ones above, the
+seven-line edit to `src/main.cpp`, and comment-only LGPL §2(b) notices on the two vendored Reeltwo
+headers. The other four are documentation (this README, `README_UPSTREAM.md`, `DROIDNET_FORK.md`,
+`README_C2B5.md`).
 
 ---
 
