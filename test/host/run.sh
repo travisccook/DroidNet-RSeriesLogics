@@ -9,20 +9,21 @@
 #   1b. wifi_connect_core.h FSM unit tests
 #   2. ContractLogics.h firmware-layer type-check against a mock of the engine API
 #   3. Marcduino command-buffer width guard (the v1.2 accent keys push a scored line past 63)
-#   4. REAL cross-compile for the ESP32 (optional; needs PlatformIO)
+#   4. parser fuzz + differential (ASan/UBSan, deterministic)
+#   5. REAL cross-compile for the ESP32 (optional; needs PlatformIO)
 set -e
 cd "$(dirname "$0")"
-echo "[1/4] contract_core parser unit tests"
+echo "[1/5] contract_core parser unit tests"
 clang++ -std=c++17 -Wall -Wextra -O0 test_contract_core.cpp -o /tmp/rseries_contract_test
 /tmp/rseries_contract_test
-echo "[1b/4] wifi_connect_core FSM unit tests"
+echo "[1b/5] wifi_connect_core FSM unit tests"
 clang++ -std=c++17 -Wall -Wextra -O0 test_wifi_connect_core.cpp -o /tmp/rseries_wifi_test
 /tmp/rseries_wifi_test
-echo "[2/4] ContractLogics.h firmware type-check"
+echo "[2/5] ContractLogics.h firmware type-check"
 clang++ -std=c++17 -Wall -Wextra compile_contract_logics.cpp -o /tmp/rseries_fw_syntax
 /tmp/rseries_fw_syntax
 
-echo "[3/4] Marcduino command-buffer width guard"
+echo "[3/5] Marcduino command-buffer width guard"
 # lib/Reeltwo/src/core/Marcduino.h:173-175 — MarcduinoSerial::animate() reads a byte and:
 #     else if (fPos < SizeOfArray(fBuffer)-1) fBuffer[fPos++] = ch;
 # Every byte past that is DROPPED ON THE FLOOR, with no error and no flag; on the next CR it
@@ -95,7 +96,19 @@ if [ "$WIDTH" -lt "$need" ]; then
 fi
 echo "MarcduinoSerial BUFFER_SIZE=$WIDTH >= $need (worst v1.2 scored line ${#worst} chars) OK"
 
-echo "[4/4] REAL cross-compile (ESP32 (wlogicengine32)) -- optional"
+echo "[4/5] parser fuzz + differential (ASan/UBSan, deterministic)"
+# The parsers are the one place this project eats bytes off a shared, noisy serial bus, and to
+# save 1,008 B of flash on the PSI they were hand-rolled instead of using strtol/strtoul. This
+# stage is the differential that keeps them honest: ~1.55M checks against an INDEPENDENT model
+# and a true 32-BIT strtol/strtoul oracle (the host's own is 64-bit and would disagree on
+# overflow -- which is the whole trap), plus hostile/whole-byte-range lines through
+# contractParse() under AddressSanitizer + UndefinedBehaviorSanitizer.
+# Fixed seed: deterministic and reproducible, not a slot machine.
+clang++ -std=c++17 -O1 -fsanitize=address,undefined -fno-sanitize-recover=all \
+        fuzz_parsers.cpp -o /tmp/rserieslogics_fuzz
+/tmp/rserieslogics_fuzz
+
+echo "[5/5] REAL cross-compile (ESP32 (wlogicengine32)) -- optional"
 # THIS is the stage that makes "it compiles" a claim about the FIRMWARE rather than a claim
 # about our mock. Stages 1-3 are host checks: they prove the contract logic and they pin the
 # board API against a HAND-WRITTEN MOCK -- and a mock is only ever as honest as its author.
@@ -125,11 +138,9 @@ echo "using $PIO"
 echo "cross-compiles for the real MCU (ESP32 (wlogicengine32)) OK"
 echo "    (a successful LINK is not a bench test: this firmware has never been flashed.)"
 echo
-echo "    NOTE: only the wlogicengine32 (plain ESP32) env is built. The wlogicengine32s3"
-echo "    env cannot be built here at all: upstream pins platform-espressif32 v5.2.0, which"
-echo "    wants espressif/toolchain-riscv32-esp @ 8.4.0+2021r2-patch3, and that package is"
-echo "    no longer resolvable from the registry. That failure happens in PlatformIO's tool"
-echo "    manager BEFORE a single source file is read, so it is an upstream packaging issue,"
-echo "    not a fault in this fork's code. Left alone deliberately: re-pinning the platform"
-echo "    would change the toolchain for the ESP32 env too, and we are not in a position to"
-echo "    re-validate that on hardware."
+echo "    NOTE: this stage builds the wlogicengine32 (plain ESP32) env only. The wlogicengine32s3"
+echo "    (ESP32-S3) env DOES build now -- run: pio run -e wlogicengine32s3 -- but it is left out of"
+echo "    the suite deliberately. It is a fork-local hand-translation of upstream\'s make TARGET=ESP32S3"
+echo "    (upstream has no S3 PlatformIO env), and it carries hardware-config guesses a green build"
+echo "    cannot check: USB-CDC-on-boot is not set, so Serial would land on UART0 and the board would"
+echo "    likely look silent. It compiles. That is ALL it does. See the README."

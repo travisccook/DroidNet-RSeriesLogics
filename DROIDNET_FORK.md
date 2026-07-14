@@ -28,7 +28,7 @@ accents, a host-seeded beat clock, and autonomous board-side section playback â€
 
 Verified host-side only, via `bash test/host/run.sh`:
 
-- 154/154 parser, beat-clock and effect-math checks (`test/host/test_contract_core.cpp`).
+- 341/341 parser, beat-clock and effect-math checks (`test/host/test_contract_core.cpp`).
 - Type-check of the firmware render layer against a mock of the engine API
   (`test/host/compile_contract_logics.cpp` + `mock_engine.h`), plus a behavioural guard that a
   scored `native:<code>` section threads its native code through to the `ScoreEntry`.
