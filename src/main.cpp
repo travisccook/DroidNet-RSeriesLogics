@@ -1335,19 +1335,9 @@ void loop()
                 Serial.println("[C2B5_DEBUG] Not connected!");
                 Serial.print("[C2B5_DEBUG] Saved networks: ");
                 Serial.println(wifiAccess.getSavedNetworks().size());
-                
-                // Quick scan to see what networks are visible
-                Serial.println("[C2B5_DEBUG] Performing quick scan...");
-                int n = WiFi.scanNetworks(false, false, false, 100); // Quick scan, 100ms per channel
-                Serial.print("[C2B5_DEBUG] Networks found: ");
-                Serial.println(n);
-                for (int i = 0; i < n && i < 5; i++) {
-                    Serial.print("[C2B5_DEBUG]   ");
-                    Serial.print(WiFi.SSID(i));
-                    Serial.print(" (");
-                    Serial.print(WiFi.RSSI(i));
-                    Serial.println(" dBm)");
-                }
+                // NOTE: the old blocking WiFi.scanNetworks(false,...) here was removed — it froze
+                // the render task once rendering moved to core 1, and duplicated the FSM's async
+                // rejoin scan. Visibility of nearby networks is available via the async scan path.
             }
             
             Serial.print("[C2B5_DEBUG] Free heap: ");
