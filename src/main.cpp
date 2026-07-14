@@ -886,57 +886,38 @@ void setup()
     else if (wifiEnabled)
     {
     #ifdef USE_WIFI_WEB
-        // Check if we should start in AP mode
-        bool startInAPMode = preferences.getBool(PREFERENCE_WIFI_AP, WIFI_ACCESS_POINT);
-        
-        // Check if we're forcing STA mode (from Connect button)
+        // Auto connect-else-AP: attempt saved networks whenever we have them, and only host our
+        // own AP when there are none — UNLESS the user explicitly pinned AP-only. The old model
+        // required pressing "Connect" (wifi_force_sta) to join; the FSM now decides.
         bool forceSTAMode = preferences.getBool("wifi_force_sta", false);
         if (forceSTAMode) {
-            startInAPMode = false;
-            preferences.remove("wifi_force_sta");  // Clear the flag
+            preferences.remove("wifi_force_sta"); // one-shot flag, clear it
             DEBUG_PRINTLN("Forcing STA mode due to Connect button");
         }
-        
-        // Load saved WiFi networks
+
+        // Load saved WiFi networks from NVS
         loadWifiNetworks(wifiAccess);
-        
-        
-        
-        // If no saved networks and AP mode not explicitly set, default to AP mode
-        // Check if PREFERENCE_WIFI_AP has been explicitly set by checking if it's different from a sentinel value
-        bool apModeExplicitlySet = preferences.isKey(PREFERENCE_WIFI_AP);
-        if (wifiAccess.getSavedNetworks().empty() && !apModeExplicitlySet && !forceSTAMode)
-        {
-            startInAPMode = true;
-            DEBUG_PRINTLN("No saved networks found - defaulting to AP mode");
-        }
-        
-        // Set AP fallback credentials
+
+        // The user has pinned AP-only iff they explicitly set PREFERENCE_WIFI_AP to true.
+        bool apPinnedByUser = preferences.isKey(PREFERENCE_WIFI_AP) &&
+                              preferences.getBool(PREFERENCE_WIFI_AP, WIFI_ACCESS_POINT);
+        bool haveSaved = !wifiAccess.getSavedNetworks().empty();
+        bool startInAPMode = !forceSTAMode && (apPinnedByUser || !haveSaved);
+
+        // AP fallback credentials (the lifeline) — used whenever the FSM hosts its own AP.
         wifiAccess.setAPFallback(
             preferences.getString(PREFERENCE_WIFI_SSID, WIFI_AP_NAME),
             preferences.getString(PREFERENCE_WIFI_PASS, WIFI_AP_PASSPHRASE));
-        
-        // Set WiFi connection timeout (default 60 seconds)
-        uint32_t wifiTimeout = preferences.getInt(PREFERENCE_WIFI_TIMEOUT, 60);
-        wifiAccess.setAPFallbackTimeout(wifiTimeout * 1000); // Convert seconds to milliseconds
-        DEBUG_PRINTLN("WiFi timeout set to: " + String(wifiTimeout) + " seconds");
-        
-        // Configure WiFi mode
-        if (startInAPMode)
-        {
-            DEBUG_PRINTLN("Starting WiFi in AP mode");
-            wifiAccess.setNetworkCredentials(
-                preferences.getString(PREFERENCE_WIFI_SSID, WIFI_AP_NAME),
-                preferences.getString(PREFERENCE_WIFI_PASS, WIFI_AP_PASSPHRASE),
-                true,  // accessPoint = true to force AP mode
-                true   // enabled = true
-            );
-        }
-        else
-        {
-            DEBUG_PRINTLN("Starting WiFi in client mode");
-            wifiAccess.setEnabled(true);
-        }
+
+        // Connect policy. bootBudget comes from the existing PREFERENCE_WIFI_TIMEOUT (default
+        // lowered from 60s to 30s per the design — lights render fine throughout, so this only
+        // bounds time-to-reachability; auto-rejoin means AP fallback is never permanent).
+        uint32_t wifiTimeout = preferences.getInt(PREFERENCE_WIFI_TIMEOUT, 30);
+        wifiAccess.setAPFallbackTimeout(wifiTimeout * 1000);
+        wifiAccess.setForceAPMode(startInAPMode);
+        wifiAccess.setEnabled(true);
+        DEBUG_PRINTLN(startInAPMode ? "WiFi: hosting AP (no saved networks or AP pinned)"
+                                    : "WiFi: attempting saved networks (auto connect-else-AP)");
     #ifdef USE_WIFI_MARCDUINO
         wifiMarcduinoReceiver.setEnabled(preferences.getBool(PREFERENCE_MARCWIFI_ENABLED, MARC_WIFI_ENABLED));
         if (wifiMarcduinoReceiver.enabled())
