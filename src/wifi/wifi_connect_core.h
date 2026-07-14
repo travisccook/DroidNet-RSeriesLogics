@@ -4,8 +4,8 @@
 // "now" is passed in as a parameter and never read here — the same dependency-injection seam
 // contract_core.h uses — so every transition is deterministically unit-testable off-hardware.
 //
-// Part of the DroidNet RSeries fork. Copyright (c) 2026 Travis Cook. LGPL-2.1-only when
-// distributed as part of this LGPL-2.1 fork.
+// Part of the DroidNet RSeries fork. Copyright (c) 2026 Travis Cook.
+// SPDX-License-Identifier: LGPL-2.1-only
 #pragma once
 #include <stdint.h>
 #include <stddef.h>

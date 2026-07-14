@@ -147,8 +147,7 @@ a rewrite. If you never send a `!` command, this firmware behaves like the stock
 ## What is theirs and what is ours
 
 Three layers, in the order they were written. The middle one matters: some of what is in this tree
-is neither upstream's nor part of the contract layer, and upstream should not be credited — or
-blamed — for it.
+is neither upstream's nor part of the contract layer.
 
 **Theirs** — the firmware itself, and the great majority of the code here:
 
@@ -160,8 +159,8 @@ blamed — for it.
 - `lib/FastLED`, `lib/Adafruit_NeoPixel` — their respective authors.
 - `README_UPSTREAM.md` — upstream's own README, preserved here.
 
-A few of those files carry in-place edits made downstream (see the next block, and the licence
-section); the code in them is upstream's.
+A few of those files carry in-place edits made downstream (see the next block); the code in them is
+upstream's.
 
 **Earlier C2B5 droid customization** (Travis Cook, pre-dating this fork) — downstream work that came
 with the tree this fork was seeded from. It is *not* upstream's:
@@ -172,7 +171,7 @@ with the tree this fork was seeded from. It is *not* upstream's:
 | `scripts/` | PlatformIO build hooks, the HTML-to-header compressor that embeds that UI, and a JavaScript validator. |
 | `visualizer/` | A browser LED-matrix preview tool for the FLD/RLD displays (`"author": "C2B5 Project"`). Not firmware; not upstream. |
 | `README_C2B5.md`, `docs/C2B5_CUSTOMIZATIONS.md`, `wapi_test_routes.h`, `wapi_debugging_guide.md`, root `package.json`, `.clang-tidy` | Notes, debug routes and tooling from the same work. |
-| in-place edits | `src/main.cpp` (multi-network WiFi with priorities, `RSeries.local` mDNS, SSID URL-decoding, C2B5 debug output), `WebPages.h`, `platformio.ini`, and the two `lib/Reeltwo/src/wifi/` headers named in the licence section. |
+| in-place edits | `src/main.cpp` (multi-network WiFi with priorities, `RSeries.local` mDNS, SSID URL-decoding, C2B5 debug output), `WebPages.h`, `platformio.ini`, and the two `lib/Reeltwo/src/wifi/` headers (`WifiAccess.h`, `WifiWebServer.h`), which carry an LGPL-2.1 §2(b) modified-file notice at the top. |
 
 None of that is upstream's, and none of it is part of the contract layer. It is described in
 [README_C2B5.md](README_C2B5.md) and [docs/C2B5_CUSTOMIZATIONS.md](docs/C2B5_CUSTOMIZATIONS.md).
@@ -210,9 +209,8 @@ headers. The other four are documentation (this README, `README_UPSTREAM.md`, `D
    `RSeries.local` mDNS hostname, SSID URL-decoding, and a modern web UI. Those changes are
    documented in **[README_C2B5.md](README_C2B5.md)** and
    **[docs/C2B5_CUSTOMIZATIONS.md](docs/C2B5_CUSTOMIZATIONS.md)**, and they are the reason two files
-   under `lib/Reeltwo` carry a "modified from upstream" notice (see the licence section). That
-   collection is private and stays private; it is not a repository you can visit, and nothing here
-   depends on it.
+   under `lib/Reeltwo` carry a "modified from upstream" notice. That collection is private and stays
+   private; it is not a repository you can visit, and nothing here depends on it.
 3. **This repository:** that tree, plus the DroidNet contract layer. This is the first public
    distribution of any of it.
 
@@ -263,34 +261,7 @@ The contract layer: **Travis Cook**, 2026.
 
 ## Licence
 
-**This fork is LGPL-2.1, because upstream is.** WLogicEngine32 is licensed LGPL-2.1, the root
-[LICENSE](LICENSE) file is upstream's own (byte-identical, untouched), and LGPL-2.1 is copyleft. The
-contract layer is distributed as part of that work, so it carries **LGPL-2.1-only** headers
-(`src/contract/*`, `test/host/*`). There is no "or later" grant anywhere upstream, so none is
-claimed here.
-
-The header in `src/contract/contract_core.h` is shared verbatim with the other two DroidNet board
-forks and mentions a `LICENSE-DroidNet-Contract` file; that file lives in those (MIT-licensed) forks.
-In *this* repository the file is LGPL-2.1-only, per the root LICENSE. Travis Cook holds the copyright
-in the files he added and grants both, which is his to do.
-
-**Modified upstream files.** LGPL-2.1 §2(b) requires modified files to say so. Two vendored Reeltwo
-files were changed in place during the earlier C2B5 customization work:
-
-- `lib/Reeltwo/src/wifi/WifiAccess.h`
-- `lib/Reeltwo/src/wifi/WifiWebServer.h`
-
-Both now carry a "MODIFIED FROM UPSTREAM" notice at the top stating what changed and when. No other
-file under `lib/` has been touched by this fork.
-
-**Other licences in the tree.** This repository also vendors:
-
-- `lib/Reeltwo` — LGPL-2.1 (Rimim).
-- `lib/FastLED` — MIT.
-- `lib/Adafruit_NeoPixel` — LGPL-3.0. It is required, not vestigial: `LEDPixelEngine.h` includes it
-  on the `USE_LEDLIB == 0` path alongside FastLED, and it is not in `platformio.ini`'s `lib_deps`,
-  so the vendored copy is what satisfies the include.
-
-This LGPL-2.1 / LGPL-3.0 mix is upstream's pre-existing structure. This fork did not introduce it and
-has not tried to resolve it; it is stated here as fact so that anyone redistributing knows what is in
-the box.
+**LGPL-2.1.** The upstream firmware and the vendored `lib/Reeltwo` are LGPL-2.1 (Joymonkey, Rimim);
+the root [LICENSE](LICENSE) file is upstream's own, byte-identical. The DroidNet contract layer
+(`src/contract/*`, `test/host/*`) is Copyright (c) 2026 Travis Cook, LGPL-2.1-only as distributed
+here. Also vendored: `lib/FastLED` (MIT) and `lib/Adafruit_NeoPixel` (LGPL-3.0).

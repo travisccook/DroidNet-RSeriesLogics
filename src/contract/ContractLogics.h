@@ -1,13 +1,5 @@
 // Part of the DroidNet Driveable-Animation Contract — an additive layer added to a
 // fork of reeltwo/WLogicEngine32 (Joymonkey, Rimim). Copyright (c) 2026 Travis Cook.
-//
-// This file is distributed as part of that LGPL-2.1 work. It is free software; you
-// may redistribute it and/or modify it under the terms of the GNU Lesser General
-// Public License, version 2.1, as published by the Free Software Foundation. It is
-// distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without
-// even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
-// See the LICENSE file at the repository root for the full text.
-//
 // SPDX-License-Identifier: LGPL-2.1-only
 //
 // src/contract/ContractLogics.h — RSeries Logic firmware layer for the

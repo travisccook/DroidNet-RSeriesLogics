@@ -1,8 +1,5 @@
 // Part of the DroidNet Driveable-Animation Contract test harness, added to a fork of
 // reeltwo/WLogicEngine32 (Joymonkey, Rimim). Copyright (c) 2026 Travis Cook.
-// Distributed as part of that LGPL-2.1 work; you may redistribute and/or modify it
-// under the terms of the GNU Lesser General Public License, version 2.1. No warranty;
-// see the LICENSE file at the repository root.
 // SPDX-License-Identifier: LGPL-2.1-only
 //
 // Minimal host mock of the reeltwo engine API surface that ContractLogics.h uses,
