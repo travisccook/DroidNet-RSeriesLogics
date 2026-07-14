@@ -15,9 +15,13 @@
  *   - explicit AP vs client mode handling, with a configurable AP-fallback
  *     timeout (setAPFallback / setAPFallbackTimeout) instead of upstream's
  *     unconditional softAP-or-join logic;
- *   - reworked animate()/connection state machine: connect attempts walk the
- *     saved list, use scan results for channel/BSSID, and fall back to AP mode
- *     on timeout.
+ *   - reworked animate(): a non-blocking, tick-polled adapter (DroidNet fork, 2026).
+ *     Each call reads the WiFi driver (associated / hasIp / AP-client-count / background
+ *     rejoin-scan result) and delegates the connect-or-AP decision to the pure, host-tested
+ *     FSM in src/wifi/wifi_connect_core.h; animate() only executes the action the FSM
+ *     returns. Connect attempts still walk the saved list and fall back to AP mode on a
+ *     bounded budget, but every step now happens across ticks — all blocking scans and
+ *     delay()-based waits from the earlier connection state machine have been removed.
  *
  * See README_C2B5.md at the repository root. Every other file under
  * lib/Reeltwo is unmodified upstream.
@@ -204,10 +208,6 @@ public:
             {
                 const WifiNetwork& net = fSavedNetworks[d.networkIndex];
                 WiFi.begin(net.ssid.c_str(), net.password.c_str());
-            }
-            else if (!fWifiAP.isEmpty())
-            {
-                WiFi.begin(fWifiAP.c_str(), fWifiPassword.c_str());
             }
             break;
         case WCA_START_AP:

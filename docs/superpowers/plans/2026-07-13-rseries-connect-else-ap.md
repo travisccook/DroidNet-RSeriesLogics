@@ -803,3 +803,7 @@ git commit -m "chore(wifi): log reset reason at boot to rule out TX brownout"
 - [ ] **Step 6: Brownout rule-out.** Watch the serial log across several connect bursts. **Expected:** the `[C2B5_DEBUG] Reset reason:` line never reports `ESP_RST_BROWNOUT` (9). If it does, the fix is masking a power problem — escalate to the hardware/decoupling check in the design (§3.5).
 
 - [ ] **Step 7: Record results and finish the branch.** Note pass/fail per step in the PR/commit description. If all pass, proceed to merge per the finishing-a-development-branch skill.
+
+- [ ] **Step 8: Core-1 sharing under load.** With render now on core 1 alongside the Arduino `loop()` task that services `webServer.handle()`/`ArduinoOTA.handle()`, watch LED smoothness WHILE actively driving the web UI (loading/using the config page) AND during an OTA update. **Expected:** no visible stutter; if there is, web/OTA are not as near-idle as assumed and full core-0 isolation (§5.3) should be prioritized sooner.
+
+- [ ] **Step 9: AP/STA flap check on an unreachable-but-visible saved SSID.** Arrange a saved SSID that is visible but not associable (wrong password, or the AP is up but its upstream is down) while the real target network is absent. **Expected/watch for:** the board may cycle ~30 s hosting its AP / ~30 s attempting STA, with no failed-rejoin backoff. Confirm this is either not occurring or is an acceptable amount of flapping.

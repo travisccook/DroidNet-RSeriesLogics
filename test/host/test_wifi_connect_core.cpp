@@ -122,6 +122,15 @@ static void test_ap_rejoin_candidate_reconnects() {
   CHECK(d.action == WCA_BEGIN_STA && d.becameDisconnected && s.phase == WC_CONNECTING);
 }
 
+static void test_ap_rejoin_paused_while_client_connected() {
+  WcState s{}; WcConfig c = wcDefaultConfig();
+  wcStep(s, mkInput(1000, 0, false, false), c);            // -> WC_AP
+  WcInput in = mkInput(2000, 1, false, false);
+  in.rejoinCandidateSeen = true; in.apClientConnected = true;
+  WcDecision d = wcStep(s, in, c);
+  CHECK(d.action == WCA_NONE && !d.becameDisconnected && s.phase == WC_AP); // did NOT drop the AP/client
+}
+
 int main() {
   test_disabled_does_nothing();
   test_no_saved_goes_ap();
@@ -135,6 +144,7 @@ int main() {
   test_ap_rescans_on_interval();
   test_ap_pauses_rescan_with_client();
   test_ap_rejoin_candidate_reconnects();
+  test_ap_rejoin_paused_while_client_connected();
   printf("%s  %d/%d checks passed\n", g_fail ? "FAILURES" : "OK", g_total - g_fail, g_total);
   return g_fail ? 1 : 0;
 }

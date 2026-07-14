@@ -118,9 +118,12 @@ machine** driven by `WiFi.onEvent()` callbacks + `millis()` deadlines.
 ### 5.3 Isolation fix — render on core 1 (kills §3.3)
 
 Move the render task to the quiet core:
-`xTaskCreatePinnedToCore(eventLoopTask, …, 0)` → **core `1`** (`main.cpp:1116`). WiFi stack +
-web + OTA stay on core 0. Rendering — the same single sequential task — is then shielded
-from WiFi preemption. Requires one bench pass to confirm no code assumed core-0 affinity.
+`xTaskCreatePinnedToCore(eventLoopTask, …, 0)` → **core `1`** (`main.cpp:1116`). This moves
+rendering off core 0, where the ESP32's WiFi MAC/PHY and lwIP are hard-pinned — the actual
+contention that caused the freeze. Web serving and OTA run inside the Arduino `loop()` task,
+which itself defaults to core 1, so after this move rendering shares core 1 with `loop()`
+(both are near-idle during a show). Full isolation — pulling web/OTA onto core 0 as well —
+is deferred future work. Requires one bench pass to confirm no code assumed core-0 affinity.
 
 Rendering is already single-core (one task); this changes *which* core it runs on, not how
 much compute it gets. A ~240 MHz core computing per-pixel animation for a few hundred

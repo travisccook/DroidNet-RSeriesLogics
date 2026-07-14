@@ -148,7 +148,7 @@ inline WcDecision wcStep(WcState& s, const WcInput& in, const WcConfig& cfg) {
         return d;
 
     case WC_AP:
-        if (in.rejoinCandidateSeen)                    // a saved network reappeared
+        if (in.rejoinCandidateSeen && !in.apClientConnected) // a saved network reappeared, and no one is on our AP
             return _wcStartConnecting(s, in.nowMs, true);
         if (!in.apClientConnected &&
             in.nowMs - s.lastScanMs >= cfg.rescanIntervalMs) {

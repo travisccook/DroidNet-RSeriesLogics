@@ -6,6 +6,7 @@
 #
 # Host checks for the RSeries contract fork (no hardware / no ESP32 toolchain needed):
 #   1. contract_core.h parser unit tests
+#   1b. wifi_connect_core.h FSM unit tests
 #   2. ContractLogics.h firmware-layer type-check against a mock of the engine API
 #   3. Marcduino command-buffer width guard (the v1.2 accent keys push a scored line past 63)
 #   4. REAL cross-compile for the ESP32 (optional; needs PlatformIO)
