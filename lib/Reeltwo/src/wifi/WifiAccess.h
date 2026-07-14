@@ -34,6 +34,11 @@
 #include <vector>
 #include <algorithm>
 
+// DroidNet fork: pure, host-tested connect-else-AP decision FSM. File-relative path (this is a
+// vendored lib header; the quoted include resolves against this file's own directory, so it does
+// not depend on any -I flag). lib/Reeltwo/src/wifi/ -> repo root is four levels up.
+#include "../../../../src/wifi/wifi_connect_core.h"
+
 /**
   * \ingroup wifi
   *
@@ -169,307 +174,87 @@ public:
     {
         if (!fWifiEnabled)
             return;
-            
-        uint32_t now = millis();
-        
-        // If we're in soft AP mode and active, nothing to do
-        if (fWifiSoftAP && fWifiActive)
-            return;
-            
-        // Check if we're connected
-        if (WiFi.isConnected())
+
+        // Non-blocking connect-else-AP. All decisions come from the pure, host-tested FSM in
+        // wifi_connect_core.h; this method only READS the WiFi driver and EXECUTES the returned
+        // action. This runs in the render AnimatedEvent chain and MUST NOT block: no delay(), no
+        // synchronous scan, no status spin.
+        updateRejoinCandidate();   // consume any completed background scan (async, non-blocking)
+
+        WcInput in;
+        in.nowMs = millis();
+        in.enabled = fWifiEnabled;
+        in.associated = WiFi.isConnected();
+        in.hasIp = (WiFi.localIP() != IPAddress((uint32_t)0));
+        in.savedCount = fSavedNetworks.size();
+        in.apClientConnected = (fWifiSoftAP && WiFi.softAPgetStationNum() > 0);
+        in.rejoinCandidateSeen = fRejoinCandidate;
+        in.forceApMode = fForceApMode;
+
+        WcDecision d = wcStep(fWc, in, fWcCfg);
+
+        switch (d.action)
         {
-            if (!fWifiActive)
-            {
-                fWifiWasConnected = true;
-                fWifiActive = true;
-                fWifiSoftAP = false;
-                fConnectionAttemptStart = 0; // Reset connection timer
-                notifyConnected();
-            }
-            return;
-        }
-        
-        // Not connected - handle disconnection if we were active
-        if (fWifiActive)
-        {
-            notifyDisconnected();
-            fWifiActive = false;
-        }
-        
-        // If we're already in AP mode, start it
-        if (fWifiSoftAP)
-        {
-            if (!fWifiActive)
-            {
-                DEBUG_PRINTLN("Starting WiFi Access Point: " + fWifiAP);
-                WiFi.mode(WIFI_AP);
-                WiFi.softAP(fWifiAP.c_str(), fWifiPassword.c_str());
-                fWifiActive = true;
-                notifyConnected();
-            }
-            return;
-        }
-        
-        // Try to connect to saved networks
-        if (!fWifiStarted || now - fWifiPrevMillis >= fWifiInterval)
-        {
-            // If this is our first attempt, record the start time
-            if (fConnectionAttemptStart == 0)
-            {
-                // Check if we have any networks to try
-                if (fSavedNetworks.empty() && fWifiAP.isEmpty())
-                {
-                    // No networks configured - go straight to AP mode
-                    DEBUG_PRINTLN("No saved networks - starting AP mode immediately");
-                    fWifiSoftAP = true;
-                    return;
-                }
-                
-                fConnectionAttemptStart = now;
-                fCurrentNetworkIndex = 0;
+        case WCA_BEGIN_STA:
+            fWifiSoftAP = false;
+            fRejoinCandidate = false;
+            if (WiFi.getMode() != WIFI_STA)
                 WiFi.mode(WIFI_STA);
-            }
-            
-            // Check if we've exceeded the fallback timeout
-            if (fFallbackToAP && fAPFallbackTimeout > 0 && 
-                now - fConnectionAttemptStart >= fAPFallbackTimeout)
+            if (d.networkIndex < fSavedNetworks.size())
             {
-                DEBUG_PRINT("Connection timeout after ");
-                DEBUG_PRINT((now - fConnectionAttemptStart) / 1000);
-                DEBUG_PRINTLN(" seconds - falling back to AP mode");
-                fWifiSoftAP = true;
-                fConnectionAttemptStart = 0;
-                return;
-            }
-            
-            // Try next network in the list
-            if (!fSavedNetworks.empty() && fCurrentNetworkIndex < fSavedNetworks.size())
-            {
-                const WifiNetwork& network = fSavedNetworks[fCurrentNetworkIndex];
-                DEBUG_PRINTLN("Attempting to connect to: " + network.ssid);
-                DEBUG_PRINT("SSID: '");
-                DEBUG_PRINT(network.ssid);
-                DEBUG_PRINT("' (length: ");
-                DEBUG_PRINT(network.ssid.length());
-                DEBUG_PRINTLN(")");
-                
-                // Hex dump SSID to check for hidden characters
-                DEBUG_PRINT("SSID hex: ");
-                for (int i = 0; i < network.ssid.length(); i++) {
-                    char c = network.ssid.charAt(i);
-                    if (c < 16) DEBUG_PRINT("0");
-                    DEBUG_PRINT(String(c, HEX));
-                    DEBUG_PRINT(" ");
-                }
-                DEBUG_PRINTLN("");
-                
-                DEBUG_PRINT("Password: '");
-                DEBUG_PRINT(network.password);
-                DEBUG_PRINT("' (length: ");
-                DEBUG_PRINT(network.password.length());
-                DEBUG_PRINTLN(")");
-                
-                // Hex dump password to check for hidden characters
-                DEBUG_PRINT("Password hex: ");
-                for (int i = 0; i < network.password.length(); i++) {
-                    char c = network.password.charAt(i);
-                    if (c < 16) DEBUG_PRINT("0");
-                    DEBUG_PRINT(String(c, HEX));
-                    DEBUG_PRINT(" ");
-                }
-                DEBUG_PRINTLN("");
-                
-                // Quick scan to see current network details
-                DEBUG_PRINTLN("Quick scan for target network...");
-                int n = WiFi.scanNetworks(false, true); // async=false, show_hidden=true
-                DEBUG_PRINT("Scan returned: ");
-                DEBUG_PRINTLN(n);
-                
-                bool networkFound = false;
-                if (n == -2) {
-                    DEBUG_PRINTLN("ERROR: Scan failed!");
-                } else if (n == -1) {
-                    DEBUG_PRINTLN("ERROR: Scan running!");
-                } else if (n == 0) {
-                    DEBUG_PRINTLN("WARNING: No networks found at all!");
-                } else if (n > 0) {
-                    DEBUG_PRINT("Scan found ");
-                    DEBUG_PRINT(n);
-                    DEBUG_PRINTLN(" networks:");
-                    // Show ALL networks for debugging
-                    for (int i = 0; i < n; i++) {
-                        DEBUG_PRINT("  ");
-                        if (WiFi.SSID(i).isEmpty()) {
-                            DEBUG_PRINT("[HIDDEN] ");
-                        } else {
-                            DEBUG_PRINT("'");
-                            DEBUG_PRINT(WiFi.SSID(i));
-                            DEBUG_PRINT("'");
-                        }
-                        DEBUG_PRINT(" BSSID: ");
-                        DEBUG_PRINT(WiFi.BSSIDstr(i));
-                        DEBUG_PRINT(", Ch: ");
-                        DEBUG_PRINT(WiFi.channel(i));
-                        DEBUG_PRINT(", RSSI: ");
-                        DEBUG_PRINT(WiFi.RSSI(i));
-                        DEBUG_PRINT(", Enc: ");
-                        wifi_auth_mode_t encType = WiFi.encryptionType(i);
-                        DEBUG_PRINT(encType);
-                        DEBUG_PRINT(" (");
-                        switch(encType) {
-                            case WIFI_AUTH_OPEN: DEBUG_PRINT("OPEN"); break;
-                            case WIFI_AUTH_WEP: DEBUG_PRINT("WEP"); break;
-                            case WIFI_AUTH_WPA_PSK: DEBUG_PRINT("WPA"); break;
-                            case WIFI_AUTH_WPA2_PSK: DEBUG_PRINT("WPA2"); break;
-                            case WIFI_AUTH_WPA_WPA2_PSK: DEBUG_PRINT("WPA/WPA2"); break;
-                            case WIFI_AUTH_WPA2_ENTERPRISE: DEBUG_PRINT("WPA2_ENT"); break;
-                            case WIFI_AUTH_WPA3_PSK: DEBUG_PRINT("WPA3"); break;
-                            case WIFI_AUTH_WPA2_WPA3_PSK: DEBUG_PRINT("WPA2/WPA3"); break;
-                            default: DEBUG_PRINT("UNKNOWN"); break;
-                        }
-                        DEBUG_PRINTLN(")");
-                        
-                        if (WiFi.SSID(i) == network.ssid) {
-                            networkFound = true;
-                            DEBUG_PRINTLN("  ^-- TARGET NETWORK FOUND!");
-                        }
-                    }
-                    WiFi.scanDelete();
-                }
-                
-                if (!networkFound && n > 0) {
-                    DEBUG_PRINTLN("WARNING: Target network not visible in scan - it might be hidden");
-                }
-                
-                // Show current WiFi settings
-                DEBUG_PRINT("WiFi mode: ");
-                DEBUG_PRINTLN(WiFi.getMode());
-                DEBUG_PRINT("Auto reconnect: ");
-                DEBUG_PRINTLN(WiFi.getAutoReconnect());
-                DEBUG_PRINT("TX Power: ");
-                DEBUG_PRINTLN(WiFi.getTxPower());
-                
-                DEBUG_PRINTLN("Calling WiFi.begin()...");
-                
-                // Try connecting with proper setup
-                DEBUG_PRINTLN("Setting up WiFi for connection...");
-                WiFi.disconnect(true, false);  // disconnect but keep WiFi on
-                WiFi.mode(WIFI_STA);
-                WiFi.setSleep(false);  // Disable power saving
-                WiFi.setAutoReconnect(false);  // We'll handle reconnect ourselves
-                delay(100);
-                
-                // Get BSSID from scan if available
-                uint8_t* targetBSSID = NULL;
-                uint8_t bssid[6];
-                int targetChannel = 0;
-                wifi_auth_mode_t targetEncryption = WIFI_AUTH_OPEN;
-                
-                // Re-scan to get fresh BSSID
-                int scanResult = WiFi.scanNetworks(false, true);
-                if (scanResult > 0) {
-                    for (int i = 0; i < scanResult; i++) {
-                        if (WiFi.SSID(i) == network.ssid) {
-                            targetChannel = WiFi.channel(i);
-                            targetEncryption = WiFi.encryptionType(i);
-                            uint8_t* scanBSSID = WiFi.BSSID(i);
-                            if (scanBSSID != NULL) {
-                                memcpy(bssid, scanBSSID, 6);
-                                targetBSSID = bssid;
-                            }
-                            DEBUG_PRINT("Found network on channel ");
-                            DEBUG_PRINT(targetChannel);
-                            DEBUG_PRINT(" with BSSID: ");
-                            DEBUG_PRINT(WiFi.BSSIDstr(i));
-                            DEBUG_PRINT(" Encryption: ");
-                            DEBUG_PRINTLN(targetEncryption);
-                            
-                            // Warn about WPA vs WPA2 mismatch
-                            if (targetEncryption == WIFI_AUTH_WPA_PSK) {
-                                DEBUG_PRINTLN("WARNING: Network is using WPA (not WPA2). This may cause connection issues.");
-                            }
-                            break;
-                        }
-                    }
-                    WiFi.scanDelete();
-                }
-                
-                // Try connecting with BSSID if we found it
-                wl_status_t status;
-                if (targetBSSID != NULL) {
-                    DEBUG_PRINTLN("Trying with specific BSSID and channel...");
-                    
-                    // First try: normal connection with BSSID
-                    status = WiFi.begin(network.ssid.c_str(), network.password.c_str(), targetChannel, targetBSSID, false);
-                    DEBUG_PRINT("First attempt status: ");
-                    DEBUG_PRINTLN(status);
-                    
-                    // Wait a bit to see if it connects
-                    delay(2000);
-                    
-                    if (WiFi.status() != WL_CONNECTED) {
-                        DEBUG_PRINTLN("First attempt failed, trying without BSSID...");
-                        WiFi.disconnect(true, false);
-                        delay(100);
-                        
-                        // Second try: without BSSID (sometimes helps with WPA issues)
-                        status = WiFi.begin(network.ssid.c_str(), network.password.c_str());
-                        DEBUG_PRINT("Second attempt status: ");
-                        DEBUG_PRINTLN(status);
-                    }
-                } else {
-                    DEBUG_PRINTLN("Trying without BSSID (network not in scan)...");
-                    status = WiFi.begin(network.ssid.c_str(), network.password.c_str());
-                }
-                
-                DEBUG_PRINT("WiFi.begin() returned status: ");
-                DEBUG_PRINTLN(status);
-                DEBUG_PRINT("WiFi.status() is now: ");
-                DEBUG_PRINTLN(WiFi.status());
-                
-                // Give it more time to connect
-                DEBUG_PRINTLN("Waiting for connection...");
-                for (int i = 0; i < 20; i++) {
-                    delay(500);
-                    wl_status_t currentStatus = WiFi.status();
-                    if (currentStatus != WL_DISCONNECTED && currentStatus != WL_NO_SSID_AVAIL) {
-                        DEBUG_PRINT("Status changed to: ");
-                        DEBUG_PRINTLN(currentStatus);
-                        break;
-                    }
-                    if (i % 4 == 0) {
-                        DEBUG_PRINT(".");
-                    }
-                }
-                DEBUG_PRINTLN("");
-                DEBUG_PRINT("Final WiFi.status(): ");
-                DEBUG_PRINTLN(WiFi.status());
-                fWifiStarted = true;
-                fWifiPrevMillis = now;
-                
-                // Move to next network for next attempt
-                fCurrentNetworkIndex++;
-                if (fCurrentNetworkIndex >= fSavedNetworks.size())
-                {
-                    fCurrentNetworkIndex = 0; // Wrap around to try all networks again
-                    DEBUG_PRINTLN("Tried all networks, cycling back to first");
-                }
+                const WifiNetwork& net = fSavedNetworks[d.networkIndex];
+                WiFi.begin(net.ssid.c_str(), net.password.c_str());
             }
             else if (!fWifiAP.isEmpty())
             {
-                // Fall back to legacy single network if no saved networks
-                DEBUG_PRINTLN("Attempting to connect to: " + fWifiAP);
                 WiFi.begin(fWifiAP.c_str(), fWifiPassword.c_str());
-                fWifiStarted = true;
-                fWifiPrevMillis = now;
             }
-            else if (fFallbackToAP)
+            break;
+        case WCA_START_AP:
+            fWifiSoftAP = true;
+            fRejoinCandidate = false;
+            WiFi.mode(WIFI_AP_STA); // AP + STA so the background rejoin scan can still run
+            WiFi.softAP(fWifiAP.c_str(), fWifiPassword.c_str());
+            break;
+        case WCA_START_SCAN:
+            startScan();            // existing helper: async WiFi.scanNetworks(true)
+            break;
+        case WCA_NONE:
+        default:
+            break;
+        }
+
+        if (d.becameConnected)
+        {
+            fWifiActive = true;
+            notifyConnected();
+        }
+        if (d.becameDisconnected)
+        {
+            fWifiActive = false;
+            notifyDisconnected();
+        }
+    }
+
+    // Consume a completed background scan (started by WCA_START_SCAN) and set fRejoinCandidate
+    // if any saved SSID is currently visible. Non-blocking: isScanComplete() only reports true
+    // once the async scan engine has already finished; it never waits.
+    void updateRejoinCandidate()
+    {
+        if (fRejoinCandidate)
+            return;
+        if (isScanComplete())
+        {
+            for (const auto& scanned : fScannedNetworks)
             {
-                // No networks to try - go to AP mode
-                DEBUG_PRINTLN("No saved networks - starting AP mode");
-                fWifiSoftAP = true;
-                fConnectionAttemptStart = 0;
+                for (const auto& saved : fSavedNetworks)
+                {
+                    if (scanned.ssid == saved.ssid)
+                    {
+                        fRejoinCandidate = true;
+                        return;
+                    }
+                }
             }
         }
     }
@@ -529,9 +314,15 @@ public:
     
     void setAPFallbackTimeout(uint32_t timeout)
     {
-        fAPFallbackTimeout = timeout;
+        fAPFallbackTimeout = timeout;      // retained for API compatibility
+        fWcCfg.bootBudgetMs = timeout;     // this is now the total STA connect budget
     }
-    
+
+    void setPerNetworkTimeout(uint32_t ms) { fWcCfg.perNetworkTimeoutMs = ms; }
+    void setRescanInterval(uint32_t ms)    { fWcCfg.rescanIntervalMs = ms; }
+    void setFlapThreshold(uint8_t n)       { fWcCfg.flapThreshold = n; }
+    void setForceAPMode(bool on)           { fForceApMode = on; }
+
     // Network scanning
     bool startScan()
     {
@@ -623,7 +414,15 @@ protected:
     size_t fCurrentNetworkIndex;
     bool fFallbackToAP;
     bool fScanInProgress;
-    
+
+    // DroidNet fork: non-blocking connect-else-AP FSM state + tunable policy. The FSM
+    // (wifi_connect_core.h) owns all connection decisions; this class only reads the WiFi
+    // driver and executes them. Zero-initialized WcState -> wcStep() inits it on first tick.
+    WcState  fWc{};
+    WcConfig fWcCfg = wcDefaultConfig();
+    bool     fRejoinCandidate = false; // a completed background scan saw a saved SSID
+    bool     fForceApMode = false;     // boot pinned AP-only (honored only at WC_IDLE)
+
     void sortNetworksByPriority()
     {
         std::sort(fSavedNetworks.begin(), fSavedNetworks.end(),
