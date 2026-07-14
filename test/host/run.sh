@@ -14,6 +14,9 @@ cd "$(dirname "$0")"
 echo "[1/4] contract_core parser unit tests"
 clang++ -std=c++17 -Wall -Wextra -O0 test_contract_core.cpp -o /tmp/rseries_contract_test
 /tmp/rseries_contract_test
+echo "[1b/4] wifi_connect_core FSM unit tests"
+clang++ -std=c++17 -Wall -Wextra -O0 test_wifi_connect_core.cpp -o /tmp/rseries_wifi_test
+/tmp/rseries_wifi_test
 echo "[2/4] ContractLogics.h firmware type-check"
 clang++ -std=c++17 -Wall -Wextra compile_contract_logics.cpp -o /tmp/rseries_fw_syntax
 /tmp/rseries_fw_syntax
