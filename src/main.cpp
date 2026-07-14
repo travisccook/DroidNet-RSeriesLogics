@@ -87,6 +87,7 @@
 #include "ReelTwo.h"
 #endif
 #include "Arduino.h"
+#include <esp_system.h>
 #include "core/AnalogMonitor.h"
 #include "core/DelayCall.h"
 #include "core/Marcduino.h"
@@ -781,6 +782,17 @@ void eventLoopTask(void*);
 void setup()
 {
     REELTWO_READY();
+
+    // DroidNet fork: log the reset cause at boot. If WiFi-TX current spikes ever brown out the
+    // 3V3 rail during a connect burst, this prints ESP_RST_BROWNOUT (== 9) and points at power,
+    // not firmware.
+    {
+        esp_reset_reason_t _rr = esp_reset_reason();
+        Serial.print("[C2B5_DEBUG] Reset reason: ");
+        Serial.println((int)_rr);
+        if (_rr == ESP_RST_BROWNOUT)
+            Serial.println("[C2B5_DEBUG] *** LAST RESET WAS A BROWNOUT (check 3V3 power) ***");
+    }
 
     if (!preferences.begin("rseries", false))
     {
