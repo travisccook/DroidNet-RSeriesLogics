@@ -1094,7 +1094,7 @@ void setup()
           NULL,
           1,
           &eventTask,
-          0);
+          1);      // render on core 1 — off core 0 where the WiFi MAC/PHY + lwIP live
           
     // Give WiFi and web server time to initialize properly
     delay(100);
