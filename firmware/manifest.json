@@ -1,0 +1,71 @@
+{
+  "built": "2026-07-15",
+  "toolchain": "PlatformIO Core 6.1.19, esptool 4.9.0, avrdude (tool-avrdude 1.70300)",
+  "status": "NEVER FLASHED TO HARDWARE \u2014 built and verified against DroidNet's flasher logic only. Bench-test before field use.",
+  "flash_via": "DroidNet web UI -> Flash tab (upload file, connect board over USB).",
+  "board": "RSeries Logic Engine (Reeltwo WLogicEngine32 / WReactor32-S3)",
+  "source_repo": "https://github.com/travisccook/DroidNet-RSeriesLogics",
+  "source_commit": "78f8b2e",
+  "artifacts": [
+    {
+      "file": "DroidNet-RSeriesLogics-esp32-78f8b2e.merged.bin",
+      "role": "PRIMARY \u2014 classic ESP32, full image",
+      "chip": "esp32",
+      "mcu": "ESP32 (WROOM)",
+      "env": "wlogicengine32",
+      "droidnet_flash": {
+        "file_type": "esp32",
+        "select_chip": "auto/ESP32",
+        "flash_address": "(leave blank \u2014 auto-detected as merged, flashed at 0x0)",
+        "note": "Full image: bootloader+partitions+app. Wipes NVS (stored WiFi/settings). Use for a clean/first flash or recovery."
+      },
+      "size_bytes": 1199056,
+      "sha256": "88592b87e0e5f4548ee59df5fcac3dce1a61c4b50671d04ad05c0d191f97b315"
+    },
+    {
+      "file": "DroidNet-RSeriesLogics-esp32-78f8b2e.app.bin",
+      "role": "classic ESP32, app-only (update)",
+      "chip": "esp32",
+      "mcu": "ESP32 (WROOM)",
+      "env": "wlogicengine32",
+      "droidnet_flash": {
+        "file_type": "esp32",
+        "select_chip": "auto/ESP32",
+        "flash_address": "0x10000 (auto)",
+        "note": "App only; preserves NVS/settings. Only for a board already provisioned with a matching bootloader + min_spiffs partition table."
+      },
+      "size_bytes": 1133520,
+      "sha256": "e3e9f519123fff6b404e2d522bab1ce51d276d4caeb45f36193309b117c44f95"
+    },
+    {
+      "file": "DroidNet-RSeriesLogics-esp32s3-78f8b2e.merged.bin",
+      "role": "PRIMARY \u2014 ESP32-S3, full image",
+      "chip": "esp32s3",
+      "mcu": "ESP32-S3 (WReactor32 2023)",
+      "env": "wlogicengine32s3",
+      "droidnet_flash": {
+        "file_type": "esp32",
+        "select_chip": "ESP32-S3 (REQUIRED)",
+        "flash_address": "0x0 (REQUIRED \u2014 set manually)",
+        "note": "S3 full images CANNOT be auto-detected (S3 bootloader sits at 0x0, not 0x1000). You MUST pick chip=ESP32-S3 and set Flash Address=0x0. Wipes NVS. Verify module flash size (image built for 4MB)."
+      },
+      "size_bytes": 1103168,
+      "sha256": "6b47a0a585b425e463e555642f717598f0eb58eb6eeec7ad9e2600f71e992642"
+    },
+    {
+      "file": "DroidNet-RSeriesLogics-esp32s3-78f8b2e.app.bin",
+      "role": "ESP32-S3, app-only (update)",
+      "chip": "esp32s3",
+      "mcu": "ESP32-S3",
+      "env": "wlogicengine32s3",
+      "droidnet_flash": {
+        "file_type": "esp32",
+        "select_chip": "ESP32-S3",
+        "flash_address": "0x10000 (auto)",
+        "note": "App only; preserves NVS. Provisioned S3 board only."
+      },
+      "size_bytes": 1037632,
+      "sha256": "e279d23327f26d3948bdbc5e9a77f003076a5e70db18598abfecf83d8f651338"
+    }
+  ]
+}
