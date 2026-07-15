@@ -45,9 +45,9 @@
       "env": "wlogicengine32s3",
       "droidnet_flash": {
         "file_type": "esp32",
-        "select_chip": "ESP32-S3 (REQUIRED)",
-        "flash_address": "0x0 (REQUIRED \u2014 set manually)",
-        "note": "S3 full images CANNOT be auto-detected (S3 bootloader sits at 0x0, not 0x1000). You MUST pick chip=ESP32-S3 and set Flash Address=0x0. Wipes NVS. Verify module flash size (image built for 4MB)."
+        "select_chip": "auto (detected from board as ESP32-S3)",
+        "flash_address": "(leave blank \u2014 auto-detected as merged, flashed at 0x0)",
+        "note": "Full image: bootloader+partitions+app. Auto-detected via the partition table at 0x8000 (chip-agnostic) and flashed at 0x0; the S3 chip is detected from the connected board. Wipes NVS (stored WiFi/settings). Built for a 4MB module \u2014 confirm yours matches. (DroidNet builds before the S3 merged-image detection fix needed chip=ESP32-S3 + address 0x0 set by hand.)"
       },
       "size_bytes": 1103168,
       "sha256": "6b47a0a585b425e463e555642f717598f0eb58eb6eeec7ad9e2600f71e992642"
@@ -60,7 +60,7 @@
       "env": "wlogicengine32s3",
       "droidnet_flash": {
         "file_type": "esp32",
-        "select_chip": "ESP32-S3",
+        "select_chip": "auto (detected from board as ESP32-S3)",
         "flash_address": "0x10000 (auto)",
         "note": "App only; preserves NVS. Provisioned S3 board only."
       },

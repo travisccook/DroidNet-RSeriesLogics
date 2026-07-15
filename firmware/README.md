@@ -26,9 +26,11 @@ preserves NVS but only works on a board already carrying a matching bootloader a
 
 - **Classic ESP32:** upload the `esp32-…merged.bin` and **leave the flash address blank** —
   DroidNet detects the merged image and writes it at `0x0`.
-- **ESP32-S3:** DroidNet can't auto-detect an S3 full image (its bootloader is at `0x0`, not
-  `0x1000`). Set **Chip = ESP32-S3** and **Flash address = `0x0`**, then upload the
-  `esp32s3-…merged.bin`. Built for a 4 MB module — confirm yours matches.
+- **ESP32-S3:** same — upload the `esp32s3-…merged.bin` and leave the address blank. DroidNet
+  recognises the merged image by its partition table at `0x8000` (same offset on every ESP32
+  variant), writes it at `0x0`, and auto-detects the S3 chip from the board. Built for a 4 MB
+  module — confirm yours matches. (Older DroidNet builds, before the S3 merged-image
+  detection fix, needed **Chip = ESP32-S3** and **Flash address = `0x0`** set by hand.)
 
 ## Rebuild
 
