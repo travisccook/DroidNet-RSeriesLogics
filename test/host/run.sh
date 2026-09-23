@@ -10,6 +10,7 @@
 #   3. Marcduino command-buffer width guard (the v1.2 accent keys push a scored line past 63)
 #   4. parser fuzz + differential (ASan/UBSan, deterministic)
 #   5. native #LEBRI brightness parser unit tests
+#   6. native #LEBRI brightness action behaviour, against mock_native_brightness.h
 #   8. native #LEBRI brightness parser fuzz + differential (ASan/UBSan, deterministic)
 #   9. REAL cross-compile for the ESP32 (optional; needs PlatformIO)
 set -e
@@ -114,6 +115,12 @@ echo "[5/9] native #LEBRI brightness parser unit tests"
 # boundary, and outputs untouched on a rejected tail.
 clang++ -std=c++17 -Wall -Wextra -Werror -O0 test_native_brightness.cpp -o /tmp/rseries_native_brightness_test
 /tmp/rseries_native_brightness_test
+
+echo "[6/9] native #LEBRI brightness action behaviour (mock)"
+# src/native/NativeBrightness.h against mock_native_brightness.h: controller capture, the
+# raise-once baseline, the per-display correction, and a display with no controller ignored.
+clang++ -std=c++17 -Wall -Wextra -Werror -O0 test_native_brightness_action.cpp -o /tmp/rseries_native_brightness_action
+/tmp/rseries_native_brightness_action
 
 echo "[8/9] native #LEBRI brightness parser fuzz + differential (ASan/UBSan, deterministic)"
 # Fork-local. fuzz_parsers.cpp above is shared byte-identically with the PSI and Flthy forks

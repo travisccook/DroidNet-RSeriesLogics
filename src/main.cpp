@@ -394,6 +394,7 @@ String RLDText;
 /////////////////////////////////////////////////////////////////////////
 
 #include "MarcduinoLogics.h"
+#include "native/NativeBrightness.h"   // DroidNet native brightness: #LEBRI (fork-owned)
 
 const ServoSettings servoSettings[] PROGMEM = {
 };
@@ -861,11 +862,15 @@ void setup()
 
     // Initialize FLD
     FLD_selectType(preferences.getUChar(PREFERENCE_FLD, kLogicEngineDeathStarFLD));
+    const int dnFldControllersBefore = FastLED.count();   // DroidNet native brightness
     FLD_init();
+    nativeBrightnessCapture(NATIVE_BRIGHTNESS_UNIT_FRONT, dnFldControllersBefore);   // DroidNet native brightness
 
     // Initialize RLD
     RLD_selectType(preferences.getUChar(PREFERENCE_RLD, kLogicEngineCurvedRLD));
+    const int dnRldControllersBefore = FastLED.count();   // DroidNet native brightness
     RLD_init();
+    nativeBrightnessCapture(NATIVE_BRIGHTNESS_UNIT_REAR, dnRldControllersBefore);   // DroidNet native brightness
 
     Wire.begin();
     SetupEvent::ready();
