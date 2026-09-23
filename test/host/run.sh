@@ -9,20 +9,22 @@
 #   2. ContractLogics.h firmware-layer type-check against a mock of the engine API
 #   3. Marcduino command-buffer width guard (the v1.2 accent keys push a scored line past 63)
 #   4. parser fuzz + differential (ASan/UBSan, deterministic)
-#   5. REAL cross-compile for the ESP32 (optional; needs PlatformIO)
+#   5. native #LEBRI brightness parser unit tests
+#   8. native #LEBRI brightness parser fuzz + differential (ASan/UBSan, deterministic)
+#   9. REAL cross-compile for the ESP32 (optional; needs PlatformIO)
 set -e
 cd "$(dirname "$0")"
-echo "[1/5] contract_core parser unit tests"
+echo "[1/9] contract_core parser unit tests"
 clang++ -std=c++17 -Wall -Wextra -O0 test_contract_core.cpp -o /tmp/rseries_contract_test
 /tmp/rseries_contract_test
-echo "[1b/5] wifi_connect_core FSM unit tests"
+echo "[1b/9] wifi_connect_core FSM unit tests"
 clang++ -std=c++17 -Wall -Wextra -O0 test_wifi_connect_core.cpp -o /tmp/rseries_wifi_test
 /tmp/rseries_wifi_test
-echo "[2/5] ContractLogics.h firmware type-check"
+echo "[2/9] ContractLogics.h firmware type-check"
 clang++ -std=c++17 -Wall -Wextra compile_contract_logics.cpp -o /tmp/rseries_fw_syntax
 /tmp/rseries_fw_syntax
 
-echo "[3/5] Marcduino command-buffer width guard"
+echo "[3/9] Marcduino command-buffer width guard"
 # lib/Reeltwo/src/core/Marcduino.h:173-175 — MarcduinoSerial::animate() reads a byte and:
 #     else if (fPos < SizeOfArray(fBuffer)-1) fBuffer[fPos++] = ch;
 # Every byte past that is DROPPED ON THE FLOOR, with no error and no flag; on the next CR it
@@ -95,7 +97,7 @@ if [ "$WIDTH" -lt "$need" ]; then
 fi
 echo "MarcduinoSerial BUFFER_SIZE=$WIDTH >= $need (worst v1.2 scored line ${#worst} chars) OK"
 
-echo "[4/5] parser fuzz + differential (ASan/UBSan, deterministic)"
+echo "[4/9] parser fuzz + differential (ASan/UBSan, deterministic)"
 # The parsers are the one place this project eats bytes off a shared, noisy serial bus, and to
 # save 1,008 B of flash on the PSI they were hand-rolled instead of using strtol/strtoul. This
 # stage is the differential that keeps them honest: ~1.55M checks against an INDEPENDENT model
@@ -107,7 +109,20 @@ clang++ -std=c++17 -O1 -fsanitize=address,undefined -fno-sanitize-recover=all \
         fuzz_parsers.cpp -o /tmp/rserieslogics_fuzz
 /tmp/rserieslogics_fuzz
 
-echo "[5/5] REAL cross-compile (ESP32 (wlogicengine32)) -- optional"
+echo "[5/9] native #LEBRI brightness parser unit tests"
+# src/native/native_brightness_parse.h: the strict reject rule (no clamp, no floor), every
+# boundary, and outputs untouched on a rejected tail.
+clang++ -std=c++17 -Wall -Wextra -Werror -O0 test_native_brightness.cpp -o /tmp/rseries_native_brightness_test
+/tmp/rseries_native_brightness_test
+
+echo "[8/9] native #LEBRI brightness parser fuzz + differential (ASan/UBSan, deterministic)"
+# Fork-local. fuzz_parsers.cpp above is shared byte-identically with the PSI and Flthy forks
+# and is not edited here.
+clang++ -std=c++17 -Wall -Wextra -Werror -O1 -fsanitize=address,undefined -fno-sanitize-recover=all \
+        fuzz_native_brightness.cpp -o /tmp/rseries_native_brightness_fuzz
+/tmp/rseries_native_brightness_fuzz
+
+echo "[9/9] REAL cross-compile (ESP32 (wlogicengine32)) -- optional"
 # THIS is the stage that makes "it compiles" a claim about the FIRMWARE rather than a claim
 # about our mock. Stages 1-3 are host checks: they prove the contract logic and they pin the
 # board API against a HAND-WRITTEN MOCK -- and a mock is only ever as honest as its author.
@@ -122,12 +137,12 @@ echo "[5/5] REAL cross-compile (ESP32 (wlogicengine32)) -- optional"
 # (Both are fixed. The lesson is why this stage exists.)
 #
 # OPTIONAL because it needs PlatformIO and a ~200 MB toolchain. Skipped cleanly without it:
-# stages 1-3 still run and still mean something -- just strictly less than they appear to.
+# stages 1-8 still run and still mean something -- just strictly less than they appear to.
 PIO="${PIO:-$HOME/.platformio/penv/bin/pio}"
 [ -x "$PIO" ] || PIO="$(command -v pio 2>/dev/null || true)"
 if [ -z "$PIO" ] || [ ! -x "$PIO" ]; then
   echo "SKIP: PlatformIO not found, so NOTHING here was compiled for the real MCU."
-  echo "      Stages 1-3 passed, but they only type-check against our mock."
+  echo "      Stages 1-8 passed, but they only type-check against our mock."
   echo "      Install it and re-run for the real check:  pip install platformio"
   echo "      Or point this at an existing install:      PIO=/path/to/pio $0"
   exit 0
