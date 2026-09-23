@@ -6,7 +6,8 @@ by **Rimim** (Mimir Reynisson).
 
 Almost everything in this repository is their work. This fork adds one small layer (about 700 lines
 across two headers plus a host test harness) so an external tool can drive the logic displays in
-time with music. Everything the firmware already did, it still does, unchanged.
+time with music, plus one native command, `#LEBRI`, that sets the logic displays' brightness.
+Everything the firmware already did, it still does, unchanged.
 
 ---
 
@@ -55,7 +56,7 @@ Be precise about what is and is not verified, because the two are easy to blur:
 
 **What IS verified.** It cross-compiles for the real microcontroller. `pio run` builds a complete
 ESP32 firmware image with the real xtensa toolchain, and the real linker signs off on it:
-**1,132,213 B of flash (57.6%)** and 63,324 B of SRAM (19.3%). Plus `bash test/host/run.sh` — 341
+**1,128,309 B of flash (57.4%)** and 63,396 B of SRAM (19.3%). Plus `bash test/host/run.sh` — 341
 checks against the wire parser, beat clock and effect math, plus a type-check of the render layer
 against a mock of the engine API, and it now finishes by doing that cross-compile itself.
 
@@ -87,8 +88,8 @@ What was actually broken was two things, one hiding under the other:
 2. Underneath that, the S3 env pulled **FastLED from unpinned git master**. It now uses the vendored
    `lib/FastLED` 3.5.0, same as the ESP32 env.
 
-`wlogicengine32` is provably unaffected: it still links at exactly 1,132,213 B, the same byte count as
-before the change. The platform stays on v5.2.0 — no bump, no new toolchain, nothing to re-validate.
+`wlogicengine32` was provably unaffected: it linked at exactly the same byte count before and after
+the change. The platform stays on v5.2.0 — no bump, no new toolchain, nothing to re-validate.
 
 **But a compile is not a run, and the S3 env has almost certainly never worked.** It is a fork-local
 hand-translation of upstream's `make TARGET=ESP32S3` (upstream has no S3 PlatformIO env at all), and
@@ -140,7 +141,43 @@ What it buys:
 
 **Every native command still works exactly as before.** `~RTLE…`, `@nT…`, `#LE…`, JawaLite, the web
 interface, the SD-card updater, the menus — all untouched. This is backward-compatible and it is not
-a rewrite. If you never send a `!` command, this firmware behaves like the stock firmware.
+a rewrite. If you never send a `!` or `#LEBRI` command, this firmware behaves like the stock
+firmware.
+
+## One native command: `#LEBRI` brightness
+
+```text
+#LEBRI<level>     both logic displays    e.g. #LEBRI128
+#LEBRIF<level>    front (FLD) only       e.g. #LEBRIF255
+#LEBRIR<level>    rear (RLD) only        e.g. #LEBRIR1
+
+level   1-255, one to three digits (leading zeros are accepted; the library never sends them)
+```
+
+- **Linear, and 255 is the hardware maximum.** Each accepted command sets that display's FastLED
+  colour correction to (L, L, L), which FastLED applies at output time. So it dims every look on the
+  next frame: the palette effects, text, the custom effects 100-105 and the contract looks. It is a
+  master dimmer over contract shows too.
+- **The first command for a display raises its baseline once.** It sets that display's RAM default
+  `fBri` and its live `fBri` to 255, so effect changes do not snap it back. Today's Normal look sits at
+  about 39% (front) and 30% (rear) of the new scale, and 100% is about 2.54× (front) and 3.3× (rear)
+  today's brightness. No power limiter is configured, and current draw at 255 has not been measured.
+- **RAM only.** Nothing is written to Preferences/NVS. After a power-on the look is stock until the
+  first command. (On an ESP32-S3 build the on-board controller restores its own saved `fBri` at
+  setup, and its trimpot and web sliders compete with the command.)
+- **Strict.** Anything else is ignored silently, with no clamp and no reply: a bare `#LEBRI`, 0,
+  256-999, four or more digits, lowercase `f`/`r`, a sign, spaces or trailing text.
+- A display whose init did not add exactly one FastLED controller (for example no rear display
+  fitted) is ignored by the command. Its dither is switched off only when it is captured.
+- A later contract `B` verb (`!L*B`) lowers the live `fBri` on top of the correction until the next
+  effect change.
+- On the WiFi Marcduino port 2000 a burst of several lines runs only the last line's action. That is
+  pre-existing for every action on that port; Serial1 is not affected.
+
+Its DroidNet command library id is `rseries.cfg.brightness` (board `droidnet-rseries-logic`, library
+4.4.0). The code is `src/native/native_brightness_parse.h` (the pure parser),
+`src/native/NativeBrightness.h` (the action and the controller capture) and five marked lines in
+`src/main.cpp`. It does not touch the contract layer, effect 106 or the contract `B` verb.
 
 ---
 
@@ -184,6 +221,9 @@ None of that is upstream's, and none of it is part of the contract layer. It is 
 | `src/contract/ContractLogics.h` | The RSeries render layer: maps the contract onto this board's LED primitives, registers as custom effect id 106. | 337 |
 | `test/host/*` | The host test harness (parser tests, engine mock, type-check). | 506 |
 | `src/main.cpp` | **Four added lines and one bounds-check fix.** An `#include`, `ContractRender` appended to the custom-effect table, `contractSetup()` in `setup()`, `contractTick()` in `mainLoop()`. | +7 / −2 |
+| `src/native/native_brightness_parse.h` | The `#LEBRI` parser. Pure C++, no Arduino, FastLED or Reeltwo. | 62 |
+| `src/native/NativeBrightness.h` | The `#LEBRI` Marcduino action and the FastLED controller capture. Not part of the contract layer. | 87 |
+| `src/main.cpp` (native brightness) | One `#include` and the controller capture around `FLD_init()` and `RLD_init()`, each line marked `DroidNet native brightness`. | +5 |
 | `DROIDNET_FORK.md`, this README | Fork docs. | — |
 
 The bounds-check fix in `main.cpp` is a one-character change to a pre-existing off-by-one in the
@@ -220,18 +260,28 @@ headers. The other four are documentation (this README, `README_UPSTREAM.md`, `D
 
 ```sh
 bash test/host/run.sh
-# [1/4] contract_core parser unit tests        -> OK  341/341 checks passed
-# [2/4] ContractLogics.h firmware type-check   -> OK
-# [3/4] Marcduino command-buffer width guard   -> OK
-# [4/4] REAL cross-compile (ESP32)             -> OK   <- needs PlatformIO; skips cleanly without it
+# [1/9]  contract_core parser unit tests               -> OK  341/341 checks passed
+# [1b/9] wifi_connect_core FSM unit tests              -> OK  20/20 checks passed
+# [2/9]  ContractLogics.h firmware type-check          -> OK
+# [3/9]  Marcduino command-buffer width guard          -> OK
+# [4/9]  parser fuzz + differential (ASan/UBSan)       -> OK  1554686/1554686 checks passed
+# [5/9]  native #LEBRI brightness parser unit tests    -> OK  3907/3907 checks passed
+# [6/9]  native #LEBRI brightness action (mock)        -> OK  33/33 checks passed
+# [7/9]  Marcduino prefix-collision guard              -> OK  43 actions, 635 catalog lines
+# [8/9]  native #LEBRI brightness parser fuzz          -> OK  1070735/1070735 checks passed
+# [9/9]  REAL cross-compile (ESP32)                    -> OK   <- needs PlatformIO; skips cleanly without it
 ```
 
-Stages 1-3 need no hardware and no toolchain. Stage 4 is the real cross-compile: it is what makes
+Stage 7 reads `test/host/catalog_example_lines.tsv`, a checked-in snapshot of every example line in
+the DroidNet command library. Regenerate it with
+`python3 test/host/refresh_catalog_examples.py <library checkout>`.
+
+Stages 1-8 need no hardware and no toolchain beyond clang. Stage 9 is the real cross-compile: it is what makes
 "it compiles" a claim about the firmware rather than a claim about our mock. If PlatformIO is not
 installed it skips cleanly and tells you what you did not check.
 
-Firmware (PlatformIO): `pio run` builds both envs — `wlogicengine32` (ESP32, 1,132,213 B / 57.6%)
-and `wlogicengine32s3` (ESP32-S3, 1,041,501 B / 53.0%). The S3 env used to be unbuildable; see the
+Firmware (PlatformIO): `pio run` builds both envs — `wlogicengine32` (ESP32, 1,128,309 B / 57.4%)
+and `wlogicengine32s3` (ESP32-S3, 1,037,697 B / 52.8%). The S3 env used to be unbuildable; see the
 warning above for what was wrong and for the hardware-config caveats that still apply to it.
 See [README_UPSTREAM.md](README_UPSTREAM.md) for the real build and flashing instructions — they are
 otherwise unchanged.
@@ -263,5 +313,5 @@ The contract layer: **Travis Cook**, 2026.
 
 **LGPL-2.1.** The upstream firmware and the vendored `lib/Reeltwo` are LGPL-2.1 (Joymonkey, Rimim);
 the root [LICENSE](LICENSE) file is upstream's own, byte-identical. The DroidNet contract layer
-(`src/contract/*`, `test/host/*`) is Copyright (c) 2026 Travis Cook, LGPL-2.1-only as distributed
-here. Also vendored: `lib/FastLED` (MIT) and `lib/Adafruit_NeoPixel` (LGPL-3.0).
+(`src/contract/*`, `test/host/*`) and the native brightness command (`src/native/*`) are Copyright
+(c) 2026 Travis Cook, LGPL-2.1-only as distributed here. Also vendored: `lib/FastLED` (MIT) and `lib/Adafruit_NeoPixel` (LGPL-3.0).

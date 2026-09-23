@@ -10,7 +10,8 @@ still the authority on everything except the `!` grammar.
 An additive layer on top of reeltwo's `WLogicEngine32` that implements the **Driveable-Animation
 Contract**, so Cantina Studio can drive the FLD/RLD logic displays with arbitrary RGB, beat-locked
 accents, a host-seeded beat clock, and autonomous board-side section playback — while every native
-`~RTLE…` / `@nT…` / `#LE…` command keeps working exactly as it did.
+`~RTLE…` / `@nT…` / `#LE…` command keeps working exactly as it did. It also adds one native command,
+`#LEBRI` (RAM-only brightness, below), which is not part of the contract.
 
 - **Upstream:** [reeltwo/WLogicEngine32](https://github.com/reeltwo/WLogicEngine32) (LGPL-2.1),
   by Joymonkey and Rimim.
@@ -51,6 +52,24 @@ is the DroidNet layer (`git log --oneline 6bba8b1..HEAD`).
   `twinkle`. The maths lives in `contract_core.h` (`fx*` helpers) so the firmware and the Studio
   visualiser can be checked against the same vectors.
 
+### Native brightness: `#LEBRI`
+
+`#LEBRI[F|R]<1-255>` sets the logic displays' brightness in RAM (library id
+`rseries.cfg.brightness`). No unit means both displays; `F` is the front, `R` the rear. The level
+is 1 to 3 digits worth 1-255, and the line must end right after it. Anything else is ignored with no
+state change and no reply: there is no clamp, and 0 is never applied.
+
+- `src/native/native_brightness_parse.h` is the pure parser; `src/native/NativeBrightness.h` holds
+  the `MARCDUINO_ACTION(LEBrightness, #LEBRI, …)`, the two captured FastLED controllers and the
+  raise-once flags. `src/main.cpp` includes it right after `MarcduinoLogics.h` and captures each
+  display's controller around `FLD_init()` / `RLD_init()` (lines marked `DroidNet native
+  brightness`).
+- The first command for a display sets its RAM default and live `fBri` to 255 (once); every command
+  sets that display's controller correction to (L, L, L). Nothing goes to NVS.
+- Host checks: `test_native_brightness.cpp` (accept/reject table), `test_native_brightness_action.cpp`
+  (the action against `mock_native_brightness.h`), `fuzz_native_brightness.cpp` (fork-local
+  differential fuzz) and `prefix_guard.cpp` (below).
+
 ### What is not in
 
 - Verb `Q` (query / status readback). Parsed, not answered.
@@ -64,8 +83,11 @@ is the DroidNet layer (`git log --oneline 6bba8b1..HEAD`).
 | --- | --- | --- |
 | `src/contract/contract_core.h` | fork | Pure C++, no Arduino/FastLED/Reeltwo. **Byte-identical across all three board forks** — if you change it here, change it identically there. |
 | `src/contract/ContractLogics.h` | fork | Render layer. Registers as custom effect id **106**. |
-| `test/host/` | fork | Host harness. Keep it green. |
-| `src/main.cpp` | upstream | Four added lines (include, effect-table entry, `contractSetup()`, `contractTick()`) plus a one-character fix to a latent off-by-one in `CustomLogicEffectSelector`. |
+| `src/native/native_brightness_parse.h` | fork | Pure `#LEBRI` parser, no Arduino/FastLED/Reeltwo. Fork-local (not shared with PSI/Flthy). |
+| `src/native/NativeBrightness.h` | fork | The `#LEBRI` Marcduino action and the FastLED controller capture. Not part of the contract. |
+| `test/host/` | fork | Host harness. Keep it green. `fuzz_parsers.cpp` is shared byte-identically with the PSI and Flthy forks; `fuzz_native_brightness.cpp` is fork-local. |
+| `test/host/catalog_example_lines.tsv` | fork | Snapshot of every command-library example line, for `prefix_guard.cpp`. Regenerate with `refresh_catalog_examples.py <library checkout>`. |
+| `src/main.cpp` | upstream | Four added lines (include, effect-table entry, `contractSetup()`, `contractTick()`) plus a one-character fix to a latent off-by-one in `CustomLogicEffectSelector`. Five more lines for `#LEBRI`: its include and the controller capture around `FLD_init()` / `RLD_init()`. |
 | `lib/Reeltwo` | upstream | **Do not edit.** The contract plugs in through the public `seq >= 100` `CustomLogicEffectSelector` hook. The two `wifi/` headers carry pre-existing C2B5 modifications and an LGPL §2(b) notice. |
 
 ## Conventions that matter
@@ -77,7 +99,14 @@ is the DroidNet layer (`git log --oneline 6bba8b1..HEAD`).
 - The score sequencer runs in `contractTick()` from `mainLoop()`, **not** inside the effect
   function, so sections keep advancing even while a `native:<code>` section look (which
   `ContractRender` does not draw) is on screen.
-- `!` is the fork's only command prefix, and it was chosen because every stock parser ignores it.
+- `!` is the contract's only command prefix, and it was chosen because every stock parser ignores it.
+  The one native command the fork adds is `#LEBRI`.
+- **No Marcduino action text may be a prefix of another.** `Marcduino::processCommand` runs every
+  action whose text prefixes the line, and only the last-registered one survives, so a clash drops a
+  command silently. `test/host/prefix_guard.cpp` fails on any prefix pair except the three stock ones
+  (`@0T1`→`@0T11`, `@1T1`→`@1T11`, `@2T1`→`@2T11`, which work because the longer text is registered
+  later), and on any command-library example line that would run `#LEBRI` without being
+  `rseries.cfg.brightness`.
 - **`STROBE_MIN_STATE_MS = 170` is a safety limit, not a tuning knob.** An accent overlay may not
   restart more often than every `2 * 170 = 340 ms` (≤ 2.94 flashes/sec, inside the ≤ 3 flashes/sec
   photosensitivity guidance), the cool-down is anchored on `pulseLastMs` **unconditionally** — an
