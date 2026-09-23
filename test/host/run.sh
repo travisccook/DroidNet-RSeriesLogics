@@ -11,6 +11,7 @@
 #   4. parser fuzz + differential (ASan/UBSan, deterministic)
 #   5. native #LEBRI brightness parser unit tests
 #   6. native #LEBRI brightness action behaviour, against mock_native_brightness.h
+#   7. Marcduino prefix-collision guard (registered actions + library catalog snapshot)
 #   8. native #LEBRI brightness parser fuzz + differential (ASan/UBSan, deterministic)
 #   9. REAL cross-compile for the ESP32 (optional; needs PlatformIO)
 set -e
@@ -121,6 +122,13 @@ echo "[6/9] native #LEBRI brightness action behaviour (mock)"
 # raise-once baseline, the per-display correction, and a display with no controller ignored.
 clang++ -std=c++17 -Wall -Wextra -Werror -O0 test_native_brightness_action.cpp -o /tmp/rseries_native_brightness_action
 /tmp/rseries_native_brightness_action
+
+echo "[7/9] Marcduino prefix-collision guard"
+# Marcduino.h runs every action whose text prefixes the line and only the LAST one survives,
+# so a prefix clash silently drops a command. Reads the registered actions from source and the
+# library's example lines from catalog_example_lines.tsv (refresh_catalog_examples.py).
+clang++ -std=c++17 -Wall -Wextra -Werror -O1 prefix_guard.cpp -o /tmp/rseries_prefix_guard
+/tmp/rseries_prefix_guard
 
 echo "[8/9] native #LEBRI brightness parser fuzz + differential (ASan/UBSan, deterministic)"
 # Fork-local. fuzz_parsers.cpp above is shared byte-identically with the PSI and Flthy forks
