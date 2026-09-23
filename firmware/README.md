@@ -1,43 +1,63 @@
 # Prebuilt firmware — DroidNet RSeries Logic Engine fork
 
-Ready-to-flash images built from this repo at commit `78f8b2e`, for flashing through the
-DroidNet **Flash** tab. Machine-readable details (sha256, sizes, per-file flash settings)
-are in [`manifest.json`](manifest.json).
+Ready-to-flash images built by [`build-images.sh`](build-images.sh) from a clean tree at the commit
+named `source_commit` in [`manifest.json`](manifest.json). The manifest also has each file's sha256
+and size, the flash settings, and the dependency versions the build resolved.
 
-> **NEVER FLASHED TO HARDWARE.** Compiles cleanly and verified against DroidNet's flasher
-> logic only. Bench-test before field use.
+> **NEVER FLASHED TO HARDWARE** — built and verified against DroidNet's flasher logic only.
+> Flash in place per the runbook (spec section 6); take a read_flash dump first.
 
-The RSeries hardware exists as classic ESP32 (WLogicEngine32) and ESP32-S3 (WReactor32
-2023). Both are built here — **flash the file matching your board.**
+These images carry the one native command this fork adds, `#LEBRI[F|R]<1-255>` (RAM-only brightness,
+library id `rseries.cfg.brightness`; see the main [README](../README.md)). They also bring everything
+else the fork changes, none of which has run on hardware either: the WiFi connect-else-AP state
+machine, rendering on core 1, the Driveable-Animation Contract layer and the 96-byte Marcduino buffer.
 
-| File | Chip | Kind |
-| ---- | ---- | ---- |
-| `DroidNet-RSeriesLogics-esp32-78f8b2e.merged.bin` | ESP32 | Full image (bootloader+partitions+app) |
-| `DroidNet-RSeriesLogics-esp32-78f8b2e.app.bin` | ESP32 | App-only (update) |
-| `DroidNet-RSeriesLogics-esp32s3-78f8b2e.merged.bin` | ESP32-S3 | Full image |
-| `DroidNet-RSeriesLogics-esp32s3-78f8b2e.app.bin` | ESP32-S3 | App-only (update) |
+## Which file
 
-**Merged vs app-only:** the merged image is the clean/first-flash/recovery choice — it
-writes the whole flash and **erases NVS** (stored WiFi/settings). The app-only image
-preserves NVS but only works on a board already carrying a matching bootloader and the
-`min_spiffs` partition table.
+The RSeries hardware exists as classic ESP32 (WLogicEngine32) and ESP32-S3 (WReactor32 2023). Flash
+the file for the chip the Booster's **Detect Board Only** reports.
 
-## Flashing via DroidNet
+| File (`<sha>` = `source_commit`)                  | Chip     | Use                            |
+| ------------------------------------------------- | -------- | ------------------------------ |
+| `DroidNet-RSeriesLogics-esp32-<sha>.app.bin`      | ESP32    | **RECOMMENDED** — app only     |
+| `DroidNet-RSeriesLogics-esp32-<sha>.merged.bin`   | ESP32    | **RECOVERY ONLY** — full image |
+| `DroidNet-RSeriesLogics-esp32s3-<sha>.app.bin`    | ESP32-S3 | **RECOMMENDED** — app only     |
+| `DroidNet-RSeriesLogics-esp32s3-<sha>.merged.bin` | ESP32-S3 | **RECOVERY ONLY** — full image |
 
-- **Classic ESP32:** upload the `esp32-…merged.bin` and **leave the flash address blank** —
-  DroidNet detects the merged image and writes it at `0x0`.
-- **ESP32-S3:** same — upload the `esp32s3-…merged.bin` and leave the address blank. DroidNet
-  recognises the merged image by its partition table at `0x8000` (same offset on every ESP32
-  variant), writes it at `0x0`, and auto-detects the S3 chip from the board. Built for a 4 MB
-  module — confirm yours matches. (Older DroidNet builds, before the S3 merged-image
-  detection fix, needed **Chip = ESP32-S3** and **Flash address = `0x0`** set by hand.)
+**App only (`.app.bin`) is the one to flash.** Upload it in the DroidNet **Flash** tab and leave the
+address the tab fills in (`0x10000`); do not clear or change it. It keeps NVS: the display types,
+the WiFi setup, and the Marcduino baud and pass-through all survive. With the address at `0x10000`
+the Booster also blanks otadata at `0xE000`, so app0 boots even on a board that was ever OTA- or
+SD-updated. It needs the `min_spiffs` partition table (nvs `0x9000`, otadata `0xE000`, app0
+`0x10000`, app1 `0x1F0000`, spiffs `0x3D0000`): check that in the read_flash dump before flashing.
+
+**The merged image (`.merged.bin`) is for recovery only.** It writes bootloader, partition table,
+boot_app0 and app from `0x0`, and its NVS region (`0x9000-0xDFFF`) is all `0xFF`, so flashing it
+**erases NVS**: the display types, WiFi, and the Marcduino baud and pass-through are reset. A wrong
+Marcduino baud silently breaks the WCB link. On an S3, esptool 5.x may also rewrite the image header.
+
+Never use the Droid-tab remote or batch flash for these images: it never resets otadata.
+
+## Not bit-reproducible
+
+`scripts/pre_extra.py` embeds a build timestamp (`FIRMWARE_FILENAME`) in every build, so a rebuild
+of the same commit has a different sha256. The sha256 in the manifest identifies this one build.
+
+The dependencies float: Reeltwo comes from git HEAD through `lib_deps` and ArduinoJson from
+`^6.21.3`. The manifest's `dependencies` object records what this build resolved (`pio pkg list`),
+the Dependency Graph `pio run -v` printed, and which Reeltwo copy the firmware's headers came from
+(the vendored `lib/Reeltwo`, which is first on the include path). A rebuild months later may differ.
 
 ## Rebuild
 
 ```bash
-~/.platformio/penv/bin/pio run -e wlogicengine32     # classic ESP32
-~/.platformio/penv/bin/pio run -e wlogicengine32s3   # ESP32-S3
+bash firmware/build-images.sh
 ```
 
-Merged images are assembled with `esptool merge_bin` from `.pio/build/<env>/{bootloader,
-partitions,firmware}.bin` + the framework `boot_app0.bin`.
+It refuses to run unless the tree is clean outside `firmware/` and `HEAD` contains
+`src/native/NativeBrightness.h`. It clean-builds `wlogicengine32` and `wlogicengine32s3`, merges each
+image with esptool 4.5.1 `merge_bin` (flash parameters kept as built; bootloader, partitions and
+`boot_app0` offsets and paths read from `pio project metadata`), checks that `app.bin` equals
+`merged.bin[0x10000:]`, that the partition table is `min_spiffs` and that NVS is blank in the merged
+image, then replaces the images here and rewrites `manifest.json`. Commit the result on its own,
+after the commit it was built from.

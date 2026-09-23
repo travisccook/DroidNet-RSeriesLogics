@@ -1,71 +1,198 @@
 {
-  "built": "2026-07-15",
-  "toolchain": "PlatformIO Core 6.1.19, esptool 4.9.0, avrdude (tool-avrdude 1.70300)",
-  "status": "NEVER FLASHED TO HARDWARE \u2014 built and verified against DroidNet's flasher logic only. Bench-test before field use.",
-  "flash_via": "DroidNet web UI -> Flash tab (upload file, connect board over USB).",
+  "built": "2026-09-23",
+  "toolchain": "PlatformIO Core, version 6.2.0; images merged with esptool 4.5.1 (~/.platformio/packages/tool-esptoolpy)",
+  "status": "NEVER FLASHED TO HARDWARE — built and verified against DroidNet's flasher logic only. Flash in place per the runbook (spec section 6); take a read_flash dump first.",
+  "flash_via": "DroidNet web UI -> Flash tab (upload file, board on that Booster's USB).",
   "board": "RSeries Logic Engine (Reeltwo WLogicEngine32 / WReactor32-S3)",
   "source_repo": "https://github.com/travisccook/DroidNet-RSeriesLogics",
-  "source_commit": "78f8b2e",
+  "source_commit": "aa45d79",
+  "native_commands": [
+    "#LEBRI[F|R]<1-255> - RAM-only brightness (library id rseries.cfg.brightness)"
+  ],
+  "reproducibility": "Not bit-reproducible: scripts/pre_extra.py embeds a build timestamp (FIRMWARE_FILENAME) in every build, so each sha256 identifies this one build, not the source commit. Rebuild with: bash firmware/build-images.sh",
   "artifacts": [
     {
-      "file": "DroidNet-RSeriesLogics-esp32-78f8b2e.merged.bin",
-      "role": "PRIMARY \u2014 classic ESP32, full image",
+      "file": "DroidNet-RSeriesLogics-esp32-aa45d79.app.bin",
+      "role": "RECOMMENDED - classic ESP32, app only",
       "chip": "esp32",
       "mcu": "ESP32 (WROOM)",
       "env": "wlogicengine32",
       "droidnet_flash": {
         "file_type": "esp32",
-        "select_chip": "auto/ESP32",
-        "flash_address": "(leave blank \u2014 auto-detected as merged, flashed at 0x0)",
-        "note": "Full image: bootloader+partitions+app. Wipes NVS (stored WiFi/settings). Use for a clean/first flash or recovery."
+        "select_chip": "the chip Detect Board Only reported",
+        "flash_address": "0x10000 (auto; do not clear or change it)",
+        "note": "RECOMMENDED. Flash tab, auto 0x10000, keeps NVS (display types, WiFi, Marcduino baud and pass-through). At 0x10000 the Booster also blanks otadata at 0xE000, so app0 boots even on a board that was OTA- or SD-updated. Needs the min_spiffs partition table: check it in the read_flash dump first."
       },
-      "size_bytes": 1199056,
-      "sha256": "88592b87e0e5f4548ee59df5fcac3dce1a61c4b50671d04ad05c0d191f97b315"
+      "size_bytes": 1134080,
+      "sha256": "94e06b6c0f03a48517c92dbdf90d462199d354a3fcdff6db9f62a0e5182a5e17"
     },
     {
-      "file": "DroidNet-RSeriesLogics-esp32-78f8b2e.app.bin",
-      "role": "classic ESP32, app-only (update)",
+      "file": "DroidNet-RSeriesLogics-esp32-aa45d79.merged.bin",
+      "role": "RECOVERY ONLY - classic ESP32, full image",
       "chip": "esp32",
       "mcu": "ESP32 (WROOM)",
       "env": "wlogicengine32",
       "droidnet_flash": {
         "file_type": "esp32",
-        "select_chip": "auto/ESP32",
-        "flash_address": "0x10000 (auto)",
-        "note": "App only; preserves NVS/settings. Only for a board already provisioned with a matching bootloader + min_spiffs partition table."
+        "select_chip": "the chip Detect Board Only reported",
+        "flash_address": "(leave blank; detected as merged, flashed at 0x0)",
+        "note": "RECOVERY ONLY. Bootloader + min_spiffs partition table + boot_app0 + app. Erases NVS (0x9000-0xDFFF is all 0xFF), which resets the display types, WiFi, and Marcduino baud and pass-through."
       },
-      "size_bytes": 1133520,
-      "sha256": "e3e9f519123fff6b404e2d522bab1ce51d276d4caeb45f36193309b117c44f95"
+      "size_bytes": 1199616,
+      "sha256": "4a6b8da9c355e64fa9a7f267a6648c25fcbaef0296c122daf1ab6f0296bb2e84"
     },
     {
-      "file": "DroidNet-RSeriesLogics-esp32s3-78f8b2e.merged.bin",
-      "role": "PRIMARY \u2014 ESP32-S3, full image",
+      "file": "DroidNet-RSeriesLogics-esp32s3-aa45d79.app.bin",
+      "role": "RECOMMENDED - ESP32-S3, app only",
       "chip": "esp32s3",
       "mcu": "ESP32-S3 (WReactor32 2023)",
       "env": "wlogicengine32s3",
       "droidnet_flash": {
         "file_type": "esp32",
-        "select_chip": "auto (detected from board as ESP32-S3)",
-        "flash_address": "(leave blank \u2014 auto-detected as merged, flashed at 0x0)",
-        "note": "Full image: bootloader+partitions+app. Auto-detected via the partition table at 0x8000 (chip-agnostic) and flashed at 0x0; the S3 chip is detected from the connected board. Wipes NVS (stored WiFi/settings). Built for a 4MB module \u2014 confirm yours matches. (DroidNet builds before the S3 merged-image detection fix needed chip=ESP32-S3 + address 0x0 set by hand.)"
+        "select_chip": "the chip Detect Board Only reported",
+        "flash_address": "0x10000 (auto; do not clear or change it)",
+        "note": "RECOMMENDED. Flash tab, auto 0x10000, keeps NVS (display types, WiFi, Marcduino baud and pass-through). At 0x10000 the Booster also blanks otadata at 0xE000, so app0 boots even on a board that was OTA- or SD-updated. Needs the min_spiffs partition table: check it in the read_flash dump first."
       },
-      "size_bytes": 1103168,
-      "sha256": "6b47a0a585b425e463e555642f717598f0eb58eb6eeec7ad9e2600f71e992642"
+      "size_bytes": 1038080,
+      "sha256": "fa7a7dc85b98ea53a1fdf27564b778a3414e1c1c69cb4a5eaa8e26aabbf663af"
     },
     {
-      "file": "DroidNet-RSeriesLogics-esp32s3-78f8b2e.app.bin",
-      "role": "ESP32-S3, app-only (update)",
+      "file": "DroidNet-RSeriesLogics-esp32s3-aa45d79.merged.bin",
+      "role": "RECOVERY ONLY - ESP32-S3, full image",
       "chip": "esp32s3",
-      "mcu": "ESP32-S3",
+      "mcu": "ESP32-S3 (WReactor32 2023)",
       "env": "wlogicengine32s3",
       "droidnet_flash": {
         "file_type": "esp32",
-        "select_chip": "auto (detected from board as ESP32-S3)",
-        "flash_address": "0x10000 (auto)",
-        "note": "App only; preserves NVS. Provisioned S3 board only."
+        "select_chip": "the chip Detect Board Only reported",
+        "flash_address": "(leave blank; detected as merged, flashed at 0x0)",
+        "note": "RECOVERY ONLY. Bootloader + min_spiffs partition table + boot_app0 + app. Erases NVS (0x9000-0xDFFF is all 0xFF), which resets the display types, WiFi, and Marcduino baud and pass-through. On an S3, esptool 5.x may also rewrite the header."
       },
-      "size_bytes": 1037632,
-      "sha256": "e279d23327f26d3948bdbc5e9a77f003076a5e70db18598abfecf83d8f651338"
+      "size_bytes": 1103616,
+      "sha256": "5e29e659794c0b93fabb2d2dfbd00cce0922efc20ba3e7d2297e0c538f3040ac"
     }
-  ]
+  ],
+  "dependencies": {
+    "wlogicengine32": {
+      "platform": "espressif32 @ 5.2.0+sha.8565a82",
+      "framework": "framework-arduinoespressif32 @ 3.20005.220925",
+      "reeltwo_git": "Reeltwo @ 23.5.7+sha.a4e7292 (lib_deps https://github.com/reeltwo/Reeltwo, unpinned)",
+      "arduinojson": "ArduinoJson @ 6.21.6 (lib_deps ^6.21.3)",
+      "reeltwo_linked": "lib/Reeltwo (version=23.5.3): its src/ is first on the include path, so every Reeltwo header the firmware includes comes from it. The lib_deps git copy is also compiled; both appear in dependency_graph.",
+      "pio_pkg_list": [
+        "Resolving wlogicengine32 dependencies...",
+        "Platform espressif32 @ 5.2.0+sha.8565a82 (required: git+https://github.com/platformio/platform-espressif32.git#v5.2.0)",
+        "├── framework-arduinoespressif32 @ 3.20005.220925 (required: platformio/framework-arduinoespressif32 @ ~3.20005.0)",
+        "├── tool-esptoolpy @ 1.40201.0 (required: platformio/tool-esptoolpy @ ~1.40201.0)",
+        "├── tool-mkfatfs @ 2.0.1 (required: platformio/tool-mkfatfs @ ~2.0.0)",
+        "├── tool-mklittlefs @ 1.203.210628 (required: platformio/tool-mklittlefs @ ~1.203.0)",
+        "├── tool-mkspiffs @ 2.230.0 (required: platformio/tool-mkspiffs @ ~2.230.0)",
+        "└── toolchain-xtensa-esp32 @ 8.4.0+2021r2-patch3 (required: espressif/toolchain-xtensa-esp32 @ 8.4.0+2021r2-patch3)",
+        "Libraries",
+        "├── ArduinoJson @ 6.21.6 (required: bblanchon/ArduinoJson @ ^6.21.3)",
+        "└── Reeltwo @ 23.5.7+sha.a4e7292 (required: git+https://github.com/reeltwo/Reeltwo)"
+      ],
+      "dependency_graph": [
+        "|-- Reeltwo @ 23.5.7+sha.a4e7292 (License: Unknown, URI: git+https://github.com/reeltwo/Reeltwo, Path: .pio/libdeps/wlogicengine32/Reeltwo)",
+        "|   |-- SPI @ 2.0.0 (License: Unknown, Path: ~/.platformio/packages/framework-arduinoespressif32@3.20005.220925/libraries/SPI)",
+        "|   |-- Wire @ 2.0.0 (License: Unknown, Path: ~/.platformio/packages/framework-arduinoespressif32@3.20005.220925/libraries/Wire)",
+        "|   |-- WiFi @ 2.0.0 (License: Unknown, Path: ~/.platformio/packages/framework-arduinoespressif32@3.20005.220925/libraries/WiFi)",
+        "|   |-- FS @ 2.0.0 (License: Unknown, Path: ~/.platformio/packages/framework-arduinoespressif32@3.20005.220925/libraries/FS)",
+        "|   |-- Adafruit NeoPixel @ 1.15.1 (License: Unknown, Path: lib/Adafruit_NeoPixel)",
+        "|   |-- FastLED @ 3.5.0 (License: MIT, Path: lib/FastLED)",
+        "|   |   |-- SPI @ 2.0.0 (License: Unknown, Path: ~/.platformio/packages/framework-arduinoespressif32@3.20005.220925/libraries/SPI)",
+        "|   |-- Preferences @ 2.0.0 (License: Unknown, Path: ~/.platformio/packages/framework-arduinoespressif32@3.20005.220925/libraries/Preferences)",
+        "|   |-- EEPROM @ 2.0.0 (License: Unknown, Path: ~/.platformio/packages/framework-arduinoespressif32@3.20005.220925/libraries/EEPROM)",
+        "|-- ArduinoJson @ 6.21.6 (License: Unknown, Path: .pio/libdeps/wlogicengine32/ArduinoJson)",
+        "|-- Adafruit NeoPixel @ 1.15.1 (License: Unknown, Path: lib/Adafruit_NeoPixel)",
+        "|-- FastLED @ 3.5.0 (License: MIT, Path: lib/FastLED)",
+        "|   |-- SPI @ 2.0.0 (License: Unknown, Path: ~/.platformio/packages/framework-arduinoespressif32@3.20005.220925/libraries/SPI)",
+        "|-- Reeltwo @ 23.5.3 (License: Unknown, Path: lib/Reeltwo)",
+        "|   |-- SPI @ 2.0.0 (License: Unknown, Path: ~/.platformio/packages/framework-arduinoespressif32@3.20005.220925/libraries/SPI)",
+        "|   |-- Wire @ 2.0.0 (License: Unknown, Path: ~/.platformio/packages/framework-arduinoespressif32@3.20005.220925/libraries/Wire)",
+        "|-- ESP32 Async UDP @ 2.0.0 (License: Unknown, Path: ~/.platformio/packages/framework-arduinoespressif32@3.20005.220925/libraries/AsyncUDP)",
+        "|-- FFat @ 2.0.0 (License: Unknown, Path: ~/.platformio/packages/framework-arduinoespressif32@3.20005.220925/libraries/FFat)",
+        "|   |-- FS @ 2.0.0 (License: Unknown, Path: ~/.platformio/packages/framework-arduinoespressif32@3.20005.220925/libraries/FS)",
+        "|-- FS @ 2.0.0 (License: Unknown, Path: ~/.platformio/packages/framework-arduinoespressif32@3.20005.220925/libraries/FS)",
+        "|-- SD @ 2.0.0 (License: Unknown, Path: ~/.platformio/packages/framework-arduinoespressif32@3.20005.220925/libraries/SD)",
+        "|   |-- FS @ 2.0.0 (License: Unknown, Path: ~/.platformio/packages/framework-arduinoespressif32@3.20005.220925/libraries/FS)",
+        "|   |-- SPI @ 2.0.0 (License: Unknown, Path: ~/.platformio/packages/framework-arduinoespressif32@3.20005.220925/libraries/SPI)",
+        "|-- SPI @ 2.0.0 (License: Unknown, Path: ~/.platformio/packages/framework-arduinoespressif32@3.20005.220925/libraries/SPI)",
+        "|-- SPIFFS @ 2.0.0 (License: Unknown, Path: ~/.platformio/packages/framework-arduinoespressif32@3.20005.220925/libraries/SPIFFS)",
+        "|   |-- FS @ 2.0.0 (License: Unknown, Path: ~/.platformio/packages/framework-arduinoespressif32@3.20005.220925/libraries/FS)",
+        "|-- ArduinoOTA @ 2.0.0 (License: Unknown, Path: ~/.platformio/packages/framework-arduinoespressif32@3.20005.220925/libraries/ArduinoOTA)",
+        "|   |-- Update @ 2.0.0 (License: Unknown, Path: ~/.platformio/packages/framework-arduinoespressif32@3.20005.220925/libraries/Update)",
+        "|   |-- WiFi @ 2.0.0 (License: Unknown, Path: ~/.platformio/packages/framework-arduinoespressif32@3.20005.220925/libraries/WiFi)",
+        "|   |-- ESPmDNS @ 2.0.0 (License: Unknown, Path: ~/.platformio/packages/framework-arduinoespressif32@3.20005.220925/libraries/ESPmDNS)",
+        "|   |   |-- WiFi @ 2.0.0 (License: Unknown, Path: ~/.platformio/packages/framework-arduinoespressif32@3.20005.220925/libraries/WiFi)",
+        "|-- ESPmDNS @ 2.0.0 (License: Unknown, Path: ~/.platformio/packages/framework-arduinoespressif32@3.20005.220925/libraries/ESPmDNS)",
+        "|   |-- WiFi @ 2.0.0 (License: Unknown, Path: ~/.platformio/packages/framework-arduinoespressif32@3.20005.220925/libraries/WiFi)",
+        "|-- Preferences @ 2.0.0 (License: Unknown, Path: ~/.platformio/packages/framework-arduinoespressif32@3.20005.220925/libraries/Preferences)",
+        "|-- Wire @ 2.0.0 (License: Unknown, Path: ~/.platformio/packages/framework-arduinoespressif32@3.20005.220925/libraries/Wire)",
+        "|-- WiFi @ 2.0.0 (License: Unknown, Path: ~/.platformio/packages/framework-arduinoespressif32@3.20005.220925/libraries/WiFi)",
+        "|-- EEPROM @ 2.0.0 (License: Unknown, Path: ~/.platformio/packages/framework-arduinoespressif32@3.20005.220925/libraries/EEPROM)"
+      ]
+    },
+    "wlogicengine32s3": {
+      "platform": "espressif32 @ 5.2.0+sha.8565a82",
+      "framework": "framework-arduinoespressif32 @ 3.20005.220925",
+      "reeltwo_git": "Reeltwo @ 23.5.7+sha.a4e7292 (lib_deps https://github.com/reeltwo/Reeltwo, unpinned)",
+      "arduinojson": "ArduinoJson @ 6.21.6 (lib_deps ^6.21.3)",
+      "reeltwo_linked": "lib/Reeltwo (version=23.5.3): its src/ is first on the include path, so every Reeltwo header the firmware includes comes from it. The lib_deps git copy is also compiled; both appear in dependency_graph.",
+      "pio_pkg_list": [
+        "Resolving wlogicengine32s3 dependencies...",
+        "Platform espressif32 @ 5.2.0+sha.8565a82 (required: git+https://github.com/platformio/platform-espressif32.git#v5.2.0)",
+        "├── framework-arduinoespressif32 @ 3.20005.220925 (required: platformio/framework-arduinoespressif32 @ ~3.20005.0)",
+        "├── tool-esptoolpy @ 1.40201.0 (required: platformio/tool-esptoolpy @ ~1.40201.0)",
+        "├── tool-mkfatfs @ 2.0.1 (required: platformio/tool-mkfatfs @ ~2.0.0)",
+        "├── tool-mklittlefs @ 1.203.210628 (required: platformio/tool-mklittlefs @ ~1.203.0)",
+        "├── tool-mkspiffs @ 2.230.0 (required: platformio/tool-mkspiffs @ ~2.230.0)",
+        "├── toolchain-riscv32-esp @ 8.4.0+2021r2-patch5 (required: espressif/toolchain-riscv32-esp @ 8.4.0+2021r2-patch5)",
+        "└── toolchain-xtensa-esp32s3 @ 8.4.0+2021r2-patch3 (required: espressif/toolchain-xtensa-esp32s3 @ 8.4.0+2021r2-patch3)",
+        "Libraries",
+        "├── ArduinoJson @ 6.21.6 (required: bblanchon/ArduinoJson @ ^6.21.3)",
+        "└── Reeltwo @ 23.5.7+sha.a4e7292 (required: git+https://github.com/reeltwo/Reeltwo)"
+      ],
+      "dependency_graph": [
+        "|-- Reeltwo @ 23.5.7+sha.a4e7292 (License: Unknown, URI: git+https://github.com/reeltwo/Reeltwo, Path: .pio/libdeps/wlogicengine32s3/Reeltwo)",
+        "|   |-- SPI @ 2.0.0 (License: Unknown, Path: ~/.platformio/packages/framework-arduinoespressif32@3.20005.220925/libraries/SPI)",
+        "|   |-- Wire @ 2.0.0 (License: Unknown, Path: ~/.platformio/packages/framework-arduinoespressif32@3.20005.220925/libraries/Wire)",
+        "|   |-- WiFi @ 2.0.0 (License: Unknown, Path: ~/.platformio/packages/framework-arduinoespressif32@3.20005.220925/libraries/WiFi)",
+        "|   |-- FS @ 2.0.0 (License: Unknown, Path: ~/.platformio/packages/framework-arduinoespressif32@3.20005.220925/libraries/FS)",
+        "|   |-- Adafruit NeoPixel @ 1.15.1 (License: Unknown, Path: lib/Adafruit_NeoPixel)",
+        "|   |-- FastLED @ 3.5.0 (License: MIT, Path: lib/FastLED)",
+        "|   |   |-- SPI @ 2.0.0 (License: Unknown, Path: ~/.platformio/packages/framework-arduinoespressif32@3.20005.220925/libraries/SPI)",
+        "|   |-- Preferences @ 2.0.0 (License: Unknown, Path: ~/.platformio/packages/framework-arduinoespressif32@3.20005.220925/libraries/Preferences)",
+        "|   |-- EEPROM @ 2.0.0 (License: Unknown, Path: ~/.platformio/packages/framework-arduinoespressif32@3.20005.220925/libraries/EEPROM)",
+        "|-- ArduinoJson @ 6.21.6 (License: Unknown, Path: .pio/libdeps/wlogicengine32s3/ArduinoJson)",
+        "|-- Adafruit NeoPixel @ 1.15.1 (License: Unknown, Path: lib/Adafruit_NeoPixel)",
+        "|-- FastLED @ 3.5.0 (License: MIT, Path: lib/FastLED)",
+        "|   |-- SPI @ 2.0.0 (License: Unknown, Path: ~/.platformio/packages/framework-arduinoespressif32@3.20005.220925/libraries/SPI)",
+        "|-- Reeltwo @ 23.5.3 (License: Unknown, Path: lib/Reeltwo)",
+        "|   |-- SPI @ 2.0.0 (License: Unknown, Path: ~/.platformio/packages/framework-arduinoespressif32@3.20005.220925/libraries/SPI)",
+        "|   |-- Wire @ 2.0.0 (License: Unknown, Path: ~/.platformio/packages/framework-arduinoespressif32@3.20005.220925/libraries/Wire)",
+        "|-- ESP32 Async UDP @ 2.0.0 (License: Unknown, Path: ~/.platformio/packages/framework-arduinoespressif32@3.20005.220925/libraries/AsyncUDP)",
+        "|-- FFat @ 2.0.0 (License: Unknown, Path: ~/.platformio/packages/framework-arduinoespressif32@3.20005.220925/libraries/FFat)",
+        "|   |-- FS @ 2.0.0 (License: Unknown, Path: ~/.platformio/packages/framework-arduinoespressif32@3.20005.220925/libraries/FS)",
+        "|-- FS @ 2.0.0 (License: Unknown, Path: ~/.platformio/packages/framework-arduinoespressif32@3.20005.220925/libraries/FS)",
+        "|-- SD @ 2.0.0 (License: Unknown, Path: ~/.platformio/packages/framework-arduinoespressif32@3.20005.220925/libraries/SD)",
+        "|   |-- FS @ 2.0.0 (License: Unknown, Path: ~/.platformio/packages/framework-arduinoespressif32@3.20005.220925/libraries/FS)",
+        "|   |-- SPI @ 2.0.0 (License: Unknown, Path: ~/.platformio/packages/framework-arduinoespressif32@3.20005.220925/libraries/SPI)",
+        "|-- SPI @ 2.0.0 (License: Unknown, Path: ~/.platformio/packages/framework-arduinoespressif32@3.20005.220925/libraries/SPI)",
+        "|-- SPIFFS @ 2.0.0 (License: Unknown, Path: ~/.platformio/packages/framework-arduinoespressif32@3.20005.220925/libraries/SPIFFS)",
+        "|   |-- FS @ 2.0.0 (License: Unknown, Path: ~/.platformio/packages/framework-arduinoespressif32@3.20005.220925/libraries/FS)",
+        "|-- ArduinoOTA @ 2.0.0 (License: Unknown, Path: ~/.platformio/packages/framework-arduinoespressif32@3.20005.220925/libraries/ArduinoOTA)",
+        "|   |-- Update @ 2.0.0 (License: Unknown, Path: ~/.platformio/packages/framework-arduinoespressif32@3.20005.220925/libraries/Update)",
+        "|   |-- WiFi @ 2.0.0 (License: Unknown, Path: ~/.platformio/packages/framework-arduinoespressif32@3.20005.220925/libraries/WiFi)",
+        "|   |-- ESPmDNS @ 2.0.0 (License: Unknown, Path: ~/.platformio/packages/framework-arduinoespressif32@3.20005.220925/libraries/ESPmDNS)",
+        "|   |   |-- WiFi @ 2.0.0 (License: Unknown, Path: ~/.platformio/packages/framework-arduinoespressif32@3.20005.220925/libraries/WiFi)",
+        "|-- ESPmDNS @ 2.0.0 (License: Unknown, Path: ~/.platformio/packages/framework-arduinoespressif32@3.20005.220925/libraries/ESPmDNS)",
+        "|   |-- WiFi @ 2.0.0 (License: Unknown, Path: ~/.platformio/packages/framework-arduinoespressif32@3.20005.220925/libraries/WiFi)",
+        "|-- Preferences @ 2.0.0 (License: Unknown, Path: ~/.platformio/packages/framework-arduinoespressif32@3.20005.220925/libraries/Preferences)",
+        "|-- Wire @ 2.0.0 (License: Unknown, Path: ~/.platformio/packages/framework-arduinoespressif32@3.20005.220925/libraries/Wire)",
+        "|-- WiFi @ 2.0.0 (License: Unknown, Path: ~/.platformio/packages/framework-arduinoespressif32@3.20005.220925/libraries/WiFi)",
+        "|-- EEPROM @ 2.0.0 (License: Unknown, Path: ~/.platformio/packages/framework-arduinoespressif32@3.20005.220925/libraries/EEPROM)"
+      ]
+    }
+  }
 }
