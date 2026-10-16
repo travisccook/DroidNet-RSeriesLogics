@@ -8,9 +8,11 @@ and size, the flash settings, and the dependency versions the build resolved.
 > Flash in place per the runbook (spec section 6); take a read_flash dump first.
 
 These images carry the one native command this fork adds, `#LEBRI[F|R]<1-255>` (RAM-only brightness,
-library id `rseries.cfg.brightness`; see the main [README](../README.md)). They also bring everything
-else the fork changes, none of which has run on hardware either: the WiFi connect-else-AP state
-machine, rendering on core 1, the Driveable-Animation Contract layer and the 96-byte Marcduino buffer.
+library id `rseries.cfg.brightness`; see the main [README](../README.md)), and the WDP device
+announce: every 25-30 s the board sends `@WDP1 {"type":"R-Series Logics","fw":"<sha>",...}` to the
+WCB on Serial1, where `<sha>` is `source_commit`. They also bring everything else the fork changes,
+none of which has run on hardware either: the WiFi connect-else-AP state machine, rendering on
+core 1, the Driveable-Animation Contract layer and the 96-byte Marcduino buffer.
 
 ## Which file
 
