@@ -7,6 +7,7 @@
 #   1. contract_core.h parser unit tests
 #   1b. wifi_connect_core.h FSM unit tests
 #   1c. wdp_announce_core.h WDP device announce unit tests (shared with the PSI and Flthy forks)
+#   1d. wdp_fork.h: this fork's real WDP identity builds its line, and the Serial1 adapter
 #   2. ContractLogics.h firmware-layer type-check against a mock of the engine API
 #   3. Marcduino command-buffer width guard (the v1.2 accent keys push a scored line past 63)
 #   4. parser fuzz + differential (ASan/UBSan, deterministic)
@@ -27,6 +28,12 @@ echo "[1c/9] wdp_announce_core WDP device announce unit tests"
 # -std=c++11: the AVR forks build this same header with avr-gcc's gnu++11.
 clang++ -std=c++11 -Wall -Wextra -Werror -O0 test_wdp_announce_core.cpp -o /tmp/rseries_wdp_test
 /tmp/rseries_wdp_test
+echo "[1d/9] wdp_fork RSeries WDP identity + Serial1 adapter"
+# Fork-local. Builds the line from the header's own WDP_TYPE/WDP_CAPS with a dirty build's fw
+# ("<sha>-dirty") and with any fw up to the WCB's 27-char limit, and drives wdpForkTick()
+# against a mock port. -std=c++11: the ESP32 core builds with gnu++11.
+clang++ -std=c++11 -Wall -Wextra -Werror -O0 test_wdp_fork.cpp -o /tmp/rseries_wdp_fork_test
+/tmp/rseries_wdp_fork_test
 echo "[2/9] ContractLogics.h firmware type-check"
 clang++ -std=c++17 -Wall -Wextra compile_contract_logics.cpp -o /tmp/rseries_fw_syntax
 /tmp/rseries_fw_syntax

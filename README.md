@@ -6,7 +6,8 @@ by **Rimim** (Mimir Reynisson).
 
 Almost everything in this repository is their work. This fork adds one small layer (about 700 lines
 across two headers plus a host test harness) so an external tool can drive the logic displays in
-time with music, plus one native command, `#LEBRI`, that sets the logic displays' brightness.
+time with music, plus one native command, `#LEBRI`, that sets the logic displays' brightness, and
+an announce line that tells the WCB on Serial1 what this board is.
 Everything the firmware already did, it still does, unchanged.
 
 ---
@@ -56,7 +57,7 @@ Be precise about what is and is not verified, because the two are easy to blur:
 
 **What IS verified.** It cross-compiles for the real microcontroller. `pio run` builds a complete
 ESP32 firmware image with the real xtensa toolchain, and the real linker signs off on it:
-**1,128,309 B of flash (57.4%)** and 63,396 B of SRAM (19.3%). Plus `bash test/host/run.sh` — 341
+**1,129,009 B of flash (57.4%)** and 63,532 B of SRAM (19.4%). Plus `bash test/host/run.sh` — 341
 checks against the wire parser, beat clock and effect math, plus a type-check of the render layer
 against a mock of the engine API, and it now finishes by doing that cross-compile itself.
 
@@ -179,6 +180,36 @@ Its DroidNet command library id is `rseries.cfg.brightness` (board `droidnet-rse
 `src/native/NativeBrightness.h` (the action and the controller capture) and five marked lines in
 `src/main.cpp`. It does not touch the contract layer, effect 106 or the contract `B` verb.
 
+## WDP device announce
+
+The board tells the WCB it is wired to what it is. Greg Hulette's WCB firmware (7.0.1) learns what
+sits on each of its serial ports from one line the device sends every 25-30 seconds (WDP device
+announce, `docs/WDP_DEVICE_ANNOUNCE.md` in greghulette/Wireless_Communication_Board-WCB):
+
+```text
+@WDP1 {"type":"R-Series Logics","fw":"<commit>","caps":["droidnet.contract","led.logic"]}
+```
+
+- **On Serial1**, the Marcduino serial port the WCB is wired to, at that port's baud (default 9600),
+  board TX to WCB RX. Nothing else in the firmware writes to Serial1. With Marcduino serial switched
+  off, Serial1 never starts and nothing is sent.
+- **When:** first 0.5-3 s after the port starts at boot, then every 25-30 s, each interval picked
+  afresh. The jitter is seeded from the hardware RNG mixed with the chip's factory MAC, so boards
+  that power up together do not announce in lockstep.
+- **`fw` is the build's commit:** `git rev-parse --short=7 HEAD` when it was built
+  (`scripts/pre_extra.py`), the same sha the prebuilt images in `firmware/` are named by. It gets
+  `-dirty` when the tree had changes outside `firmware/`, and is `unknown` when git could not say.
+  The line is 89 bytes with a clean commit, 95 with `-dirty`.
+- **It never blocks.** `mainLoop()` writes only as much of the line as the UART reports room for
+  (`availableForWrite()`, 128 bytes on an idle port), so a whole line normally goes in one write.
+- The WCB consumes the line and never forwards it, so no other board sees it. `?WDP,DA` on the WCB
+  shows what each port announced. `R-Series Logics` is the name the WCB Wizard itself uses for this
+  board (`Wizard/device-labels.js`).
+
+The code is `src/wdp/wdp_announce_core.h` (the line and its schedule, pure C++, shared byte for byte
+with the PSI Pro and FlthyHPs forks), `src/wdp/wdp_fork.h` (this board's identity and the two calls)
+and three marked lines in `src/main.cpp`. Like the rest of this fork it has not run on a board.
+
 ---
 
 ## What is theirs and what is ours
@@ -224,6 +255,10 @@ None of that is upstream's, and none of it is part of the contract layer. It is 
 | `src/native/native_brightness_parse.h` | The `#LEBRI` parser. Pure C++, no Arduino, FastLED or Reeltwo. | 62 |
 | `src/native/NativeBrightness.h` | The `#LEBRI` Marcduino action and the FastLED controller capture. Not part of the contract layer. | 87 |
 | `src/main.cpp` (native brightness) | One `#include` and the controller capture around `FLD_init()` and `RLD_init()`, each line marked `DroidNet native brightness`. | +5 |
+| `src/wdp/wdp_announce_core.h` | The WDP announce line and its schedule. Pure C++, byte-identical across the three DroidNet board forks. | 158 |
+| `src/wdp/wdp_fork.h` | This board's WDP identity and the Serial1 adapter. | 54 |
+| `src/main.cpp` (WDP announce) | One `#include`, `wdpForkInit()` after `Serial1.begin()`, `wdpForkTick()` in `mainLoop()`. | +3 |
+| `scripts/pre_extra.py` (WDP announce) | Defines `WDP_FW`, the build's commit. | +26 |
 | `DROIDNET_FORK.md`, this README | Fork docs. | — |
 
 The bounds-check fix in `main.cpp` is a one-character change to a pre-existing off-by-one in the
@@ -262,6 +297,8 @@ headers. The other four are documentation (this README, `README_UPSTREAM.md`, `D
 bash test/host/run.sh
 # [1/9]  contract_core parser unit tests               -> OK  341/341 checks passed
 # [1b/9] wifi_connect_core FSM unit tests              -> OK  20/20 checks passed
+# [1c/9] wdp_announce_core WDP announce unit tests     -> OK  37506/37506 checks passed
+# [1d/9] wdp_fork RSeries WDP identity + adapter       -> OK  19/19 checks passed
 # [2/9]  ContractLogics.h firmware type-check          -> OK
 # [3/9]  Marcduino command-buffer width guard          -> OK
 # [4/9]  parser fuzz + differential (ASan/UBSan)       -> OK  1554686/1554686 checks passed
@@ -280,8 +317,8 @@ Stages 1-8 need no hardware and no toolchain beyond clang. Stage 9 is the real c
 "it compiles" a claim about the firmware rather than a claim about our mock. If PlatformIO is not
 installed it skips cleanly and tells you what you did not check.
 
-Firmware (PlatformIO): `pio run` builds both envs — `wlogicengine32` (ESP32, 1,128,309 B / 57.4%)
-and `wlogicengine32s3` (ESP32-S3, 1,037,697 B / 52.8%). The S3 env used to be unbuildable; see the
+Firmware (PlatformIO): `pio run` builds both envs — `wlogicengine32` (ESP32, 1,129,009 B / 57.4%)
+and `wlogicengine32s3` (ESP32-S3, 1,038,257 B / 52.8%). The S3 env used to be unbuildable; see the
 warning above for what was wrong and for the hardware-config caveats that still apply to it.
 See [README_UPSTREAM.md](README_UPSTREAM.md) for the real build and flashing instructions — they are
 otherwise unchanged.
@@ -313,5 +350,6 @@ The contract layer: **Travis Cook**, 2026.
 
 **LGPL-2.1.** The upstream firmware and the vendored `lib/Reeltwo` are LGPL-2.1 (Joymonkey, Rimim);
 the root [LICENSE](LICENSE) file is upstream's own, byte-identical. The DroidNet contract layer
-(`src/contract/*`, `test/host/*`) and the native brightness command (`src/native/*`) are Copyright
+(`src/contract/*`, `test/host/*`), the native brightness command (`src/native/*`) and the WDP
+announce (`src/wdp/*`) are Copyright
 (c) 2026 Travis Cook, LGPL-2.1-only as distributed here. Also vendored: `lib/FastLED` (MIT) and `lib/Adafruit_NeoPixel` (LGPL-3.0).

@@ -446,6 +446,7 @@ enum
 #include "effects/PlasmaEffect.h"
 #include "effects/ColorWheel.h"
 #include "contract/ContractLogics.h"   // DroidNet Driveable-Animation Contract (fork-owned)
+#include "wdp/wdp_fork.h"   // DroidNet WDP device announce to the WCB on Serial1 (fork-owned)
 
 LogicEffect CustomLogicEffectSelector(unsigned selectSequence)
 {
@@ -858,6 +859,7 @@ void setup()
         Serial1.begin(baudrate1, SERIAL_8N1, SERIAL1_RX_PIN, SERIAL1_TX_PIN);
         Serial2.begin(baudrate2, SERIAL_8N1, SERIAL2_RX_PIN, SERIAL2_TX_PIN);
         marcduinoSerial.setStream(&Serial1, (preferences.getBool(PREFERENCE_MARCSERIAL_PASS, MARC_SERIAL_PASS)) ? &Serial2 : &Serial);
+        wdpForkInit(wdpForkSeed(esp_random(), ESP.getEfuseMac()), millis());   // DroidNet WDP announce
     }
 
     // Initialize FLD
@@ -1272,6 +1274,7 @@ void mainLoop()
 {
     AnimatedEvent::process();
     contractTick();   // DroidNet contract: advance the Phase-2 section score off the beat-clock
+    wdpForkTick(Serial1, millis());   // DroidNet WDP announce: never blocks (writes only free TX room)
 #ifdef USE_MENUS
     sDisplay.process();
 #endif

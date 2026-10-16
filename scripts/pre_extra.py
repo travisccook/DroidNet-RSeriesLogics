@@ -52,3 +52,29 @@ if os.path.exists(html_script):
 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 firmware_filename = f"RSeriesLogic_{timestamp}.bin"
 env.Append(CPPDEFINES=[("FIRMWARE_FILENAME", f'\\"{firmware_filename}\\"')])
+
+
+# DroidNet WDP device announce: the build's commit, sent as "fw" (src/wdp/wdp_fork.h).
+# The same short sha firmware/build-images.sh names the images by, plus "-dirty" when the tree
+# has changes outside firmware/ (the prebuilt images there are outputs, not sources), or
+# "unknown" when git cannot say. StringifyMacro is PlatformIO's helper for a string-valued
+# define (docs: build_flags, "Stringification"); it adds the quotes and escapes.
+def wdp_fw_version(cwd):
+    def git(*args):
+        result = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip())
+        return result.stdout.strip()
+
+    try:
+        sha = git("rev-parse", "--short=7", "HEAD")
+        dirty = git("status", "--porcelain", "--", ".", ":(exclude)firmware")
+    except Exception as e:
+        print(f"Warning: WDP fw falls back to 'unknown' ({e})")
+        return "unknown"
+    return sha + "-dirty" if dirty else sha
+
+
+wdp_fw = wdp_fw_version(project_dir)
+print(f"WDP announce fw: {wdp_fw}")
+env.Append(CPPDEFINES=[("WDP_FW", env.StringifyMacro(wdp_fw))])
