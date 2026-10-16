@@ -4,8 +4,11 @@ Ready-to-flash images built by [`build-images.sh`](build-images.sh) from a clean
 named `source_commit` in [`manifest.json`](manifest.json). The manifest also has each file's sha256
 and size, the flash settings, and the dependency versions the build resolved.
 
-> **NEVER FLASHED TO HARDWARE** — built and verified against DroidNet's flasher logic only.
-> Flash in place per the runbook (spec section 6); take a read_flash dump first.
+> **Flashed to hardware once (2026-10-16):** the classic ESP32 `.app.bin` runs on the C2-B5 dome R-Series board
+> (ESP32-D0WD-V3 WROVER), flashed over WiFi through the board's own Reflash page (`http://<board-ip>/firmware`,
+> or `curl --data-binary @<file>.app.bin -H "Expect:" http://<board-ip>/upload/firmware`; the reply is HTTP 200
+> even on failure, so check the console for `Update Success`). The ESP32-S3 images have never been flashed.
+> Over USB, flash in place per the runbook (spec section 6); take a read_flash dump first.
 
 These images carry the one native command this fork adds, `#LEBRI[F|R]<1-255>` (RAM-only brightness,
 library id `rseries.cfg.brightness`; see the main [README](../README.md)), and the WDP device

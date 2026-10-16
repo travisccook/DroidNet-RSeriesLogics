@@ -1,7 +1,7 @@
 {
   "built": "2026-10-16",
   "toolchain": "PlatformIO Core, version 6.2.0; images merged with esptool 4.5.1 (~/.platformio/packages/tool-esptoolpy)",
-  "status": "NEVER FLASHED TO HARDWARE — built and verified against DroidNet's flasher logic only. Flash in place per the runbook (spec section 6); take a read_flash dump first.",
+  "status": "ESP32 .app.bin flashed to hardware 2026-10-16: the C2-B5 dome R-Series board (ESP32-D0WD-V3 WROVER) runs it, flashed over WiFi through the board's own Reflash page (http://<board-ip>/firmware). ESP32-S3 images never flashed. Over USB, flash in place per the runbook (spec section 6); take a read_flash dump first.",
   "flash_via": "DroidNet web UI -> Flash tab (upload file, board on that Booster's USB).",
   "board": "RSeries Logic Engine (Reeltwo WLogicEngine32 / WReactor32-S3)",
   "source_repo": "https://github.com/travisccook/DroidNet-RSeriesLogics",
