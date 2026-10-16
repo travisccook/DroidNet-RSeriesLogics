@@ -6,6 +6,7 @@
 # Host checks for the RSeries contract fork (no hardware / no ESP32 toolchain needed):
 #   1. contract_core.h parser unit tests
 #   1b. wifi_connect_core.h FSM unit tests
+#   1c. wdp_announce_core.h WDP device announce unit tests (shared with the PSI and Flthy forks)
 #   2. ContractLogics.h firmware-layer type-check against a mock of the engine API
 #   3. Marcduino command-buffer width guard (the v1.2 accent keys push a scored line past 63)
 #   4. parser fuzz + differential (ASan/UBSan, deterministic)
@@ -22,6 +23,10 @@ clang++ -std=c++17 -Wall -Wextra -O0 test_contract_core.cpp -o /tmp/rseries_cont
 echo "[1b/9] wifi_connect_core FSM unit tests"
 clang++ -std=c++17 -Wall -Wextra -O0 test_wifi_connect_core.cpp -o /tmp/rseries_wifi_test
 /tmp/rseries_wifi_test
+echo "[1c/9] wdp_announce_core WDP device announce unit tests"
+# -std=c++11: the AVR forks build this same header with avr-gcc's gnu++11.
+clang++ -std=c++11 -Wall -Wextra -Werror -O0 test_wdp_announce_core.cpp -o /tmp/rseries_wdp_test
+/tmp/rseries_wdp_test
 echo "[2/9] ContractLogics.h firmware type-check"
 clang++ -std=c++17 -Wall -Wextra compile_contract_logics.cpp -o /tmp/rseries_fw_syntax
 /tmp/rseries_fw_syntax
