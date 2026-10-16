@@ -53,11 +53,11 @@ WiFi setup, colour tables). Read that first. This README only covers what the fo
 
 ## Status
 
-**The ESP32 build runs on the author's droid (C2-B5) since 2026-10-16.** It was flashed over WiFi through the board's own Reflash page and runs on the dome R-Series board. The ESP32-S3 build compiles but has not been run on a board yet.
+**Work in progress.** This DroidNet build is provided as is, without warranty of any kind. Use it at your own risk. To go back, flash the upstream firmware ([README_UPSTREAM.md](README_UPSTREAM.md)).
 
-Be precise about what is and is not verified, because the two are easy to blur:
+The ESP32 build runs on the author's droid (C2-B5) and has since 2026-10-16; it was flashed over WiFi through the board's own Reflash page. The ESP32-S3 build is not supported yet: it compiles, but its hardware config is unconfirmed (see below).
 
-**What IS verified.** It cross-compiles for the real microcontroller. `pio run` builds a complete
+**Testing.** It cross-compiles for the real microcontroller. `pio run` builds a complete
 ESP32 firmware image with the real xtensa toolchain, and the real linker signs off on it:
 **1,129,009 B of flash (57.4%)** and 63,532 B of SRAM (19.4%). Plus `bash test/host/run.sh` — 341
 checks against the wire parser, beat clock and effect math, plus a type-check of the render layer
@@ -68,10 +68,6 @@ state. It is no longer. It is worth saying why it matters: the first real build 
 bug no mock could see — FastLED declares `RGB` as an *enumerator* of `fl::EOrder`, which name-hides a
 `struct RGB`, and our shared contract core defined exactly that struct. It could never have compiled
 on this board. The mock did not model `EOrder`, so the type-check passed happily for months.
-
-**What is NOT verified.** Everything only a real board can tell you. **A successful link is not a
-bench test.** No bench measurements: no scope, no timing, no brightness, no current draw
-has been observed. Apart from the ESP32 build running on that one droid, the code has never executed outside a host test, and the ESP32-S3 build never has.
 
 **Both environments now build.** `wlogicengine32s3` (ESP32-S3) previously could not be built at all,
 and an earlier revision of this README explained that with a claim that was simply **wrong** — it said
@@ -94,17 +90,13 @@ What was actually broken was two things, one hiding under the other:
 `wlogicengine32` was provably unaffected: it linked at exactly the same byte count before and after
 the change. The platform stays on v5.2.0 — no bump, no new toolchain, nothing to re-validate.
 
-**But a compile is not a run, and the S3 env has almost certainly never worked.** It is a fork-local
+**A compile is not a run, and the S3 env is not supported yet.** It is a fork-local
 hand-translation of upstream's `make TARGET=ESP32S3` (upstream has no S3 PlatformIO env at all), and
 it carries at least three hardware-config guesses a green build cannot catch: `ARDUINO_USB_CDC_ON_BOOT`
 is **not** set, so with the board's `ARDUINO_USB_MODE=1` the `Serial` console maps to UART0 rather than
 the USB port — on a board whose only console is USB, this image would very likely just look **silent**;
 `BOARD_HAS_PSRAM` is declared on a devkit profile that has none; and `board = esp32-s3-devkitc-1` is a
 generic devkit standing in for a WReactor32-2023. Treat the S3 target as "it compiles", nothing more.
-
-Before putting the S3 build on a droid: bench it on a bare board with the display panels disconnected
-from anything you care about, and check current draw. The stock firmware from upstream is the safe,
-proven thing; if anything misbehaves, flash it back.
 
 ---
 
@@ -210,7 +202,7 @@ announce, `docs/WDP_DEVICE_ANNOUNCE.md` in greghulette/Wireless_Communication_Bo
 
 The code is `src/wdp/wdp_announce_core.h` (the line and its schedule, pure C++, shared byte for byte
 with the PSI Pro and FlthyHPs forks), `src/wdp/wdp_fork.h` (this board's identity and the two calls)
-and three marked lines in `src/main.cpp`. Like the rest of this fork it has not run on a board.
+and three marked lines in `src/main.cpp`.
 
 ---
 
@@ -321,7 +313,7 @@ installed it skips cleanly and tells you what you did not check.
 
 Firmware (PlatformIO): `pio run` builds both envs — `wlogicengine32` (ESP32, 1,129,009 B / 57.4%)
 and `wlogicengine32s3` (ESP32-S3, 1,038,257 B / 52.8%). The S3 env used to be unbuildable; see the
-warning above for what was wrong and for the hardware-config caveats that still apply to it.
+Status and S3 notes above for what was wrong and for the hardware-config caveats that still apply to it.
 See [README_UPSTREAM.md](README_UPSTREAM.md) for the real build and flashing instructions — they are
 otherwise unchanged.
 
