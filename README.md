@@ -1,5 +1,7 @@
 # DroidNet-RSeriesLogics
 
+Part of [DroidNet](https://github.com/travisccook/DroidNetSignalBooster-releases), the Signal Booster for droids. This is one of its board firmwares.
+
 An additive fork of **[WLogicEngine32](https://github.com/reeltwo/WLogicEngine32)** — the RSeries
 Logic Engine firmware, originally written by **Joymonkey** (Paul Murphy) and updated and maintained
 by **Rimim** (Mimir Reynisson).
@@ -49,9 +51,9 @@ WiFi setup, colour tables). Read that first. This README only covers what the fo
 
 ---
 
-## NEVER RUN THIS ON HARDWARE YET
+## Status
 
-**No code in this fork has ever run on a real board. Not once.**
+**The ESP32 build runs on the author's droid (C2-B5) since 2026-10-16.** It was flashed over WiFi through the board's own Reflash page and runs on the dome R-Series board. The ESP32-S3 build compiles but has not been run on a board yet.
 
 Be precise about what is and is not verified, because the two are easy to blur:
 
@@ -68,8 +70,8 @@ bug no mock could see — FastLED declares `RGB` as an *enumerator* of `fl::EOrd
 on this board. The mock did not model `EOrder`, so the type-check passed happily for months.
 
 **What is NOT verified.** Everything only a real board can tell you. **A successful link is not a
-bench test.** No bench flash, no scope, no LEDs, no droid. No timing, no brightness, no current draw
-has ever been observed. The code has never executed a single instruction outside a host test.
+bench test.** No bench measurements: no scope, no timing, no brightness, no current draw
+has been observed. Apart from the ESP32 build running on that one droid, the code has never executed outside a host test, and the ESP32-S3 build never has.
 
 **Both environments now build.** `wlogicengine32s3` (ESP32-S3) previously could not be built at all,
 and an earlier revision of this README explained that with a claim that was simply **wrong** — it said
@@ -100,9 +102,9 @@ the USB port — on a board whose only console is USB, this image would very lik
 `BOARD_HAS_PSRAM` is declared on a devkit profile that has none; and `board = esp32-s3-devkitc-1` is a
 generic devkit standing in for a WReactor32-2023. Treat the S3 target as "it compiles", nothing more.
 
-Before this goes anywhere near a droid: bench it on a bare board with the display panels disconnected
+Before putting the S3 build on a droid: bench it on a bare board with the display panels disconnected
 from anything you care about, and check current draw. The stock firmware from upstream is the safe,
-proven thing; this is not, yet.
+proven thing; if anything misbehaves, flash it back.
 
 ---
 
