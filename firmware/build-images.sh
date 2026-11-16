@@ -225,8 +225,10 @@ manifest = {
     "built": datetime.date.today().isoformat(),
     "toolchain": (f"{pio_version}; images merged with esptool {esptool_version} "
                   "(~/.platformio/packages/tool-esptoolpy)"),
-    "status": ("NEVER FLASHED TO HARDWARE — built and verified against DroidNet's flasher logic only. "
-               "Flash in place per the runbook (spec section 6); take a read_flash dump first."),
+    # What has and has not run on hardware is a fact about the world, not about this build: it is
+    # read from firmware/STATUS.txt, so a rebuild cannot re-stamp an old claim. Edit that file by
+    # hand when the facts change (a new image is "not flashed" until someone flashes it).
+    "status": " ".join(open(os.path.join(fw, "STATUS.txt")).read().split()),
     "flash_via": "DroidNet web UI -> Flash tab (upload file, board on that Booster's USB).",
     "board": "RSeries Logic Engine (Reeltwo WLogicEngine32 / WReactor32-S3)",
     "source_repo": "https://github.com/travisccook/DroidNet-RSeriesLogics",

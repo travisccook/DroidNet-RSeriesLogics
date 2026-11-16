@@ -13,9 +13,18 @@ and size, the flash settings, and the dependency versions the build resolved.
 These images carry the one native command this fork adds, `#LEBRI[F|R]<1-255>` (RAM-only brightness,
 library id `rseries.cfg.brightness`; see the main [README](../README.md)), and the WDP device
 announce: every 25-30 s the board sends `@WDP1 {"type":"R-Series Logics","fw":"<sha>",...}` to the
-WCB on Serial1, where `<sha>` is `source_commit`. They also bring everything else the fork changes,
-none of which has run on hardware either: the WiFi connect-else-AP state machine, rendering on
-core 1, the Driveable-Animation Contract layer and the 96-byte Marcduino buffer.
+WCB on Serial1, where `<sha>` is `source_commit`. They also carry everything else the fork had
+changed by `f7bd207`: the WiFi connect-else-AP state machine, rendering on core 1, the
+Driveable-Animation Contract layer as it was at v1.2, and the 96-byte Marcduino buffer.
+
+**What "runs on the board" covers.** The board boots this image and shows its native looks. Nothing
+in this repository records a contract (`!`) command observed on real LEDs, so treat the contract
+layer as untested on hardware. These images predate contract v1.3: the v1.3 source in this tree
+(see [DROIDNET_FORK.md](../DROIDNET_FORK.md)) has been cross-compiled, and no image of it is here
+yet. A new image is built and flashed only after the R1 bench checklist.
+
+`manifest.json`'s `status` line is copied from [`STATUS.txt`](STATUS.txt) when the images are
+built. That file is edited by hand when the facts change, so a rebuild cannot re-stamp an old claim.
 
 ## Which file
 

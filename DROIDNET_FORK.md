@@ -25,32 +25,58 @@ accents, a host-seeded beat clock, and autonomous board-side section playback �
 
 ## Status
 
-**Code complete for Phase 1 and Phase 2. Never run on hardware.**
+**Contract v1.3, release R1, in source. Not on hardware.**
 
-Verified host-side only, via `bash test/host/run.sh`:
+- The prebuilt classic ESP32 image in `firmware/` (`f7bd207`, 2026-10-16) runs on the C2-B5 dome's R-Series board;
+  it was flashed over WiFi through the board's own Reflash page. That image predates contract v1.3.
+- Nothing in this repository records a contract (`!`) command observed on real LEDs, with any image. Treat the
+  contract layer as untested on hardware until the R1 bench checklist has been run and recorded.
+- The ESP32-S3 image has never been flashed.
 
-- 341/341 parser, beat-clock and effect-math checks (`test/host/test_contract_core.cpp`).
-- Type-check of the firmware render layer against a mock of the engine API
-  (`test/host/compile_contract_logics.cpp` + `mock_engine.h`), plus a behavioural guard that a
-  scored `native:<code>` section threads its native code through to the `ScoreEntry`.
+What is verified is host-side, by `bash test/host/run.sh` (and by CI, `.github/workflows/host-tests.yml`):
 
-Not done: a PlatformIO build for the ESP32, a bench flash, or any test with LEDs attached. Do not
-put this on a droid until that has happened.
+- the shared core's unit tests, v1.2 and v1.3, and a differential fuzz of its parser under ASan/UBSan;
+- the RSeries layer on a mock of the engine that models sequence selection, `restoreSettings()` and the engine's
+  out-of-bounds effect id, including every finding of the 2026-11-15 review as a regression test;
+- the Serial1 reader, including a 400-byte burst of back-to-back lines;
+- the real ESP32 cross-compile (`pio run -e wlogicengine32`), which is a link, not a run.
+
+Run the suite for the current numbers; this file does not repeat them.
 
 Fork head: `main` in this repository. The baseline import is commit `6bba8b1`; every commit after it
 is the DroidNet layer (`git log --oneline 6bba8b1..HEAD`).
 
-### What is in
+### What is in (contract v1.3, R1)
 
-- **Phase 1 — live cues.** Verbs `A` (animate), `P` (pulse), `B` (brightness), `L` (level),
-  `X` (stop), `M` (mode). Effects `solid`, `flash`, `rainbow`, `scan`, `sparkle`, `meter`,
-  `native:<code>`.
-- **Phase 2 — beat clock and score.** Verb `C` seeds one shared `BeatClock` (bpm / phase / beats
-  per bar / beat anchor). `A` with `at=<beat>` inserts a `ScoreEntry` instead of applying
-  immediately; `contractTick()` advances the section cursor from `mainLoop()`.
-- **Six parametric effects** over a 1-D strand: `comet`, `chase`, `wipe`, `gradient`, `colorcycle`,
-  `twinkle`. The maths lives in `contract_core.h` (`fx*` helpers) so the firmware and the Studio
-  visualiser can be checked against the same vectors.
+- **Verbs.** `A` (animate: live, or scored with `at=`), `P` (pulse: the accent overlay), `C` (beat clock),
+  `B` (brightness), `L` (level), `X` (stop), `M` (mode: `show` / `idle`), `V` (verify the load), `Q` (query).
+- **Looks.** `off`, `solid`, `flash`, `pulse`, `rainbow`, `scan`, `sparkle`, `meter`, `comet`, `chase`, `wipe`,
+  `gradient`, `colorcycle`, `twinkle`, and `native:<code>` for the codes on the allow-list (0-14, 19-24, 101-105).
+  `flash`, `pulse` and `scan` use the core's shared timing, the same on all three boards: `pulse` is a breathe
+  whose cycle is never shorter than 340 ms (and a steady fill moved by the beat pump when one is on), `scan` one
+  column sweeping back and forth.
+- **Beat clock.** One clock for both displays. `C:bpm=,ph=,bpb=,beat=` seeds it; a bare `C:ph=,beat=` re-anchors
+  it (the host's drift correction); `C:bpm=0` holds the show. A tempo outside 30-300 is ignored.
+- **Score.** 32 entries a display. Each carries its look, `b=`, `m=`, `am=`, `an=`/`ap=` (every-N accents) and an
+  optional accent (`ae=`/`ac=`/`ad=`), which the board fires itself on the section's accent beats.
+- **Load check.** `V:n=,k=` compares the host's entry count and checksum with what the display holds. A display
+  that did not get its whole show goes back to its native look and reports `ok=2`.
+- **Lifecycle.** `M:v=show[,wd=<seconds>]` arms a show without darkening the display; the show's first `C`, live
+  `A` or `P` starts it. `X` blacks out. `M:v=idle` gives the display back. With `wd=`, that many seconds without
+  a contract line addressed to the board is an idle.
+- **Safety.** No accent, pump swing or live look change recurs faster than the photosensitivity limits in
+  `contract_core.h`. `b=` and `B` are fractions of the display's own brightness, as its owner set it.
+- **Query.** `Q:r=<route>` addressed to one display is answered on Serial1 with
+  `;S0!L<u>q:ver=1.3,rel=1,cap=32,n=<held>,ok=<0|1|2>,bpm=<n>` (`;W<n>,;S0...` for a remote WCB).
+
+### What is not in
+
+- Any hardware validation of the contract layer (see Status).
+- Release R2: the `logic` look, the `kick` accent (so a `native:` section takes no accent in R1), the level feed
+  to the native mic-reactive effects (`contractSetup()` is still a no-op).
+- `d=` on `A` (retired in v1.3), `c=p<n>` palette colours, `sw=` and `band=`: parsed past, never acted on.
+- A pulse that interrupts a timed native sequence returns to the display's default look, not to that sequence:
+  the engine has no public way to ask which sequence is running.
 
 ### Native brightness: `#LEBRI`
 
@@ -70,35 +96,37 @@ state change and no reply: there is no clamp, and 0 is never applied.
   (the action against `mock_native_brightness.h`), `fuzz_native_brightness.cpp` (fork-local
   differential fuzz) and `prefix_guard.cpp` (below).
 
-### What is not in
-
-- Verb `Q` (query / status readback). Parsed, not answered.
-- The mic `PeakValueProvider` wiring for the native mic-reactive effects (`contractSetup()` is a
-  deliberate no-op).
-- Any hardware validation at all.
-
 ## Layout
 
 | File | Owner | Notes |
 | --- | --- | --- |
-| `src/contract/contract_core.h` | fork | Pure C++, no Arduino/FastLED/Reeltwo. **Byte-identical across all three board forks** — if you change it here, change it identically there. |
-| `src/contract/ContractLogics.h` | fork | Render layer. Registers as custom effect id **106**. |
+| `src/contract/contract_core.h` | fork | Pure C++, no Arduino/FastLED/Reeltwo. **Byte-identical across all three board forks.** This repository is where it is edited: see [docs/CHANGING_THE_CORE.md](docs/CHANGING_THE_CORE.md). |
+| `src/contract/ContractLogics.h` | fork | The RSeries layer: verbs, the tick, and the renderer, custom effect id **106**. |
+| `src/contract/contract_line.h` | fork | Pure C++: the reader's 128-byte line assembler and drain loop. Fork-local. |
+| `src/contract/ContractSerial.h` | fork | The Serial1 reader, in place of the library's `MarcduinoSerial<>`. Fork-local. |
 | `src/native/native_brightness_parse.h` | fork | Pure `#LEBRI` parser, no Arduino/FastLED/Reeltwo. Fork-local (not shared with PSI/Flthy). |
 | `src/native/NativeBrightness.h` | fork | The `#LEBRI` Marcduino action and the FastLED controller capture. Not part of the contract. |
-| `test/host/` | fork | Host harness. Keep it green. `fuzz_parsers.cpp` is shared byte-identically with the PSI and Flthy forks; `fuzz_native_brightness.cpp` is fork-local. |
+| `test/host/` | fork | Host harness. Keep it green. The files in `test/host/core-files.txt` are shared byte-identically with the PSI and Flthy forks; the rest are fork-local. |
+| `test/host/vectors/contract_vectors.json` | fork | Generated by `gen_contract_vectors.cpp` from the real core. The Studio preview is tested against a copy of it. |
+| `scripts/core-sync.sh` | fork | Compares, and copies, the shared files across the sibling fork checkouts. |
 | `test/host/catalog_example_lines.tsv` | fork | Snapshot of every command-library example line, for `prefix_guard.cpp`. Regenerate with `refresh_catalog_examples.py <library checkout>`. |
-| `src/main.cpp` | upstream | Four added lines (include, effect-table entry, `contractSetup()`, `contractTick()`) plus a one-character fix to a latent off-by-one in `CustomLogicEffectSelector`. Five more lines for `#LEBRI`: its include and the controller capture around `FLD_init()` / `RLD_init()`. |
+| `src/main.cpp` | upstream | Fork edits, each marked `DroidNet`: the contract includes and `ContractRender` in the effect table; `ContractSerial` as the Serial1 reader and a 1024-byte receive buffer; the WiFi receiver's line width and its contract dispatch; `contractSetup()`, `contractTick()` and the `Q` reply write in `mainLoop()`; the `#LEBRI` include and controller capture; the WDP init and tick; a one-character fix to a latent off-by-one in `CustomLogicEffectSelector`. |
 | `lib/Reeltwo` | upstream | **Do not edit.** The contract plugs in through the public `seq >= 100` `CustomLogicEffectSelector` hook. The two `wifi/` headers carry pre-existing C2B5 modifications and an LGPL §2(b) notice. |
 
 ## Conventions that matter
 
-- `ContractRender` **must return `true`** — `LogicEngine.h:820-830` reverts the display to NORMAL if
-  a custom effect returns false.
-- `setPixelRGB` bypasses the engine's `fBri`, so brightness and the beat envelope are applied inside
-  the render layer.
-- The score sequencer runs in `contractTick()` from `mainLoop()`, **not** inside the effect
-  function, so sections keep advancing even while a `native:<code>` section look (which
-  `ContractRender` does not draw) is on screen.
+- **`ContractRender` returns `false` for exactly one reason: to hand the display back.** The engine then selects
+  its own default effect (`LogicEngine.h:818-830`). That is how a pulse outside a show returns to the native look.
+  Everywhere else it must return `true`.
+- `setPixelRGB` bypasses the engine's `fBri`, so brightness and the beat envelope are applied inside the layer.
+- **Brightness.** The ceiling is the display's own `fBri` (the RAM default object, read when a show arms or the
+  first cue arrives). `b=`/`B` are fractions of it. For native looks the level is written to that default object,
+  because the engine copies it back on every effect change; every show boundary restores the owner's value.
+- **Show boundaries run the core's one reset** (`contractOnShow` / `contractOnStop` / `contractOnIdle`). Do not
+  reset fields by hand in the layer: a field added to `ContractUnitState` is then reset everywhere.
+- The score, its accents, the watchdog and held live looks run in `contractTick()` from `mainLoop()`, **not**
+  inside the effect function, so they keep running while a `native:<code>` look (which `ContractRender` does not
+  draw) is on a display.
 - `!` is the contract's only command prefix, and it was chosen because every stock parser ignores it.
   The one native command the fork adds is `#LEBRI`.
 - **No Marcduino action text may be a prefix of another.** `Marcduino::processCommand` runs every
@@ -107,18 +135,15 @@ state change and no reply: there is no clamp, and 0 is never applied.
   (`@0T1`→`@0T11`, `@1T1`→`@1T11`, `@2T1`→`@2T11`, which work because the longer text is registered
   later), and on any command-library example line that would run `#LEBRI` without being
   `rseries.cfg.brightness`.
-- **`STROBE_MIN_STATE_MS = 170` is a safety limit, not a tuning knob.** An accent overlay may not
-  restart more often than every `2 * 170 = 340 ms` (≤ 2.94 flashes/sec, inside the ≤ 3 flashes/sec
-  photosensitivity guidance), the cool-down is anchored on `pulseLastMs` **unconditionally** — an
-  overlay that is still on screen is not an exemption — and all three board forks must use the same
-  number. `test/host/` fails if any of that stops being true.
-- **`MarcduinoSerial<96>`, not the library default of 64.** `Marcduino.h` drops overflow bytes
-  silently and then processes the truncated line, and a truncated contract line still parses — so
-  the board would quietly play a *different* show. The longest line Studio can emit is 90 chars;
-  `test/host/run.sh` recomputes that and fails if the buffer cannot hold it.
-- **The Phase-2 score is cleared at *every* show boundary — `X`, `M:v=idle`, and `M:v=show`.**
-  `v=show` is the one that is easy to miss, and it is the one the product actually hits: Studio's
-  Deliver **Resend** re-pushes the load burst (`!**M:v=show` first, then the scored `A` entries)
-  with no intervening stop. Clear it there and a resend *replaces* the show; forget to, and show B
-  is inserted **into** show A — the board plays A's sections in between B's, and once the table is
-  at `SCORE_MAX` `scoreInsert()` silently drops B outright and the board replays A forever.
+- **The photosensitivity limits are safety limits, not tuning knobs,** and they live in `contract_core.h`, once,
+  for all three forks: `STROBE_MIN_STATE_MS = 170`, the 340 ms floor between accents and between pump swings
+  (`beatRateDivisor`), the 170 ms hold between live look changes, the tempo range. The core's show reset keeps
+  the cool-down timers, so a reset is not a way through them.
+- **`native:<code>` is an allow-list** (`nativeAllowedLogics()` in the core). Code 25 indexes one past the
+  engine's effect table (`LogicEngine.h:2733`); it and every other code off the list drop the whole line.
+- **The Serial1 reader is `ContractSerial`, with 128-byte lines.** The library's reader takes one byte a pass,
+  which is slower than 9600 baud once `FastLED.show()` is counted, and processes an over-long line truncated.
+  The longest line Studio can emit is 102 characters; `test/host/run.sh` stage 3 recomputes that and checks the
+  serial and WiFi widths.
+- **A contract line runs in the reader, not on the animation player.** `Marcduino::processCommand` queues one
+  action with one command pointer, so of several lines handled in one pass only the last would run.

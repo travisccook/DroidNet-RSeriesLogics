@@ -1,0 +1,5 @@
+Flashed to hardware: only the classic ESP32 .app.bin built at f7bd207, on 2026-10-16 (the C2-B5 dome
+R-Series board, ESP32-D0WD-V3 WROVER, over WiFi through the board's own Reflash page,
+http://<board-ip>/firmware). No image built from any other commit has been flashed. No ESP32-S3 image
+has been flashed. No contract (!) command has been recorded on real LEDs with any image. Over USB,
+flash in place per the runbook (spec section 6); take a read_flash dump first.

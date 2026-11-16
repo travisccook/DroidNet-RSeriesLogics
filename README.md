@@ -55,13 +55,17 @@ WiFi setup, colour tables). Read that first. This README only covers what the fo
 
 **Work in progress.** This DroidNet build is provided as is, without warranty of any kind. Use it at your own risk. To go back, flash the upstream firmware ([README_UPSTREAM.md](README_UPSTREAM.md)).
 
-The ESP32 build runs on the author's droid (C2-B5) and has since 2026-10-16; it was flashed over WiFi through the board's own Reflash page. The ESP32-S3 build is not supported yet: it compiles, but its hardware config is unconfirmed (see below).
+**On hardware.** The prebuilt classic ESP32 image in [`firmware/`](firmware/) (`f7bd207`) runs on the author's
+droid (C2-B5) and has since 2026-10-16; it was flashed over WiFi through the board's own Reflash page. That image
+predates contract v1.3. Nothing in this repository records a contract (`!`) command observed on real LEDs, with any
+image: treat the contract layer as untested on hardware until the R1 bench checklist has been run. The ESP32-S3
+build is not supported yet: it compiles, but its hardware config is unconfirmed (see below).
 
-**Testing.** It cross-compiles for the real microcontroller. `pio run` builds a complete
-ESP32 firmware image with the real xtensa toolchain, and the real linker signs off on it:
-**1,129,009 B of flash (57.4%)** and 63,532 B of SRAM (19.4%). Plus `bash test/host/run.sh` — 341
-checks against the wire parser, beat clock and effect math, plus a type-check of the render layer
-against a mock of the engine API, and it now finishes by doing that cross-compile itself.
+**Testing.** The source in this tree is contract v1.3 (release R1). `bash test/host/run.sh` runs the host suite:
+the shared core's unit tests and parser fuzz, the RSeries layer on a mock of the engine (every finding of the
+2026-11-15 review is a regression test there), the Serial1 reader, and, with PlatformIO installed, the real ESP32
+cross-compile. CI runs the same on every push. At this source state `pio run -e wlogicengine32` links at
+**1,134,545 B of flash (57.7%)** and 64,796 B of SRAM (19.8%). A link is not a run.
 
 This used to say the code had never been compiled for the ESP32 at all, and that was the honest
 state. It is no longer. It is worth saying why it matters: the first real build immediately caught a
@@ -114,6 +118,7 @@ verb   A = animate (set the base look)      P = pulse (a beat accent)
        C = beat-clock seed                  B = brightness
        L = level (energy 0-255)             X = stop
        M = mode (show / idle)               Q = query
+       V = verify the pushed score
 
 example:  !LFA:i=comet,c=ff8800,s=200,m=64,am=1
           front logics -> comet, orange, fast, beat-modulated
@@ -133,6 +138,18 @@ What it buys:
   `gradient`, `colorcycle`, `twinkle` — alongside `solid`, `flash`, `rainbow`, `scan`, `sparkle`,
   `meter`, and a `native:<code>` escape hatch that hands a section straight back to an iconic stock
   sequence.
+
+What v1.3 adds on top (the details are in [DROIDNET_FORK.md](DROIDNET_FORK.md)):
+
+- **Limits that hold on every path.** No accent, beat pump or live look change recurs faster than the
+  photosensitivity limits, at any tempo. A tempo outside 30-300 BPM is ignored.
+- **The owner's brightness is the ceiling.** `b=` and `B` are fractions of the display's own brightness; a
+  contract line can dim a display and cannot make it brighter than it was set.
+- **A load that can be checked.** `V` compares what the display holds with what the host sent; a display that
+  did not get its whole show goes back to its native look. `Q` reports it.
+- **A show that ends by itself.** `M:v=show,wd=15` returns the displays to their native look after 15 seconds
+  without a line from the host.
+- **`native:<code>` is an allow-list:** 0-14, 19-24 and 101-105.
 
 **Every native command still works exactly as before.** `~RTLE…`, `@nT…`, `#LE…`, JawaLite, the web
 interface, the SD-card updater, the menus — all untouched. This is backward-compatible and it is not
@@ -164,10 +181,12 @@ level   1-255, one to three digits (leading zeros are accepted; the library neve
   256-999, four or more digits, lowercase `f`/`r`, a sign, spaces or trailing text.
 - A display whose init did not add exactly one FastLED controller (for example no rear display
   fitted) is ignored by the command. Its dither is switched off only when it is captured.
-- A later contract `B` verb (`!L*B`) lowers the live `fBri` on top of the correction until the next
-  effect change.
-- On the WiFi Marcduino port 2000 a burst of several lines runs only the last line's action. That is
-  pre-existing for every action on that port; Serial1 is not affected.
+- A contract `B` verb (`!L*B`), or `b=` on a `native:` look, lowers the display's `fBri` under the
+  correction for the length of the show; the show boundary puts the previous value back. An `#LEBRI`
+  sent during a show stands.
+- On the WiFi Marcduino port 2000 a burst of several native lines runs only the last line's action. That is
+  pre-existing for every native action on that port; Serial1 is not affected, and neither are contract (`!`)
+  lines, which run as they arrive on both.
 
 Its DroidNet command library id is `rseries.cfg.brightness` (board `droidnet-rseries-logic`, library
 4.4.0). The code is `src/native/native_brightness_parse.h` (the pure parser),
@@ -181,19 +200,20 @@ sits on each of its serial ports from one line the device sends every 25-30 seco
 announce, `docs/WDP_DEVICE_ANNOUNCE.md` in greghulette/Wireless_Communication_Board-WCB):
 
 ```text
-@WDP1 {"type":"R-Series Logics","fw":"<commit>","caps":["droidnet.contract","led.logic"]}
+@WDP1 {"type":"R-Series Logics","fw":"<commit>","caps":["droidnet.contract","contract.1.3","led.logic"]}
 ```
 
 - **On Serial1**, the Marcduino serial port the WCB is wired to, at that port's baud (default 9600),
-  board TX to WCB RX. Nothing else in the firmware writes to Serial1. With Marcduino serial switched
-  off, Serial1 never starts and nothing is sent.
+  board TX to WCB RX. The only other thing the firmware writes to Serial1 is the contract's reply to a `Q`,
+  whole and only between announces. With Marcduino serial switched off, Serial1 never starts and nothing is sent.
 - **When:** first 0.5-3 s after the port starts at boot, then every 25-30 s, each interval picked
   afresh. The jitter is seeded from the hardware RNG mixed with the chip's factory MAC, so boards
   that power up together do not announce in lockstep.
 - **`fw` is the build's commit:** `git rev-parse --short=7 HEAD` when it was built
   (`scripts/pre_extra.py`), the same sha the prebuilt images in `firmware/` are named by. It gets
   `-dirty` when the tree had changes outside `firmware/`, and is `unknown` when git could not say.
-  The line is 89 bytes with a clean commit, 95 with `-dirty`.
+  The line is 104 bytes with a clean commit, 110 with `-dirty`. `contract.1.3` is the contract version the
+  firmware speaks.
 - **It never blocks.** `mainLoop()` writes only as much of the line as the UART reports room for
   (`availableForWrite()`, 128 bytes on an idle port), so a whole line normally goes in one write.
 - The WCB consumes the line and never forwards it, so no other board sees it. `?WDP,DA` on the WCB
@@ -202,7 +222,7 @@ announce, `docs/WDP_DEVICE_ANNOUNCE.md` in greghulette/Wireless_Communication_Bo
 
 The code is `src/wdp/wdp_announce_core.h` (the line and its schedule, pure C++, shared byte for byte
 with the PSI Pro and FlthyHPs forks), `src/wdp/wdp_fork.h` (this board's identity and the two calls)
-and three marked lines in `src/main.cpp`.
+and the marked lines in `src/main.cpp`.
 
 ---
 
@@ -213,7 +233,7 @@ is neither upstream's nor part of the contract layer.
 
 **Theirs** — the firmware itself, and the great majority of the code here:
 
-- `src/main.cpp` (1,415 lines — this is upstream's `WLogicEngine32.ino`, relocated), `WebPages.h`,
+- `src/main.cpp` (this is upstream's `WLogicEngine32.ino`, relocated), `WebPages.h`,
   `MarcduinoLogics.h`, `logic-sequences.h`, `pin-config.h`, `Screens.h`, `web-images.h`,
   `effects/`, `menus/`, `Makefile`, `platformio.ini` — Joymonkey and Rimim, with contributions from
   IOIIOOO, Curiousmarc, Mowee, Flthymcnasty and others.
@@ -240,32 +260,30 @@ None of that is upstream's, and none of it is part of the contract layer. It is 
 
 **Ours** (Travis Cook, 2026) — the fork layer this repository exists for:
 
-| Path | What it is | Lines |
-| --- | --- | --- |
-| `src/contract/contract_core.h` | Pure, dependency-free C++: wire parser, beat clock, effect math, score table. No Arduino, no FastLED, no Reeltwo. Byte-identical across the three DroidNet board forks. | 362 |
-| `src/contract/ContractLogics.h` | The RSeries render layer: maps the contract onto this board's LED primitives, registers as custom effect id 106. | 337 |
-| `test/host/*` | The host test harness (parser tests, engine mock, type-check). | 506 |
-| `src/main.cpp` | **Four added lines and one bounds-check fix.** An `#include`, `ContractRender` appended to the custom-effect table, `contractSetup()` in `setup()`, `contractTick()` in `mainLoop()`. | +7 / −2 |
-| `src/native/native_brightness_parse.h` | The `#LEBRI` parser. Pure C++, no Arduino, FastLED or Reeltwo. | 62 |
-| `src/native/NativeBrightness.h` | The `#LEBRI` Marcduino action and the FastLED controller capture. Not part of the contract layer. | 87 |
-| `src/main.cpp` (native brightness) | One `#include` and the controller capture around `FLD_init()` and `RLD_init()`, each line marked `DroidNet native brightness`. | +5 |
-| `src/wdp/wdp_announce_core.h` | The WDP announce line and its schedule. Pure C++, byte-identical across the three DroidNet board forks. | 158 |
-| `src/wdp/wdp_fork.h` | This board's WDP identity and the Serial1 adapter. | 54 |
-| `src/main.cpp` (WDP announce) | One `#include`, `wdpForkInit()` after `Serial1.begin()`, `wdpForkTick()` in `mainLoop()`. | +3 |
-| `scripts/pre_extra.py` (WDP announce) | Defines `WDP_FW`, the build's commit. | +26 |
-| `DROIDNET_FORK.md`, this README | Fork docs. | — |
+| Path | What it is |
+| --- | --- |
+| `src/contract/contract_core.h` | Pure, dependency-free C++: wire parser, beat clock, safety limits, per-unit state and its one reset, score and load check, effect math. No Arduino, no FastLED, no Reeltwo. Byte-identical across the three DroidNet board forks; edited here ([docs/CHANGING_THE_CORE.md](docs/CHANGING_THE_CORE.md)). |
+| `src/contract/ContractLogics.h` | The RSeries layer: maps the contract onto this board's engine and LED primitives, registers as custom effect id 106. |
+| `src/contract/contract_line.h`, `src/contract/ContractSerial.h` | The Serial1 reader: a 128-byte line assembler and a drain loop (pure C++), and the class that takes the place of the library's `MarcduinoSerial<>`. |
+| `test/host/*` | The host test harness: unit tests, the engine mock, the review's regressions, fuzzers, the vector generator and its output. |
+| `scripts/core-sync.sh`, `test/host/core-files.txt`, `.github/workflows/host-tests.yml` | What keeps the shared files identical across the forks, and CI. |
+| `src/main.cpp` | The fork's edits, each marked `DroidNet`: the contract includes and effect-table entry, `ContractSerial` as the Serial1 reader with a 1024-byte receive buffer, the WiFi receiver's line width and contract dispatch, `contractSetup()`, `contractTick()` and the `Q` reply write in `mainLoop()`, and one bounds-check fix. |
+| `src/native/native_brightness_parse.h` | The `#LEBRI` parser. Pure C++, no Arduino, FastLED or Reeltwo. |
+| `src/native/NativeBrightness.h` | The `#LEBRI` Marcduino action and the FastLED controller capture. Not part of the contract layer. |
+| `src/main.cpp` (native brightness) | One `#include` and the controller capture around `FLD_init()` and `RLD_init()`, each line marked `DroidNet native brightness`. |
+| `src/wdp/wdp_announce_core.h` | The WDP announce line and its schedule. Pure C++, byte-identical across the three DroidNet board forks. |
+| `src/wdp/wdp_fork.h` | This board's WDP identity, the Serial1 adapter, and the write path for the `Q` reply. |
+| `src/main.cpp` (WDP announce) | One `#include`, `wdpForkInit()` after `Serial1.begin()`, `wdpForkTick()` in `mainLoop()`. |
+| `scripts/pre_extra.py` (WDP announce) | Defines `WDP_FW`, the build's commit. |
+| `DROIDNET_FORK.md`, `docs/CHANGING_THE_CORE.md`, this README | Fork docs. |
 
 The bounds-check fix in `main.cpp` is a one-character change to a pre-existing off-by-one in the
 custom-effect selector (`selectSequence-100 <= SizeOfArray(...)` read one slot past the array). It
 was latent upstream because nothing ever selected the last id; adding effect 106 would have hit it.
 That is the only line of upstream code this fork changes.
 
-Run `git diff 6bba8b1..HEAD --stat` if you want the exact split (`6bba8b1` is the baseline import):
-**13 files, 1,757 insertions, 183 deletions** (the deletions are almost entirely the documentation
-rewrite; only two are code, both in `src/main.cpp`). Nine of those files are code — the six new ones above, the
-seven-line edit to `src/main.cpp`, and comment-only LGPL §2(b) notices on the two vendored Reeltwo
-headers. The other four are documentation (this README, `README_UPSTREAM.md`, `DROIDNET_FORK.md`,
-`README_C2B5.md`).
+Run `git diff 6bba8b1..HEAD --stat` for the exact split (`6bba8b1` is the baseline import). This README does not
+repeat line counts: they were stale within a week every time it did.
 
 ---
 
@@ -288,31 +306,40 @@ headers. The other four are documentation (this README, `README_UPSTREAM.md`, `D
 ## Building and testing
 
 ```sh
-bash test/host/run.sh
-# [1/9]  contract_core parser unit tests               -> OK  341/341 checks passed
-# [1b/9] wifi_connect_core FSM unit tests              -> OK  20/20 checks passed
-# [1c/9] wdp_announce_core WDP announce unit tests     -> OK  37506/37506 checks passed
-# [1d/9] wdp_fork RSeries WDP identity + adapter       -> OK  19/19 checks passed
-# [2/9]  ContractLogics.h firmware type-check          -> OK
-# [3/9]  Marcduino command-buffer width guard          -> OK
-# [4/9]  parser fuzz + differential (ASan/UBSan)       -> OK  1554686/1554686 checks passed
-# [5/9]  native #LEBRI brightness parser unit tests    -> OK  3907/3907 checks passed
-# [6/9]  native #LEBRI brightness action (mock)        -> OK  33/33 checks passed
-# [7/9]  Marcduino prefix-collision guard              -> OK  43 actions, 635 catalog lines
-# [8/9]  native #LEBRI brightness parser fuzz          -> OK  1070735/1070735 checks passed
-# [9/9]  REAL cross-compile (ESP32)                    -> OK   <- needs PlatformIO; skips cleanly without it
+bash test/host/run.sh                 # every stage; ends with the stages that ran and the ones skipped
+ONLY="1 1f 4" bash test/host/run.sh   # just those stages
 ```
+
+| Stage | What it checks |
+| --- | --- |
+| 1, 1f | `contract_core.h` unit tests: the v1.2 vectors, and the v1.3 rules (limits, clock, lifecycle, score, query) |
+| 1b | the WiFi connect-else-AP state machine |
+| 1c, 1d | the WDP announce core, and this board's identity and Serial1 adapter |
+| 1e | `test/host/vectors/contract_vectors.json` is what the core generates |
+| 2 | `ContractLogics.h` against the engine mock: the v1.2 guards |
+| 2b | every finding of the 2026-11-15 review, as a regression test |
+| 2c | contract v1.3 as it appears on the two displays |
+| 2d | the Serial1 reader, including a 400-byte burst of back-to-back lines |
+| 3 | the reader class, the serial and WiFi line widths, the WDP contract tag |
+| 4, 8 | differential fuzzers for the two parsers, under ASan and UBSan |
+| 5, 6 | the `#LEBRI` parser and action |
+| 7 | no Marcduino action text is a prefix of another |
+| 9 | the real ESP32 cross-compile (needs PlatformIO) |
+
+The runner uses `clang++` or `g++` (`CXX=` to choose). The fuzz stages need a compiler that can build and run a
+sanitized binary; when none can, the run fails rather than skipping them. Each stage prints its own count: run
+the suite for the numbers.
 
 Stage 7 reads `test/host/catalog_example_lines.tsv`, a checked-in snapshot of every example line in
 the DroidNet command library. Regenerate it with
 `python3 test/host/refresh_catalog_examples.py <library checkout>`.
 
-Stages 1-8 need no hardware and no toolchain beyond clang. Stage 9 is the real cross-compile: it is what makes
-"it compiles" a claim about the firmware rather than a claim about our mock. If PlatformIO is not
-installed it skips cleanly and tells you what you did not check.
+Stages 1-8 need no hardware and no toolchain beyond a C++17 compiler. Stage 9 is the real cross-compile: it is
+what makes "it compiles" a claim about the firmware rather than a claim about our mock. If PlatformIO is not
+installed it is reported as skipped (`REQUIRE_PIO=1` makes that a failure, as CI does).
 
-Firmware (PlatformIO): `pio run` builds both envs — `wlogicengine32` (ESP32, 1,129,009 B / 57.4%)
-and `wlogicengine32s3` (ESP32-S3, 1,038,257 B / 52.8%). The S3 env used to be unbuildable; see the
+Firmware (PlatformIO): `pio run` builds both envs — `wlogicengine32` (ESP32; its size is in Status above)
+and `wlogicengine32s3` (ESP32-S3; not rebuilt since contract v1.3). The S3 env used to be unbuildable; see the
 Status and S3 notes above for what was wrong and for the hardware-config caveats that still apply to it.
 See [README_UPSTREAM.md](README_UPSTREAM.md) for the real build and flashing instructions — they are
 otherwise unchanged.
