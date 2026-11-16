@@ -402,12 +402,9 @@ const ServoSettings servoSettings[] PROGMEM = {
 ServoDispatchPCA9685<SizeOfArray(servoSettings)> servoDispatch(servoSettings);
 ServoSequencer servoSequencer(servoDispatch);
 AnimationPlayer player(servoSequencer);
-// DroidNet contract v1.2: 96, not the library default of 64. A scored line carrying an
-// accent — e.g. !L*A:i=colorcycle,c=3b82f6,at=1234,am=2,m=200,ae=flash,ac=ffffff — runs to
-// 64+ chars, and MarcduinoSerial TRUNCATES SILENTLY at BUFFER_SIZE-1 and then processes the
-// truncated line (lib/Reeltwo/src/core/Marcduino.h:174). +32 bytes on an ESP32 is free.
-// (Zero lib/ edits: BUFFER_SIZE is a template parameter.)
-MarcduinoSerial<96> marcduinoSerial(player);
+// DroidNet: the Serial1 reader (marcduinoSerial) is the fork's ContractSerial, declared below,
+// right after contract/ContractSerial.h is included. It takes the place of the library's
+// MarcduinoSerial<> here; see that header for why.
 
 /////////////////////////////////////////////////////////////////////////
 
@@ -446,6 +443,8 @@ enum
 #include "effects/PlasmaEffect.h"
 #include "effects/ColorWheel.h"
 #include "contract/ContractLogics.h"   // DroidNet Driveable-Animation Contract (fork-owned)
+#include "contract/ContractSerial.h"   // DroidNet: the Serial1 reader (drains every pass; fork-owned)
+ContractSerial marcduinoSerial(player);
 #include "wdp/wdp_fork.h"   // DroidNet WDP device announce to the WCB on Serial1 (fork-owned)
 
 LogicEffect CustomLogicEffectSelector(unsigned selectSequence)
@@ -730,7 +729,9 @@ WifiAccess wifiAccess;
 #endif
 
 #ifdef USE_WIFI_MARCDUINO
-WifiMarcduinoReceiver wifiMarcduinoReceiver(wifiAccess);
+// DroidNet: lines as long as the Serial1 reader takes (the library default is 64 bytes, which
+// truncates a contract line silently). BUFFER_SIZE is a template parameter: no lib/ edit.
+WifiMarcduinoReceiverBase<1, CONTRACT_LINE_BUF> wifiMarcduinoReceiver(wifiAccess);
 #endif
 
 ////////////////////////////////
@@ -856,6 +857,10 @@ void setup()
             printf("Serial2 baud rate of %d is invalid. Defaulting to %d.\n", baudrate2, MARC_SERIAL2_BAUD_RATE);
             baudrate2 = MARC_SERIAL2_BAUD_RATE;
         }
+        // DroidNet: 1024 bytes of receive buffer instead of the core's 256 (it must be set before
+        // begin()). The reader drains every pass, so this is only margin for a pass that stalls:
+        // about a second of back-to-back traffic at 9600 baud instead of a quarter.
+        Serial1.setRxBufferSize(1024);
         Serial1.begin(baudrate1, SERIAL_8N1, SERIAL1_RX_PIN, SERIAL1_TX_PIN);
         Serial2.begin(baudrate2, SERIAL_8N1, SERIAL2_RX_PIN, SERIAL2_TX_PIN);
         marcduinoSerial.setStream(&Serial1, (preferences.getBool(PREFERENCE_MARCSERIAL_PASS, MARC_SERIAL_PASS)) ? &Serial2 : &Serial);
@@ -943,7 +948,13 @@ void setup()
         {
             wifiMarcduinoReceiver.setCommandHandler([](const char* cmd) {
                 DEBUG_PRINTLN(cmd);
-                Marcduino::processCommand(player, cmd);
+                // DroidNet: a contract line runs here and now. Marcduino::processCommand() only
+                // queues its action on the player, with one command pointer, so of several lines
+                // received in one pass only the last would run.
+                if (cmd[0] == '!')
+                    contractHandleLine(cmd + 1);
+                else
+                    Marcduino::processCommand(player, cmd);
                 if (preferences.getBool(PREFERENCE_MARCWIFI_SERIAL_PASS, MARC_WIFI_SERIAL_PASS) &&
                     preferences.getBool(PREFERENCE_MARCSERIAL_ENABLED, MARC_SERIAL_ENABLED) &&
                     preferences.getBool(PREFERENCE_MARCSERIAL_PASS, MARC_SERIAL_PASS))
@@ -1273,8 +1284,13 @@ MARCDUINO_ACTION(Restart, #LERESTART, ({
 void mainLoop()
 {
     AnimatedEvent::process();
-    contractTick();   // DroidNet contract: advance the Phase-2 section score off the beat-clock
+    contractTick();   // DroidNet contract: the score, its accents, the watchdog, held live looks
     wdpForkTick(Serial1, millis());   // DroidNet WDP announce: never blocks (writes only free TX room)
+    {   // DroidNet contract: the reply to a Q, whole, between announces, when Serial1 has room for it
+        const char* reply; uint8_t replyLen;
+        if (contractReplyPending(reply, replyLen) && wdpForkWriteLine(Serial1, reply, replyLen))
+            contractReplyDone();
+    }
 #ifdef USE_MENUS
     sDisplay.process();
 #endif

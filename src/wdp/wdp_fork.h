@@ -2,13 +2,15 @@
 // two calls src/main.cpp makes. wdp_announce_core.h (shared with the PSI and Flthy forks) builds
 // and paces the line; this file only says what the board is and where the line goes:
 //
-//     @WDP1 {"type":"R-Series Logics","fw":"<commit>","caps":["droidnet.contract","led.logic"]}
+//     @WDP1 {"type":"R-Series Logics","fw":"<commit>","caps":["droidnet.contract","contract.1.3","led.logic"]}
 //
-// The port is Serial1, the Marcduino serial port the WCB is wired to. Nothing else in the
-// firmware writes to Serial1: MarcduinoSerial only reads it (its pass-through echoes to Serial2
-// or Serial), and the console and core log output are UART0. So no other writer has to finish
-// a line first with wdpRest(). Both calls run on the task that reads Serial1: wdpForkInit() in
-// setup() before the event task starts, wdpForkTick() in mainLoop() on that task.
+// The port is Serial1, the Marcduino serial port the WCB is wired to. ONE other thing in the
+// firmware writes to Serial1: the contract's reply to a Q (ContractLogics.h), through
+// wdpForkWriteLine() below, which writes it whole and only while no announce is in flight, so
+// neither line can land inside the other. The reader only reads Serial1 (its pass-through echoes
+// to Serial2 or Serial), and the console and core log output are UART0. All three calls run on
+// the task that reads Serial1: wdpForkInit() in setup() before the event task starts,
+// wdpForkTick() and wdpForkWriteLine() in mainLoop() on that task.
 //
 // Part of the DroidNet RSeries fork. Copyright (c) 2026 Travis Cook.
 // SPDX-License-Identifier: LGPL-2.1-only
@@ -21,7 +23,9 @@
 #define WDP_FW "unknown"
 #endif
 #define WDP_TYPE "R-Series Logics"   // the WCB Wizard's name for it (Wizard/device-labels.js)
-#define WDP_CAPS "droidnet.contract led.logic"
+// "contract.1.3" is the Driveable-Animation Contract version this firmware speaks (CONTRACT_VERSION
+// in contract_core.h; test/host/run.sh stage 3 fails if the two disagree).
+#define WDP_CAPS "droidnet.contract contract.1.3 led.logic"
 
 // "" X compiles only when X is a string literal, so a WDP_FW define that lost its quotes fails
 // the build here instead of announcing garbage.
@@ -51,4 +55,14 @@ inline void wdpForkTick(Port& port, uint32_t nowMs) {
     const char* chunk = 0;
     uint8_t n = wdpTick(sWdpAnnouncer, nowMs, WDP_TYPE, WDP_FW, WDP_CAPS, port.availableForWrite(), &chunk);
     if (n) port.write((const uint8_t*)chunk, n);
+}
+
+// A fork line other than the announce (the contract's Q reply): written whole, only between
+// announces, and only when the port has room for all of it, so it never blocks and never lands
+// inside an announce. false: not written; try again on a later pass.
+template <class Port>
+inline bool wdpForkWriteLine(Port& port, const char* line, uint8_t n) {
+    if (!sWdpOn || sWdpAnnouncer.len != 0 || port.availableForWrite() < (int)n) return false;
+    port.write((const uint8_t*)line, n);
+    return true;
 }

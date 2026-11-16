@@ -17,7 +17,7 @@ static int g_fail = 0, g_total = 0;
 
 static const char kLine[] =
     "@WDP1 {\"type\":\"R-Series Logics\",\"fw\":\"abcdef0-dirty\","
-    "\"caps\":[\"droidnet.contract\",\"led.logic\"]}\n";
+    "\"caps\":[\"droidnet.contract\",\"contract.1.3\",\"led.logic\"]}\n";
 
 // HardwareSerial's two calls the adapter uses: availableForWrite() and write(buf, n).
 struct MockPort {
@@ -98,6 +98,36 @@ static void test_it_repeats_every_25_to_30_seconds() {
   CHECK(port.out == std::string(kLine) + kLine + kLine + kLine);
 }
 
+// The contract's Q reply shares Serial1 with the announce. wdpForkWriteLine() writes it whole,
+// and only between announces.
+static const char kReply[] = ";S0!LFq:ver=1.3,rel=1,cap=32,n=5,ok=1,bpm=120\r";
+static void test_a_reply_is_written_whole_between_announces() {
+  const uint8_t n = (uint8_t)(sizeof(kReply) - 1);
+  MockPort port(128);
+  wdpForkInit(12345, 0);
+  CHECK(wdpForkWriteLine(port, kReply, n));                // nothing in flight: written, in one write
+  CHECK(port.out == kReply && port.writes == 1);
+  port.room = (int)n - 1;
+  CHECK(!wdpForkWriteLine(port, kReply, n));               // no room for all of it: not a byte is written
+  CHECK(port.out == kReply && port.writes == 1);
+}
+static void test_a_reply_never_lands_inside_an_announce() {
+  const uint8_t n = (uint8_t)(sizeof(kReply) - 1);
+  MockPort port(10);                                       // the announce leaves in 10-byte pieces
+  wdpForkInit(12345, 0);
+  uint32_t t = 0;
+  while (port.out.empty() && t < 4000) wdpForkTick(port, t++);
+  CHECK(!port.out.empty() && port.out.size() < sizeof(kLine) - 1);   // an announce is in flight
+  port.room = 128;
+  CHECK(!wdpForkWriteLine(port, kReply, n));               // refused while it is
+  port.room = 10;
+  while (port.out.size() < sizeof(kLine) - 1 && t < 8000) wdpForkTick(port, t++);
+  CHECK(port.out == kLine);
+  port.room = 128;
+  CHECK(wdpForkWriteLine(port, kReply, n));                // the announce is out: now it goes
+  CHECK(port.out == std::string(kLine) + kReply);
+}
+
 static void test_the_seed_differs_for_boards_whose_rng_agrees() {
   // Two boards whose RNG has no entropy yet return the same word; their MACs differ in the
   // NIC-specific bytes (3-5; 0-2 are Espressif's OUI). Each of those bytes changes the seed.
@@ -112,10 +142,13 @@ int main() {
   test_the_real_identity_builds_the_expected_line();
   test_any_fw_the_wcb_accepts_fits_the_line_buffer();
   test_nothing_is_written_before_init();   // must run first: init is one-way
+  { MockPort port(128); CHECK(!wdpForkWriteLine(port, kReply, (uint8_t)(sizeof(kReply) - 1)) && port.out.empty()); }   // nor a reply
   test_one_whole_line_in_one_write_when_the_fifo_has_room();
   test_a_small_room_sends_the_line_in_pieces();
   test_no_room_writes_nothing_and_loses_nothing();
   test_it_repeats_every_25_to_30_seconds();
+  test_a_reply_is_written_whole_between_announces();
+  test_a_reply_never_lands_inside_an_announce();
   test_the_seed_differs_for_boards_whose_rng_agrees();
   printf("%s  %d/%d checks passed\n", g_fail ? "FAILURES" : "OK", g_total - g_fail, g_total);
   return g_fail ? 1 : 0;
