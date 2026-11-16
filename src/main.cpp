@@ -961,6 +961,11 @@ void setup()
         if (wifiMarcduinoReceiver.enabled())
         {
             wifiMarcduinoReceiver.setCommandHandler([](const char* cmd) {
+                // DroidNet: the library's receiver frames on CR alone and cuts a long line off
+                // silently. Skip the LF of a CR LF host, and drop a contract line that was cut off.
+                cmd = contractWifiLine(cmd, CONTRACT_LINE_BUF);
+                if (cmd == nullptr)
+                    return;
                 DEBUG_PRINTLN(cmd);
                 // DroidNet: a contract line runs here and now. Marcduino::processCommand() only
                 // queues its action on the player, with one command pointer, so of several lines

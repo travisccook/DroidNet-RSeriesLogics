@@ -15,6 +15,7 @@
 // much was queued in front of it. This reader drains everything that has arrived, every pass.
 #pragma once
 #include <stdint.h>
+#include <string.h>
 
 // One line, with its NUL. The longest line Studio can emit is 102 characters (a scored A with
 // every key, an=/ap= included; test/host/run.sh stage 3 re-derives that), so 128 leaves room.
@@ -43,6 +44,44 @@ struct ContractLineBuf {
     return false;
   }
 };
+
+// How many bytes one pass may take when every byte is echoed to a pass-through stream first.
+// The echo's write() WAITS for room, and the reader runs on the task that renders the LEDs, so a
+// pass never takes more than the pass-through can accept without waiting:
+//   * `room` > 0 (its availableForWrite()): that many, at most CONTRACT_DRAIN_MAX;
+//   * no room, on a stream that has reported room before (`sawRoom`): NONE this pass. The bytes
+//     wait in the UART's receive buffer;
+//   * a stream that never reports room (Print's default availableForWrite() is 0): the stock one
+//     byte a pass, which may wait one byte time, as the library's reader always did.
+// THE LIMIT THIS LEAVES. The reader can then take bytes no faster than the pass-through sends
+// them. With the pass-through at the input's baud that is no limit. With a slower one (the
+// stock Serial2 pass-through is 2400 baud against 9600 in), a back-to-back burst is absorbed by
+// the receive buffer (1024 bytes, see main.cpp) and the pass-through's own FIFO, about 1.2 KB in
+// all; beyond that, bytes are lost in the UART, and verb V reports the load bad. Section 11's
+// 400-byte burst fits either way.
+inline uint8_t contractDrainBudget(int room, bool& sawRoom) {
+  if (room > 0) { sawRoom = true; return room > CONTRACT_DRAIN_MAX ? CONTRACT_DRAIN_MAX : (uint8_t)room; }
+  return sawRoom ? 0 : 1;
+}
+
+// A line as the library's WiFi receiver hands it to its command handler. That receiver frames on
+// CR alone, keeps an LF that follows it as the first byte of the NEXT line, and cuts a line off
+// silently at its buffer (`bufSize` bytes with the NUL). Returns the line to process, or nullptr
+// to drop it:
+//   * one leading LF is skipped, so a host that sends CR LF works (without this every contract
+//     line after the first began with LF, was not a '!' line, and was lost);
+//   * a contract line that fills the buffer was cut off, or may have been: dropped, for the same
+//     reason the Serial1 reader drops one (it would still parse, and play a different show). The
+//     longest line Studio emits is 102 characters; the buffer holds 127.
+// Any other line is returned as it came, cut off or not: no native command changes.
+inline const char* contractWifiLine(const char* cmd, size_t bufSize) {
+  if (cmd == nullptr) return nullptr;
+  const bool full = strlen(cmd) + 1 >= bufSize;
+  if (*cmd == 0x0A) cmd++;
+  if (*cmd == '\0') return nullptr;
+  if (full && *cmd == '!') return nullptr;
+  return cmd;
+}
 
 // One pass of the reader: take up to `budget` bytes from `in` (anything with available() and
 // read()), handing each to pass(uint8_t) first (the pass-through echo).

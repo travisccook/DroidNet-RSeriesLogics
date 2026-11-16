@@ -4,11 +4,12 @@
 //
 // src/contract/ContractSerial.h — the fork's Marcduino serial reader. It takes the place of the
 // library's MarcduinoSerial<> on Serial1 (same constructor and setStream(), ZERO edits to
-// lib/Reeltwo) and differs in three ways, all in contract_line.h:
+// lib/Reeltwo) and differs in four ways, all in contract_line.h:
 //   * it drains every byte that has arrived, every pass, instead of one;
 //   * a contract line ('!...') is handed to contractHandleLine() in this call, not queued on the
 //     animation player, so a burst of contract lines all run;
-//   * an over-long contract line is dropped rather than processed truncated.
+//   * an over-long contract line is dropped rather than processed truncated;
+//   * it never waits on the pass-through stream (contractDrainBudget).
 // Every other line goes to Marcduino::processCommand() exactly as before, one per pass.
 //
 // INCLUDE ORDER (main.cpp): after contract/ContractLogics.h (contractHandleLine) and
@@ -28,23 +29,22 @@ public:
     {
         fStream = stream;
         fOutStream = outStream;
+        fOutSawRoom = false;
     }
 
     virtual void animate() override
     {
         if (fStream == nullptr)
             return;
-        // With a pass-through stream, take no more than it can accept without blocking: its
-        // write() waits for room, and this is the task that renders the LEDs. A stream that
-        // cannot say how much room it has (availableForWrite() == 0, Print's default) gets the
-        // stock one byte per pass.
+        // With a pass-through stream, take no more than it can accept without waiting: its
+        // write() waits for room, and this is the task that renders the LEDs. See
+        // contractDrainBudget() in contract_line.h for the rule, and for the limit it leaves.
         uint8_t budget = CONTRACT_DRAIN_MAX;
         Stream* out = fOutStream;
         if (out != nullptr)
-        {
-            int room = out->availableForWrite();
-            budget = (room <= 0) ? 1 : (room > CONTRACT_DRAIN_MAX ? CONTRACT_DRAIN_MAX : (uint8_t)room);
-        }
+            budget = contractDrainBudget(out->availableForWrite(), fOutSawRoom);
+        if (budget == 0)
+            return;
         AnimationPlayer& player = fPlayer;
         contractDrain(fLine, *fStream, budget,
             [out](uint8_t b) { if (out != nullptr) out->write(&b, 1); },
@@ -55,6 +55,7 @@ public:
 private:
     Stream* fStream = nullptr;
     Stream* fOutStream = nullptr;
+    bool fOutSawRoom = false;       // the pass-through has reported room at least once (contractDrainBudget)
     AnimationPlayer& fPlayer;
     ContractLineBuf fLine;
 };

@@ -57,6 +57,31 @@ static LoopResult runLoop(const std::string& wire, size_t rxCap, uint8_t budget,
   return res;
 }
 
+// The same loop with a pass-through stream on it, as the firmware runs by default (every byte is
+// echoed to Serial2): a UART with a FIFO of `fifoCap` bytes that drains at `baudOut` and reports
+// its room. The reader asks contractDrainBudget() what it may take. A byte echoed with no room in
+// the FIFO would have WAITED in write(): `waits` counts those. There must be none.
+struct PassResult { std::vector<std::string> contract; size_t lost = 0, echoed = 0; int waits = 0, idlePasses = 0; };
+static PassResult runLoopPass(const std::string& wire, size_t rxCap, double baudIn, double baudOut, int fifoCap = 128) {
+  MockUart uart(wire, rxCap); ContractLineBuf lb; PassResult res; bool sawRoom = false;
+  int fifo = 0; double outCredit = 0;
+  for (int ms = 0; ms < 120000; ms++) {
+    uart.advance(1.0, baudIn);
+    outCredit += baudOut / 10000.0;
+    while (outCredit >= 1.0) { outCredit -= 1.0; if (fifo > 0) fifo--; }
+    if (ms % 10 < 3) continue;                       // blocked in show(): no pass this millisecond
+    const uint8_t budget = contractDrainBudget(fifoCap - fifo, sawRoom);
+    if (budget == 0) { res.idlePasses++; continue; }
+    contractDrain(lb, uart, budget,
+      [&](uint8_t) { if (fifo < fifoCap) fifo++; else res.waits++; res.echoed++; },
+      [&res](const char* afterBang) { res.contract.push_back(afterBang); },
+      [](const char*) {});
+    if (uart.sent >= wire.size() && uart.available() == 0) break;
+  }
+  res.lost = uart.lost;
+  return res;
+}
+
 int main() {
   // ---- the line assembler ----
   auto a = feedAll("!L*X\r@0T1\r\r!**M:v=idle\r");
@@ -121,6 +146,50 @@ int main() {
   LoopResult old = runLoop(big, 256, 1);
   CHECK(old.lost > 0 && old.contract.size() < bigLines.size());
   printf("     (4 KB burst, 256-byte RX buffer: one byte a pass loses %zu bytes; draining every pass loses 0)\n", old.lost);
+  // ---- with the pass-through on, as the firmware runs by default ----
+  { bool saw = false;                                         // the budget rule
+    CHECK(contractDrainBudget(0, saw) == 1 && !saw);          // a stream that cannot say: the stock one byte a pass
+    CHECK(contractDrainBudget(-1, saw) == 1);
+    CHECK(contractDrainBudget(40, saw) == 40 && saw);         // room: that many
+    CHECK(contractDrainBudget(4000, saw) == CONTRACT_DRAIN_MAX);
+    CHECK(contractDrainBudget(0, saw) == 0);                  // it CAN say, and it is full: nothing this pass, and no waiting
+    CHECK(contractDrainBudget(1, saw) == 1); }
+  // Pass-through at the input's baud: the 400-byte burst and the 4 KB show both arrive whole
+  // (through the firmware's 1024-byte receive buffer), and no pass ever waits in write().
+  PassResult p = runLoopPass(burst, 1024, 9600, 9600);
+  CHECK(p.lost == 0 && p.contract == sentLines && p.waits == 0 && p.echoed == burst.size());
+  p = runLoopPass(big, 1024, 9600, 9600);
+  CHECK(p.lost == 0 && p.contract == bigLines && p.waits == 0);
+  p = runLoopPass(big, 1024, 9600, 115200);
+  CHECK(p.lost == 0 && p.contract == bigLines && p.waits == 0);
+  // Pass-through at 2400 baud (the stock Serial2 setting) against 9600 in. Section 11's burst
+  // still arrives whole: the receive buffer and the FIFO absorb it...
+  p = runLoopPass(burst, 1024, 9600, 2400);
+  CHECK(p.lost == 0 && p.contract == sentLines && p.waits == 0);
+  // ...and a 4 KB show does not. The reader can take bytes no faster than the pass-through
+  // sends them, so the UART drops what its buffer cannot hold. That is THE DOCUMENTED LIMIT
+  // (contract_line.h); verb V reports such a load bad. What this fork guarantees is that it
+  // never waits: no pass sits in write() while the LEDs go unrendered.
+  p = runLoopPass(big, 1024, 9600, 2400);
+  CHECK(p.lost > 1000 && p.contract.size() < bigLines.size() && p.waits == 0 && p.idlePasses > 0);
+  printf("     (4 KB burst, pass-through at 2400 baud: %zu bytes lost in the UART, %d passes skipped, 0 waited)\n", p.lost, p.idlePasses);
+
+  // ---- a line from the library's WiFi receiver ----
+  CHECK(std::string(contractWifiLine("!L*X", CONTRACT_LINE_BUF)) == "!L*X");
+  CHECK(std::string(contractWifiLine("\n!L*X", CONTRACT_LINE_BUF)) == "!L*X");          // the LF of a CR LF host
+  CHECK(std::string(contractWifiLine("\n@0T1", CONTRACT_LINE_BUF)) == "@0T1");
+  CHECK(contractWifiLine("\n", CONTRACT_LINE_BUF) == nullptr && contractWifiLine("", CONTRACT_LINE_BUF) == nullptr);
+  CHECK(contractWifiLine(nullptr, CONTRACT_LINE_BUF) == nullptr);
+  CHECK(std::string(contractWifiLine(worst.c_str(), CONTRACT_LINE_BUF)) == worst);       // the longest real line passes
+  { const std::string cut = "!" + std::string(CONTRACT_LINE_BUF - 2, 'x');               // 127 characters: the buffer was full
+    CHECK(contractWifiLine(cut.c_str(), CONTRACT_LINE_BUF) == nullptr);                  // a contract line cut off: dropped
+    const std::string cutLf = "\n!" + std::string(CONTRACT_LINE_BUF - 3, 'x');
+    CHECK(contractWifiLine(cutLf.c_str(), CONTRACT_LINE_BUF) == nullptr);
+    const std::string fits = "!" + std::string(CONTRACT_LINE_BUF - 3, 'x');              // 126: it fitted
+    CHECK(contractWifiLine(fits.c_str(), CONTRACT_LINE_BUF) != nullptr);
+    const std::string native = "@" + std::string(CONTRACT_LINE_BUF - 2, '1');
+    CHECK(contractWifiLine(native.c_str(), CONTRACT_LINE_BUF) != nullptr); }             // a native line keeps the stock truncation
+
   // The 1024-byte buffer the firmware asks for rides out a pass that stalls for a full second.
   { MockUart u(big, 1024); u.advance(1000.0, 9600); CHECK(u.lost == 0 && u.available() == 960); }
 

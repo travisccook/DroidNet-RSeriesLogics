@@ -172,6 +172,10 @@ if ! printf '%s\n' "$CODE" | grep -Eq 'WifiMarcduinoReceiverBase[[:space:]]*<[[:
   echo "FAIL: the WiFi Marcduino receiver in $MAIN is not WifiMarcduinoReceiverBase<1, CONTRACT_LINE_BUF>"
   echo "      (the library default is a 64-byte line, which truncates a contract line silently)"; exit 1
 fi
+if ! printf '%s\n' "$CODE" | grep -Eq 'contractWifiLine[[:space:]]*\([[:space:]]*cmd[[:space:]]*,[[:space:]]*CONTRACT_LINE_BUF[[:space:]]*\)'; then
+  echo "FAIL: the WiFi command handler in $MAIN does not pass its line through contractWifiLine(cmd, CONTRACT_LINE_BUF)"
+  echo "      (a CR LF host loses every contract line after the first; a cut-off contract line is processed)"; exit 1
+fi
 if ! printf '%s\n' "$CODE" | grep -q 'setRxBufferSize'; then
   echo "FAIL: $MAIN does not size Serial1's receive buffer (Serial1.setRxBufferSize before begin)"; exit 1
 fi
