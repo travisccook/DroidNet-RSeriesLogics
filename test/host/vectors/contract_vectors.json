@@ -25,6 +25,8 @@
     "NATIVE_GATED_PSI": [],
     "NATIVE_GATED_FLTHY": [1],
     "NATIVE_SPEED_LOGICS": [0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 2, 0, 1, 0, 0, 0, 0],
+    "FX_CYCLE_MIN_MS": 680,
+    "FX_FLASH_MIN_STATE_MS": 190,
     "FIELD_STEP_DIV": 10,
     "FIELD_STEP_MIN": 2
   },

@@ -120,6 +120,8 @@ int main(int argc, char** argv) {
   printf(",\n    \"NATIVE_SPEED_LOGICS\": [");
   { bool first = true; for (int c = 0; c < 256; c++) if (nativeAllowedLogics(c)) { printf("%s%d", first ? "" : ", ", nativeSpeedLogics(c)); first = false; } }
   printf("]");
+  // CA1.5, the shared timing: the shortest cycle of pulse and of wipe, and flash's shortest state.
+  printf(",\n    \"FX_CYCLE_MIN_MS\": %lu,\n    \"FX_FLASH_MIN_STATE_MS\": %lu", (unsigned long)FX_CYCLE_MIN_MS, (unsigned long)FX_FLASH_MIN_STATE_MS);
   // S9: the gate's step is more than a tenth of the ceiling and at least 2 levels: ceil / DIV + 1.
   printf(",\n    \"FIELD_STEP_DIV\": 10,\n    \"FIELD_STEP_MIN\": 2");
   // MORE CONSTANTS GO HERE (each starts with ",\n    ")
