@@ -30,13 +30,17 @@
 static const byte     FX_CONTRACT   = 106;         // single fork effect id (appended in main.cpp)
 static const byte     NATIVE_LIGHTSOUT = 14;       // native blackout / de-energize
 static const byte     NATIVE_NORMAL = 0;           // native idle shimmer
-static const uint8_t  SCORE_MAX = 16;              // sections per unit (a song has ~8)
+static const uint8_t  SCORE_MAX = 32;              // sections per unit (contract v1.3 section 6)
 
 // Per-unit contract state. Index 0 = FLD (engine id 1), 1 = RLD (engine id 2).
 static ContractUnitState gContract[2];
 static BeatClock  gBeat;                // ONE beat clock for both displays (verb C)
 static uint8_t    gLevel = 0;           // verb L energy 0..255 (drives CE_METER)
 static ScoreEntry gScore[2][SCORE_MAX];
+static uint32_t   gLastLineMs = 0;      // L2: the last well-formed contract line addressed to this board
+// Section 10: one pending reply to a Q, written to Serial1 by mainLoop() between WDP announces.
+static char       gQueryLine[CONTRACT_REPLY_MAX];
+static uint8_t    gQueryLen = 0;
 // S6 / verb B on native looks. The engine copies its RAM default object back over the live
 // settings on every effect change (LogicEngine.h:807, :1830), so a brightness that has to last
 // is written THERE, and the owner's value is put back at every show boundary.
@@ -360,7 +364,8 @@ inline void applyContractToUnit(uint8_t u, const ParsedContract& p, uint16_t lin
         g.lastAccentBeat = accentEdgeAfterSeed(gBeat, now);               // C1 (BEAT_NONE while no clock runs)
         break;                                    // the display is NOT taken at load: the tick does that on the beat
       }
-      _applyLook(u, lookPatchFrom(pr), now);
+      ContractLookPatch lp = lookPatchFrom(pr);
+      if (liveLookOffer(g, lp, now)) _applyLook(u, lp, now);              // S4: else held; contractTick() applies it
       break;
     }
     case CV_PULSE: {
@@ -389,6 +394,10 @@ inline void applyContractToUnit(uint8_t u, const ParsedContract& p, uint16_t lin
       if (pr.mode == 's')      _boundary(u, 's', pr.hasWd ? pr.wd : 0);
       else if (pr.mode == 'i') _boundary(u, 'i', 0);
       break;
+    case CV_VERIFY:                               // section 7: is the score this unit holds the one the host sent?
+      if (!pr.hasN || !pr.hasK) break;
+      if (scoreVerify(g, gScore[u], pr.n, pr.k) == 2) _boundary(u, 'i', 0);   // no: back to the native look, visibly.
+      break;                                                                  // (the reset keeps ok=2 for Q)
     default: break;
   }
 }
@@ -402,6 +411,14 @@ inline void contractHandleLine(const char* afterBang) {
   const bool f = (p.unit == 'F' || p.unit == '*'), r = (p.unit == 'R' || p.unit == '*');
   if (!f && !r) return;                           // unit 'T' (HP)
   const uint32_t now = millis();
+  gLastLineMs = now;                              // L2: well-formed and addressed to this board feeds the watchdog
+  if (p.verb == CV_QUERY) {                       // section 10 (an unanswered Q is still a keepalive)
+    if (!contractQueryAnswerable(p)) return;      // no r=, or a wildcard: no reply
+    const uint8_t u = f ? 0 : 1;
+    gQueryLen = contractFormatQuery(gQueryLine, sizeof gQueryLine, p.params.route, 'L', p.unit, SCORE_MAX,
+                                    gContract[u].scoreLen, gContract[u].loadOk, gBeat.running ? gBeat.bpm : 0);
+    return;
+  }
   if (p.verb == CV_CLOCK) {                       // ONE shared clock: seed it once, then both displays follow
     const ContractSeed k = beatClockSeed(gBeat, p.params, now);
     if (k == CS_IGNORED || k == CS_HOLD) return;  // S1: ignored whole. C6: held — cursors freeze because a stopped clock is not ticked
@@ -417,11 +434,20 @@ inline void contractHandleLine(const char* afterBang) {
   if (f) applyContractToUnit(0, p, crc);
   if (r) applyContractToUnit(1, p, crc);
 }
+// The pending Q reply (section 10). mainLoop() writes it when Serial1 can take it whole.
+inline bool contractReplyPending(const char*& line, uint8_t& n) { line = gQueryLine; n = gQueryLen; return n != 0; }
+inline void contractReplyDone() { gQueryLen = 0; }
 
 // Runs from mainLoop() every pass (NOT from an effect fn), so it keeps working while a native
 // look, which ContractRender does not draw, is on a display.
 inline void contractTick() {
   const uint32_t now = millis();
+  for (uint8_t u = 0; u < 2; u++) {
+    ContractUnitState& g = gContract[u];
+    if (contractWatchdogExpired(g, gLastLineMs, now)) _boundary(u, 'i', 0);   // L2: the host went away
+    ContractLookPatch lp;
+    if (liveLookDue(g, now, lp)) _applyLook(u, lp, now);                      // S4: a held live look's window ended
+  }
   if (!gBeat.running) return;                     // no clock (or held, C6): the score does not move
   const BeatPos bp = beatPosAt(gBeat, now);
   for (uint8_t u = 0; u < 2; u++) {

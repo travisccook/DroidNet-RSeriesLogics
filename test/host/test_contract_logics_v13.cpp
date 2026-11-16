@@ -176,10 +176,146 @@ static void test_brightness_and_native() {
   CHECK(gContract[0].pulseActive);
 }
 
+// ---- S4: live look changes are at least 170 ms apart ----
+static void test_live_hold() {
+  resetAll(); send("LFA:i=solid,c=ff0000"); run(50);
+  send("LFA:i=solid,c=00ff00"); send("LFA:i=solid,c=0000ff"); run(100);
+  CHECK(FLD->px(0, 0).r > 0 && FLD->px(0, 0).b == 0);      // 150 ms in: still the first look
+  run(40);
+  CHECK(FLD->px(0, 0).b > 0 && FLD->px(0, 0).r == 0 && FLD->px(0, 0).g == 0);   // blue; green never showed
+  run(200); send("LFA:c=00ff00"); send("LFA:s=7"); run(200);                    // two held patches merge
+  CHECK(FLD->px(0, 0).g > 0 && gContract[0].speed == 7);
+  send("LFA:i=solid,c=ff0000"); send("**X"); run(400);
+  CHECK(FLD->_seq == 14 && !gContract[0].holdPending);     // a reset drops the held look
+  // an X and a new look cannot be used to flash faster than the hold allows
+  resetAll(); send("LFA:i=solid,c=ffffff"); run(20); send("LFX"); send("LFA:i=solid,c=ffffff"); run(100);
+  CHECK(FLD->_seq == 14);                                  // still held: 120 ms after the first look
+  run(60); CHECK(FLD->_seq == 106);
+  // the two displays hold separately
+  resetAll(); send("LFA:i=solid,c=ff0000"); run(50); send("LRA:i=solid,c=00ff00"); run(20);
+  CHECK(RLD->_seq == 106 && RLD->px(0, 0).g > 0);
+}
+
+// ---- sections 6, 7, 10: the score, the load check, the query ----
+static void sendScored(const char* line, uint8_t& n, uint16_t& k) { send(line); n++; k ^= contractCrc16(line); }
+static void sendV(const char* unit, uint8_t n, uint16_t k) {
+  char v[40]; snprintf(v, sizeof v, "L%sV:n=%u,k=%04x", unit, (unsigned)n, (unsigned)k); send(v);
+}
+static bool reply(const char* want) {
+  const char* q; uint8_t qn;
+  if (!contractReplyPending(q, qn)) return false;
+  const bool same = qn == strlen(want) && memcmp(q, want, qn) == 0;
+  if (!same) printf("     reply was: %.*s\n", (int)qn - 1, q);
+  contractReplyDone();
+  return same;
+}
+static void test_score_verify_query() {
+  const char* q; uint8_t qn;
+  // a complete load is good; nothing plays until Play sends the clock
+  resetAll(); uint8_t n = 0; uint16_t k = 0;
+  send("**M:v=show,wd=15");
+  sendScored("LFA:i=solid,c=ff0000,b=128,at=0", n, k);
+  sendScored("LFA:i=native:4,at=8,am=2,m=200,ae=flash", n, k);
+  send("LFQ:r=0"); CHECK(reply(";S0!LFq:ver=1.3,rel=1,cap=32,n=2,ok=0,bpm=0\r"));     // loaded, not checked yet
+  sendV("F", n, k);
+  CHECK(gContract[0].loadOk == 1 && gContract[0].scoreLen == 2 && gContract[0].wdSec == 15);
+  run(300); CHECK(FLD->_seq == 0);                         // armed: the native idle look, no clock yet (C3)
+  send("**C:bpm=120,ph=0,bpb=4,beat=0"); run(50);
+  CHECK(FLD->_seq == 106 && FLD->px(0, 0).r == 80);        // the scored b=128 under the 160 ceiling
+  send("LFQ:r=0"); CHECK(reply(";S0!LFq:ver=1.3,rel=1,cap=32,n=2,ok=1,bpm=120\r"));
+  send("LRQ:r=2"); CHECK(reply(";W2,;S0!LRq:ver=1.3,rel=1,cap=32,n=0,ok=0,bpm=120\r"));   // routed via WCB 2
+  send("LFQ");     CHECK(!contractReplyPending(q, qn));    // no r=: not answered
+  send("L*Q:r=0"); CHECK(!contractReplyPending(q, qn));    // a wildcard is never answered
+  send("**Q:r=0"); CHECK(!contractReplyPending(q, qn));
+  send("PFQ:r=0"); CHECK(!contractReplyPending(q, qn));    // another board's query
+  run(4000); CHECK(FLD->_seq == 4);                        // into the native section, on beat 8
+
+  // a line delivered twice (a mesh retry) changes neither n nor k
+  resetAll(); n = 0; k = 0; send("**M:v=show");
+  sendScored("LFA:i=solid,c=ff0000,at=0", n, k); sendScored("LFA:i=solid,c=0000ff,at=8", n, k);
+  send("LFA:i=solid,c=0000ff,at=8"); send("LFA:i=solid,c=ff0000,at=0");
+  sendV("F", n, k); CHECK(gContract[0].loadOk == 1 && gContract[0].scoreLen == 2);
+  // a V that expects a line the board never got: back to the native look, and Q says so
+  resetAll(); n = 0; k = 0; send("**M:v=show");
+  sendScored("LFA:i=solid,c=ff0000,at=0", n, k);
+  k ^= contractCrc16("LFA:i=solid,c=0000ff,at=8"); n++;    // lost on the way
+  send("**C:bpm=120,ph=0,bpb=4,beat=0"); run(50); CHECK(FLD->_seq == 106);
+  sendV("F", n, k); run(50);
+  CHECK(gContract[0].loadOk == 2 && !gContract[0].inShow && gContract[0].scoreLen == 0 && FLD->_seq == 0);
+  send("LFQ:r=0"); CHECK(reply(";S0!LFq:ver=1.3,rel=1,cap=32,n=0,ok=2,bpm=0\r"));
+  send("**M:v=idle"); send("**X");
+  send("LFQ:r=0"); CHECK(reply(";S0!LFq:ver=1.3,rel=1,cap=32,n=0,ok=2,bpm=0\r"));     // ok=2 outlives idle and X...
+  send("**M:v=show");
+  send("LFQ:r=0"); CHECK(reply(";S0!LFq:ver=1.3,rel=1,cap=32,n=0,ok=0,bpm=0\r"));     // ...until the next M:v=show
+  // one display failing its check does not stop the other, or the clock it plays from
+  resetAll(); send("**M:v=show"); send("L*A:i=solid,c=ff0000,at=0"); send("**C:bpm=120,ph=0,bpb=4,beat=0"); run(50);
+  send("LFV:n=9,k=0000"); run(50);
+  CHECK(FLD->_seq == 0 && RLD->_seq == 106 && gBeat.running);
+  // a line whose bytes changed on the way is a bad load too
+  resetAll(); n = 0; k = 0; send("**M:v=show");
+  k ^= contractCrc16("LFA:i=solid,c=ff0000,at=0"); n++; send("LFA:i=solid,c=ff0001,at=0");
+  sendV("F", n, k); CHECK(gContract[0].loadOk == 2);
+  // capacity is 32; the 33rd distinct entry marks the load bad even when the host's n and k match what arrived
+  resetAll(); n = 0; k = 0; send("**M:v=show");
+  for (int i = 0; i < SCORE_MAX; i++) {
+    char l[48]; snprintf(l, sizeof l, "LFA:i=solid,c=ff0000,at=%d", i * 4); sendScored(l, n, k);
+  }
+  CHECK(SCORE_MAX == 32 && gContract[0].scoreLen == 32 && !gContract[0].overflow);
+  { ContractUnitState copy = gContract[0]; CHECK(scoreVerify(copy, gScore[0], n, k) == 1); }
+  send("LFA:i=solid,c=ff0000,at=4000");
+  CHECK(gContract[0].scoreLen == 32 && gContract[0].overflow);
+  sendV("F", n, k); CHECK(gContract[0].loadOk == 2);
+  // a V without both numbers is not a V
+  resetAll(); send("**M:v=show"); send("LFV:n=0"); send("LFV:k=0000"); CHECK(gContract[0].loadOk == 0 && gContract[0].inShow);
+
+  // every-N accents from the score: front on even beats, rear on odd ones
+  resetAll(); send("**M:v=show");
+  send("LFA:i=solid,c=ff0000,at=0,am=2,m=200,an=2,ap=0,ae=flash");
+  send("LRA:i=solid,c=0000ff,at=0,am=2,m=200,an=2,ap=1,ae=flash");
+  send("**C:bpm=120,ph=0,bpb=4,beat=0");
+  int both = 0, front = 0, rear = 0; uint32_t lf = 0, lr = 0;
+  for (uint32_t t = 10; t < 8000; t += 10) {                // beats 0..15 (beat 16 starts at 8000 ms)
+    _mock_millis += 10; frame();
+    const bool f = gContract[0].pulseActive && gContract[0].pulseStartMs != lf;
+    const bool r = gContract[1].pulseActive && gContract[1].pulseStartMs != lr;
+    if (f) { lf = gContract[0].pulseStartMs; front++; }
+    if (r) { lr = gContract[1].pulseStartMs; rear++; }
+    if (f && r) both++;
+  }
+  if (front != 8 || rear != 8 || both != 0) printf("     front=%d rear=%d both=%d\n", front, rear, both);
+  CHECK(front == 8 && rear == 8 && both == 0);             // 16 beats: eight each, never together
+}
+
+// ---- L2: the host-silence watchdog ----
+static void test_watchdog() {
+  resetAll(); send("**M:v=show,wd=2"); send("LFA:i=solid,c=ff0000"); run(1900);
+  CHECK(FLD->_seq == 106);
+  send("**C:bpm=120,ph=0,beat=0"); run(1900); CHECK(FLD->_seq == 106);     // any addressed line keeps it alive
+  send("**Q"); run(1900);           CHECK(FLD->_seq == 106);               // a wildcard Q too, though it gets no reply
+  send("LRL:v=10"); run(1900);      CHECK(FLD->_seq == 106);               // a line for the other display: same board
+  send("P*A:i=solid"); send("HTX"); send("LFA:i=sol"); run(1900);          // another board's lines are not...
+  CHECK(FLD->_seq == 106);                                                 // ...but LFA:i=sol is well-formed and ours
+  send("xx"); send("L"); send("LFz"); run(2100);                           // malformed lines are not
+  CHECK(FLD->_seq == 0 && !gContract[0].inShow && !gContract[1].inShow && !gBeat.running);
+  // X leaves the watchdog armed
+  resetAll(); send("**M:v=show,wd=2"); send("LFA:i=solid,c=ff0000"); run(200); send("**X"); run(500);
+  CHECK(FLD->_seq == 14 && gContract[0].wdSec == 2);
+  run(1600); CHECK(FLD->_seq == 0 && !gContract[0].inShow);                // dark, then given back
+  // no wd=: no watchdog, so a show stored in a WCB macro still plays
+  resetAll(); send("**M:v=show"); send("LFA:i=solid,c=ff0000"); run(60000, 100);
+  CHECK(FLD->_seq == 106 && gContract[0].inShow);
+  // idle disarms it
+  resetAll(); send("**M:v=show,wd=2"); send("**M:v=idle"); FLD->selectSequence(3); run(5000);
+  CHECK(FLD->_seq == 3);
+}
+
 int main() {
   test_lifecycle();
   test_clock();
   test_brightness_and_native();
+  test_live_hold();
+  test_score_verify_query();
+  test_watchdog();
   if (gFails) { printf("%d CHECK(s) FAILED\n", gFails); return 1; }
   printf("contract v1.3 on the RSeries layer OK\n");
   return 0;

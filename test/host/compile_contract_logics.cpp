@@ -26,6 +26,7 @@ static void send(const char* afterBang) {
 // Wipe every fork-owned global so each scenario starts from power-on state.
 static void resetAll() {
   for (uint8_t u = 0; u < 2; u++) { gContract[u] = ContractUnitState(); gBriTouched[u] = false; }
+  gLastLineMs = 0; gQueryLen = 0;
   mockEngineReset();
   gBeat = BeatClock{};
   gLevel = 0;
@@ -364,18 +365,18 @@ int main() {
   // BOTH inside a lit half, but sit at opposite ends of the beat envelope.
   // =====================================================================================
   resetAll();
-  _mock_millis = 0;
+  _mock_millis = 100000;                // (off the first 170 ms of uptime: a live look there is held, S4)
   send("**C:bpm=120,ph=0,bpb=4,beat=0");
   send("L*A:i=flash,c=FF0000,s=255,b=200,m=200,am=2");
   {
     LogicEngineRenderer rf; rf._id = 1;
-    _mock_millis = 10;                    // 10 % 340 < 170 => LIT; beat phase ~0.02 => accent peak
+    _mock_millis = 100010;                   // 10 % 340 < 170 => LIT; beat phase ~0.02 => accent peak
     ContractRender(rf);
     int onEarly = rf.px(0, 0).r;
-    _mock_millis = 460;                   // 460 % 340 = 120 < 170 => LIT; beat phase 0.92 => floor
+    _mock_millis = 100460;                   // 460 % 340 = 120 < 170 => LIT; beat phase 0.92 => floor
     ContractRender(rf);
     int onLate = rf.px(0, 0).r;
-    _mock_millis = 200;                   // 200 % 340 >= 170 => the DARK half
+    _mock_millis = 100200;                   // 200 % 340 >= 170 => the DARK half
     ContractRender(rf);
     int off = rf.px(0, 0).r;
     CHECK(!gContract[0].pulseActive);     // no overlay in play — this is the BASE look
