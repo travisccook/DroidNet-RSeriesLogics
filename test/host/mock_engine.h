@@ -5,12 +5,19 @@
 // Host mock of the reeltwo engine API surface that ContractLogics.h uses. It type-checks the
 // firmware layer AND models the three engine behaviours the contract depends on, each tied to
 // lib/Reeltwo/src/dome/LogicEngine.h:
-//   * which sequence is selected, and when it changes (LE:721, :804, :842-849);
+//   * which sequence is selected, and WHEN the engine notices a change (LE:721, :804, :842-849).
+//     The order inside animate() matters and is reproduced exactly: the effect is latched only
+//     when the selected value differs from the previous one, the effect RUNS, and only THEN is
+//     previous := current (LE:818-819). So a selectSequence() made from INSIDE an effect is
+//     never noticed: the next frame sees previous == current and keeps running the old effect.
+//     (This mock used to set previous before running the effect, which hid exactly that bug.)
 //   * restoreSettings() on every effect change: the live fBri goes back to the RAM default
 //     object's fBri (LE:807, :1830);
 //   * a custom effect that returns false hands the display to the default effect (LE:818-830);
 //   * LogicEffectDefaultSelector() indexes one past its 25-entry table for 25 (LE:2733).
-// It is still a mock: native looks draw nothing, they only count frames and restarts.
+// It is still a mock. A native look is not drawn pixel by pixel: every native sequence but
+// LIGHTSOUT fills the display with its live brightness (a stand-in for "lit": the worst case for
+// a full-field measurement), and LIGHTSOUT fills it black.
 #pragma once
 #include <stdint.h>
 typedef uint8_t byte;
@@ -35,7 +42,8 @@ static LogicEngineSettings LogicEngineRLDDefault = { 140 };   // REAR_BRI  (LE:1
 
 struct LogicEngineRenderer {
   unsigned _id = 1;
-  int  _seq = 0, _prevSeq = -1;       // selected sequence, and the one the last frame ran
+  int  _seq = 0, _prevSeq = -1;       // fDisplayEffectVal's sequence, and fPreviousEffectVal's
+  int  _fx = 0;                       // the LATCHED effect: what animate() actually runs
   int  _selects = 0;                  // selectSequence() calls
   int  _restarts[256] = {0};          // effect changes into each sequence
   int  _nativeFrames = 0;             // frames a native look ran
@@ -65,24 +73,25 @@ inline void RLD_selectSequence(byte s, int = 0, int = 0, int = 0) { RLD->selectS
 
 inline bool ContractRender(LogicEngineRenderer& r);   // the fork effect, id 106
 
-// One engine frame for one display: LogicEngineRenderer::animate() (LE:789-831), reduced.
+// One engine frame for one display: LogicEngineRenderer::animate() (LE:789-831), reduced, in the
+// engine's own order.
 inline void mockEngineFrame(LogicEngineRenderer& r) {
-  if (r._seq != r._prevSeq) {                                   // hasEffectChanged()
-    r._liveBri = (r._id == 1 ? LogicEngineFLDDefault : LogicEngineRLDDefault).fBri;   // restoreSettings()
+  if (r._seq != r._prevSeq) {                                   // hasEffectChanged()              LE:804
+    r._liveBri = (r._id == 1 ? LogicEngineFLDDefault : LogicEngineRLDDefault).fBri;   // restoreSettings() LE:807
     r._restarts[r._seq & 255]++;
-    r._prevSeq = r._seq;
+    r._fx = r._seq;                                             // fLogicEffect = fEffectSelector() LE:813
   }
   bool keep = true;
-  if (r._seq == 106) keep = ContractRender(r);
-  else if (r._seq == 25) r._oobCalls++;                         // LE:2733: '>' lets 25 through
+  if (r._fx == 106) keep = ContractRender(r);                   // the effect runs                  LE:818
+  else if (r._fx == 25) r._oobCalls++;                          // LE:2733: '>' lets 25 through
   else {
     r._nativeFrames++;
-    if (r._seq == 14) {                                         // LIGHTSOUT: dark
-      r._liveBri = 0;
-      for (int y = 0; y < 10; y++) for (int x = 0; x < 8; x++) r._px[y][x] = CRGB(0, 0, 0);
-    }
+    const byte level = (r._fx == 14) ? 0 : r._liveBri;          // LIGHTSOUT is dark; any other native look is "lit"
+    if (r._fx == 14) r._liveBri = 0;
+    for (int y = 0; y < 10; y++) for (int x = 0; x < 8; x++) r._px[y][x] = CRGB(level, level, level);
   }
-  if (!keep) r._seq = 0;                                        // back to fDefaultEffect (NORMAL)
+  r._prevSeq = r._seq;                                          // fPreviousEffectVal = fDisplayEffectVal  LE:819 (AFTER the effect)
+  if (!keep) r._seq = 0;                                        // selectEffect(fDefaultEffect)     LE:829
 }
 inline void mockEngineReset() {
   _fld_obj = LogicEngineRenderer(); _rld_obj = LogicEngineRenderer(); _rld_obj._id = 2;

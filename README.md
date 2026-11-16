@@ -320,6 +320,7 @@ ONLY="1 1f 4" bash test/host/run.sh   # just those stages
 | 2b | every finding of the 2026-11-15 review, as a regression test |
 | 2c | contract v1.3 as it appears on the two displays |
 | 2d | the Serial1 reader, including a 400-byte burst of back-to-back lines |
+| 2e | contract S9 as a property: hostile and random line streams through the real layer, measured on the rendered pixels |
 | 3 | the reader class, the serial and WiFi line widths, the WDP contract tag |
 | 4, 8 | differential fuzzers for the two parsers, under ASan and UBSan |
 | 5, 6 | the `#LEBRI` parser and action |

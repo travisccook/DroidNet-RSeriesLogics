@@ -27,8 +27,20 @@ static void resetAll() {
   mockEngineReset();
   _mock_millis = 100000;
 }
+// The full-field level of a display, 0..255: the mean over its pixels of each pixel's brightest
+// channel (so a red field counts like a white one). This is what the eye gets from the whole
+// panel, and what the S9 property is measured on. Assert on THIS for "dark" and "lit": the
+// selected sequence number says what was asked for, not what is on the LEDs.
+static int fieldLevel(const LogicEngineRenderer* r) {
+  long sum = 0;
+  for (int y = 0; y < 10; y++) for (int x = 0; x < 8; x++) {
+    const CRGB c = r->px(x, y);
+    sum += c.r > c.g ? (c.r > c.b ? c.r : c.b) : (c.g > c.b ? c.g : c.b);
+  }
+  return (int)(sum / 80);
+}
 // One mainLoop() pass at the current time: the engine renders, then the contract ticks.
 static void frame() { mockEngineFrame(*FLD); mockEngineFrame(*RLD); contractTick(); }
-static void run(uint32_t ms, uint32_t step = 10) {
+static inline void run(uint32_t ms, uint32_t step = 10) {
   for (uint32_t end = _mock_millis + ms; _mock_millis != end; ) { _mock_millis += step; frame(); }
 }

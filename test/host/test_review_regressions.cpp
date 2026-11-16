@@ -60,11 +60,18 @@ int main() {
   CHECK(FLD->_seq == 106 && FLD->px(0, 0).r > 0);          // the pulse shows
   run(1000);
   CHECK(FLD->_seq == 0);
-  resetAll(); send("L*A:i=solid,c=ff0000"); run(200); send("**X"); run(200); send("L*P:c=ffffff"); run(1000);
+  resetAll(); send("L*A:i=solid,c=ff0000"); run(200); send("**X"); run(200);
+  CHECK(fieldLevel(FLD) == 0);                             // X is dark, on the LEDs
+  send("L*P:c=ffffff"); run(1000);
   CHECK(FLD->_seq == 14);
+  // ...which is what was selected, not what is lit. The 2026-11-16 review's finding 1: the overlay
+  // ends by selecting from INSIDE the effect, the engine never notices (see mock_engine.h), and
+  // effect 106 goes on running without drawing: the last white frame stays on the LEDs.
+  KNOWN_BUG("R1 review 1: a pulse after X ends dark, on the pixels", fieldLevel(FLD) == 0);
   resetAll(); send("L*A:i=solid,c=00ff00"); run(200);
   send("**M:v=show"); send("L*A:i=solid,c=0000ff,at=8"); send("**C:bpm=120,ph=2000,bpb=4,beat=0"); run(500);
   CHECK(FLD->_seq == 14);
+  CHECK(fieldLevel(FLD) == 0);
 
   // F5: an accent on a scored native section restarts the native sequence every beat.
   resetAll(); send("**M:v=show"); send("LFA:i=native:4,at=0,am=2,m=200,ae=flash");

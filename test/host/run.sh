@@ -15,6 +15,7 @@
 #   2b. the 2026-11-15 review findings as behaviour tests (known defects marked)
 #   2c. contract v1.3 on the RSeries layer, on the mock engine
 #   2d. the Serial1 reader: line assembler, drain loop, the section-11 burst
+#   2e. contract S9 as a property: hostile and random line streams, measured on the pixels
 #   3. line-buffer width and reader guard (serial and WiFi; the WDP contract tag)
 #   4. parser fuzz + differential (ASan/UBSan, deterministic)
 #   5. native #LEBRI brightness parser unit tests
@@ -111,6 +112,11 @@ stage 2b "review regressions (known defects marked)" "$CXX" -std=c++17 -Wall -We
 stage 2d "Serial1 reader: line assembler, drain loop, burst" "$CXX" -std=c++17 -Wall -Wextra test_contract_line.cpp
 # Contract v1.3 as it appears on the two logic displays (lifecycle, clock, brightness, score, query).
 stage 2c "contract v1.3 on the RSeries layer (mock engine)" "$CXX" -std=c++17 -Wall -Wextra test_contract_logics_v13.cpp
+# Contract S9 as a property of the real layer: hostile and random line streams go in, the mock
+# engine renders every frame, and the full-field level of each display is measured. At most three
+# dark-to-lit onsets in any second, nothing above the owner's ceiling, native after idle, dark
+# after X. Fixed seed.
+stage 2e "S9 property: hostile and random line streams, measured on the pixels" "$CXX" -std=c++17 -O1 -Wall -Wextra test_contract_property.cpp
 
 if want 3; then
 echo "[3] line-buffer width and reader guard"

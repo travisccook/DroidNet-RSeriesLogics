@@ -19,6 +19,7 @@ static void test_lifecycle() {
   CHECK(gContract[0].base == CB_NONE && FLD->_seq == 0);
   send("**C:bpm=120,ph=1000,bpb=4,beat=0"); run(50);       // the show's first C, a second before beat 0
   CHECK(gContract[0].base == CB_DARK && FLD->_seq == 14 && RLD->_seq == 14);
+  CHECK(fieldLevel(FLD) == 0 && fieldLevel(RLD) == 0);     // dark on the LEDs, which is what counts
   run(1100); CHECK(FLD->_seq == 106 && FLD->px(0, 0).r > 0);   // ...and the first section on its beat
 
   resetAll(); send("**M:v=show"); send("LFA:i=solid,c=ff0000"); run(50);    // the show's first live A
@@ -28,6 +29,8 @@ static void test_lifecycle() {
   resetAll(); send("**M:v=show"); send("LFP:c=ffffff"); run(50);            // the show's first P
   CHECK(FLD->_seq == 106 && FLD->px(0, 0).r > 0);
   run(1000); CHECK(FLD->_seq == 14);                       // back to the show's dark baseline
+  // (the 2026-11-16 review's finding 1: the sequence number says so; the pixels do not)
+  KNOWN_BUG("R1 review 1: the show's first P ends on the dark baseline, on the pixels", fieldLevel(FLD) == 0);
 
   // every boundary leaves nothing of the last look behind
   resetAll(); send("L*A:i=solid,c=ff0000,m=200,am=2,an=2,ap=1"); send("**C:bpm=120,ph=0,bpb=4,beat=0"); run(200);
@@ -39,6 +42,7 @@ static void test_lifecycle() {
   run(50); CHECK(FLD->_seq == 0 && RLD->_seq == 0);        // the displays it held are given back to NORMAL
   send("L*A:i=solid,c=00ff00"); run(200); send("**X"); run(50);
   CHECK(gContract[0].inShow && gContract[0].base == CB_DARK && FLD->_seq == 14);   // X: dark, still in its mode
+  CHECK(fieldLevel(FLD) == 0 && fieldLevel(RLD) == 0);
   send("**M:v=idle"); run(50);
   CHECK(!gContract[0].inShow && gContract[0].base == CB_NONE && FLD->_seq == 0 && RLD->_seq == 0);
 
@@ -198,10 +202,14 @@ static void test_live_hold() {
   CHECK(FLD->px(0, 0).g > 0 && gContract[0].speed == 7);
   send("LFA:i=solid,c=ff0000"); send("**X"); run(400);
   CHECK(FLD->_seq == 14 && !gContract[0].holdPending);     // a reset drops the held look
+  CHECK(fieldLevel(FLD) == 0);
   // an X and a new look cannot be used to flash faster than the hold allows
   resetAll(); send("LFA:i=solid,c=ffffff"); run(20); send("LFX"); send("LFA:i=solid,c=ffffff"); run(100);
   CHECK(FLD->_seq == 14);                                  // still held: 120 ms after the first look
   run(60); CHECK(FLD->_seq == 106);
+  // S9: the hold alone lets the display light again 170 ms after it first lit. A dark-to-lit onset
+  // needs 340 ms from the one before, whichever lines caused the two.
+  KNOWN_BUG("S9: A, X, A relights 170 ms after the first onset", fieldLevel(FLD) * 2 < 160);
   // the two displays hold separately
   resetAll(); send("LFA:i=solid,c=ff0000"); run(50); send("LRA:i=solid,c=00ff00"); run(20);
   CHECK(RLD->_seq == 106 && RLD->px(0, 0).g > 0);
@@ -311,6 +319,7 @@ static void test_watchdog() {
   // X leaves the watchdog armed
   resetAll(); send("**M:v=show,wd=2"); send("LFA:i=solid,c=ff0000"); run(200); send("**X"); run(500);
   CHECK(FLD->_seq == 14 && gContract[0].wdSec == 2);
+  CHECK(fieldLevel(FLD) == 0);
   run(1600); CHECK(FLD->_seq == 0 && !gContract[0].inShow);                // dark, then given back
   // no wd=: no watchdog, so a show stored in a WCB macro still plays
   resetAll(); send("**M:v=show"); send("LFA:i=solid,c=ff0000"); run(60000, 100);
@@ -388,6 +397,6 @@ int main() {
   test_watchdog();
   test_shared_effect_timing();
   if (gFails) { printf("%d CHECK(s) FAILED\n", gFails); return 1; }
-  printf("contract v1.3 on the RSeries layer OK\n");
+  printf("contract v1.3 on the RSeries layer OK (%d known defect(s) still open)\n", gKnown);
   return 0;
 }
