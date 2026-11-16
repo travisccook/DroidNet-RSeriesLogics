@@ -39,15 +39,18 @@ static void seedClock(BeatClock& bc, int bpm, uint32_t ph, int bpb, long beat, u
 }
 
 int main(int argc, char** argv) {
-#ifdef CONTRACT_VERSION
   const char* ver = CONTRACT_VERSION;
-#else
-  const char* ver = "1.2";
-#endif
   printf("{\n  \"schema\": 1,\n  \"contract_version\": \"%s\",\n  \"core_sha256\": \"%s\",\n", ver, argc > 1 ? argv[1] : "");
   printf("  \"generator\": \"test/host/gen_contract_vectors.cpp\",\n");
   printf("  \"constants\": {");
-  // CONSTANTS ADDED BY LATER TASKS GO HERE
+  printf("\n    \"CONTRACT_RELEASE\": %d,\n    \"STROBE_MIN_STATE_MS\": %lu,\n", CONTRACT_RELEASE, (unsigned long)STROBE_MIN_STATE_MS);
+  printf("    \"CONTRACT_BPM_MIN\": %u,\n    \"CONTRACT_BPM_MAX\": %u,\n    \"CONTRACT_BPB_MAX\": %u,\n",
+         (unsigned)CONTRACT_BPM_MIN, (unsigned)CONTRACT_BPM_MAX, (unsigned)CONTRACT_BPB_MAX);
+  printf("    \"ACCENT_EDGE_LATE_MS\": %u,\n    \"ACCENT_DUR_DEFAULT_MS\": %u,\n    \"ACCENT_DUR_MAX_MS\": %u,\n",
+         (unsigned)ACCENT_EDGE_LATE_MS, (unsigned)ACCENT_DUR_DEFAULT_MS, (unsigned)ACCENT_DUR_MAX_MS);
+  printf("    \"ACCENT_EVERY_MAX\": %u,\n    \"CONTRACT_ROUTE_MAX\": %u", (unsigned)ACCENT_EVERY_MAX, (unsigned)CONTRACT_ROUTE_MAX);
+  // MORE CONSTANTS GO HERE (each starts with ",\n    ")
+  printf("\n  ");
   printf("},\n  \"lines\": [");
   // LINES ADDED BY LATER TASKS GO HERE
   printf("],\n  \"groups\": {");

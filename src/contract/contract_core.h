@@ -20,8 +20,24 @@
 // qualified; do not "simplify" it back to RGB.
 struct ContractRGB { uint8_t r, g, b; };
 
+// ===== v1.3 constants. ONE definition for all three forks (spec S1, S3, S5, C1). =====
+#define CONTRACT_VERSION "1.3"
+#define CONTRACT_RELEASE 1                           // firmware release: 1 = R1 (bench), 2 = R2 (looks)
+// PHOTOSENSITIVITY. >=170 ms per state => an accent or a pump swing may not RESTART more often
+// than every 2 * 170 = 340 ms, i.e. <= 2.94 per second, inside the <= 3 flashes/sec guidance.
+// A safety limit, not a tuning knob. It used to be defined once per fork.
+static const uint32_t STROBE_MIN_STATE_MS = 170;
+static const uint16_t CONTRACT_BPM_MIN = 30;        // S1: a C outside 30..300 is ignored whole...
+static const uint16_t CONTRACT_BPM_MAX = 300;       //     ...except bpm=0, which holds the show (C6)
+static const uint8_t  CONTRACT_BPB_MAX = 12;        // S1: a bpb outside 1..12 is 4
+static const uint16_t ACCENT_EDGE_LATE_MS = 60;     // C1
+static const uint16_t ACCENT_DUR_DEFAULT_MS = 180;  // ad= absent
+static const uint16_t ACCENT_DUR_MAX_MS = 2550;     // S5: P d= and ad= ceiling (255 * 10 ms)
+static const uint8_t  ACCENT_EVERY_MAX = 16;        // an= 1..16
+static const uint8_t  CONTRACT_ROUTE_MAX = 99;      // Q:r= 0..99
+
 enum ContractVerb : uint8_t {
-  CV_NONE = 0, CV_ANIMATE, CV_PULSE, CV_CLOCK, CV_BRIGHT, CV_LEVEL, CV_STOP, CV_MODE, CV_QUERY
+  CV_NONE = 0, CV_ANIMATE, CV_PULSE, CV_CLOCK, CV_BRIGHT, CV_LEVEL, CV_STOP, CV_MODE, CV_QUERY, CV_VERIFY
 };
 enum ContractEffect : uint8_t {
   CE_NONE = 0, CE_OFF, CE_SOLID, CE_FLASH, CE_PULSE, CE_RAINBOW, CE_SCAN, CE_SPARKLE, CE_METER, CE_NATIVE,
@@ -53,6 +69,13 @@ struct ContractParams {
   bool hasAccentFx = false;    ContractEffect accentFx = CE_NONE;   // ae=<effect name>
   bool hasAccentColor = false; ContractRGB accentColor{0, 0, 0};            // ac=<rrggbb>
   bool hasAccentDur = false;   uint16_t accentDurMs = 0;            // ad=<ms>, clamped <= 2550
+  // ===== v1.3 =====
+  bool hasWd = false;    uint8_t wd = 0;       // M:v=show,wd=<seconds>   host-silence watchdog (L2)
+  bool hasN = false;     uint8_t n = 0;        // V:n=<entries held>
+  bool hasK = false;     uint16_t k = 0;       // V:k=<hhhh>              XOR of the held entries' CRCs
+  bool hasAn = false;    uint8_t an = 1;       // an=<n> 1..16            every-N accents (with am=2)
+  bool hasAp = false;    uint8_t ap = 0;       // ap=<phase> 0..n-1
+  bool hasRoute = false; uint8_t route = 0;    // Q:r=<n> 0..99           where the reply is routed
 };
 
 struct ParsedContract {
@@ -68,7 +91,8 @@ inline ContractVerb _verbFromChar(char v) {
   switch (v) {
     case 'A': return CV_ANIMATE; case 'P': return CV_PULSE; case 'C': return CV_CLOCK;
     case 'B': return CV_BRIGHT;  case 'L': return CV_LEVEL;  case 'X': return CV_STOP;
-    case 'M': return CV_MODE;    case 'Q': return CV_QUERY;  default: return CV_NONE;
+    case 'M': return CV_MODE;    case 'Q': return CV_QUERY;  case 'V': return CV_VERIFY;
+    default: return CV_NONE;
   }
 }
 inline int _hexNib(char c) {
@@ -148,9 +172,9 @@ inline bool accentEffectAllowed(ContractEffect e) {
 // ---- decimal parsers -------------------------------------------------------------
 // These replace strtol()/strtoul(), which cost 548 B + 460 B = 1008 B of avr-libc on the
 // ATmega32U4 — ~3.5% of the PSI's 28 KB flash — to parse the handful of integers the wire
-// carries. atoi() is NOT replaced: on AVR it is 58 B of hand-written assembly that does
-// not pull in strtol at all (verified with avr-nm/avr-objdump), so the uint8_t-clamped
-// params (s/b/m/am/v/bpb/bpm) keep using it. Only the 32-bit fields moved here.
+// carries. Since v1.3 atoi() is not used either: the small parameters (s/b/m/am/v/bpb/bpm)
+// go through _parseSatU8/_parseSatU16 below, which sit on this same digit reader and
+// SATURATE where atoi() wrapped.
 //
 // _decDigits reads the grammar the wire can actually carry — optional leading whitespace,
 // an optional '+'/'-', then ASCII decimal digits, stopping at the first non-digit (which
@@ -161,8 +185,8 @@ inline bool accentEffectAllowed(ContractEffect e) {
 //
 // WIDTH: fixed at uint32_t on ALL targets. `long` is 64-bit on the host but 32-bit on
 // AVR/ESP32, so the old strtol/strtoul silently parsed to a different width under the host
-// tests than on the boards. Pinning 32 bits means the 263 host checks now gate the exact
-// values the ATmega32U4 computes.
+// tests than on the boards. Pinning 32 bits means the host checks gate the exact values the
+// ATmega32U4 computes.
 //
 // OVERFLOW: saturating, like strtol/strtoul (which return LONG_MAX/ULONG_MAX + ERANGE).
 // The magnitude latches at 0xFFFFFFFF and stays there for any further digits, so a stray
@@ -201,8 +225,41 @@ inline int32_t _parseI32(const char* s) {
   return neg ? -(int32_t)m : (int32_t)m;
 }
 
+// S5: saturating small integers. A value past the range is the range's end, never a wrap:
+// b=300 is 255 and b=-1 is 0, on the host and on a 16-bit-int AVR alike. These replace atoi()
+// for every numeric parameter, so no parameter can wrap into range any more (bpm=65656 used to
+// be 120 on every board).
+inline uint16_t _parseSatU16(const char* s, uint16_t maxV) {
+  bool neg; uint32_t m = _decDigits(s, neg);
+  if (neg) return 0;
+  return m > (uint32_t)maxV ? maxV : (uint16_t)m;
+}
+inline uint8_t _parseSatU8(const char* s, uint8_t maxV) { return (uint8_t)_parseSatU16(s, maxV); }
+// k=<hhhh>: exactly four hex digits.
+inline bool _parseHex4(const char* s, size_t len, uint16_t& out) {
+  if (len != 4) return false;
+  uint16_t v = 0;
+  for (uint8_t i = 0; i < 4; i++) {
+    int nb = _hexNib(s[i]);
+    if (nb < 0) return false;
+    v = (uint16_t)((uint16_t)(v << 4) | (uint16_t)nb);
+  }
+  out = v;
+  return true;
+}
+// Exact-length word compare for a value slice.
+inline bool _sliceIs(const char* v, size_t vl, const char* word) {
+  return vl == strlen(word) && strncmp(v, word, vl) == 0;
+}
+// S5: an accent duration in range (verb P's d= and the scored ad=).
+inline uint16_t accentDurClamp(uint32_t d) {
+  if (d < STROBE_MIN_STATE_MS) d = STROBE_MIN_STATE_MS;
+  if (d > ACCENT_DUR_MAX_MS) d = ACCENT_DUR_MAX_MS;
+  return (uint16_t)d;
+}
+
 // One key=value token. k/kl and v/vl are slices into the (null-terminated) source
-// buffer; numeric parses (atoi/_parseU32/_parseI32) read v up to the next ',' or '\0'.
+// buffer; numeric parses (_parseSatU8/_parseU32/_parseI32) read v up to the next ',' or '\0'.
 inline void _applyParam(ContractParams& pr, const char* k, size_t kl, const char* v, size_t vl) {
   auto key = [&](const char* s) { return kl == strlen(s) && strncmp(k, s, kl) == 0; };
   if (key("i")) {
@@ -210,17 +267,21 @@ inline void _applyParam(ContractParams& pr, const char* k, size_t kl, const char
     if (e != CE_NONE) { pr.hasEffect = true; pr.effect = e; pr.nativeCode = nc; }
   } else if (key("c")) {
     ContractRGB rgb; if (_parseHex6(v, vl, rgb)) { pr.hasColor = true; pr.color = rgb; }
-  } else if (key("s"))  { pr.hasSpeed = true;   pr.speed = (uint8_t)atoi(v); }
+  } else if (key("s"))  { pr.hasSpeed = true;   pr.speed = _parseSatU8(v, 255); }
   else if (key("d"))    { pr.hasDur = true;     pr.durMs = _parseU32(v); }
-  else if (key("b"))    { pr.hasBright = true;  pr.bright = (uint8_t)atoi(v); }
-  else if (key("m"))    { pr.hasBeatMod = true; pr.beatMod = (uint8_t)atoi(v); }
+  else if (key("b"))    { pr.hasBright = true;  pr.bright = _parseSatU8(v, 255); }
+  else if (key("m"))    { pr.hasBeatMod = true; pr.beatMod = _parseSatU8(v, 255); }
   else if (key("at"))   { pr.hasAt = true;      pr.atBeat = _parseI32(v); }
-  else if (key("am"))   { pr.hasAm = true;      pr.accentMode = (uint8_t)atoi(v); }
-  else if (key("v"))    { pr.hasLevel = true;   pr.level = (uint8_t)atoi(v);
-                          if (vl > 0 && (v[0] == 's' || v[0] == 'i')) pr.mode = v[0]; }
-  else if (key("bpm"))  { pr.hasBpm = true;     pr.bpm = (uint16_t)atoi(v); }
+  else if (key("am"))   { pr.hasAm = true;      pr.accentMode = _parseSatU8(v, 255);
+                          if (pr.accentMode > 4) pr.accentMode = 0; }   // an unknown mode is no accent
+  else if (key("an"))   { pr.hasAn = true;      pr.an = _parseSatU8(v, 255); }
+  else if (key("ap"))   { pr.hasAp = true;      pr.ap = _parseSatU8(v, 255); }
+  else if (key("v"))    { pr.hasLevel = true;   pr.level = _parseSatU8(v, 255);
+                          if (_sliceIs(v, vl, "show")) pr.mode = 's';          // S5: exactly these two
+                          else if (_sliceIs(v, vl, "idle")) pr.mode = 'i'; }
+  else if (key("bpm"))  { pr.hasBpm = true;     pr.bpm = _parseSatU16(v, 65535u); }
   else if (key("ph"))   { pr.hasPh = true;      pr.phMs = _parseU32(v); }
-  else if (key("bpb"))  { pr.hasBpb = true;     pr.bpb = (uint8_t)atoi(v); }
+  else if (key("bpb"))  { pr.hasBpb = true;     pr.bpb = _parseSatU8(v, 255); }
   else if (key("beat")) { pr.hasBeat = true;    pr.beatAnchor = _parseI32(v); }
   // ---- v1.2 accent overlay (ae/ac/ad). key() is an EXACT-LENGTH compare, so these three
   // cannot alias a/at/am/b/c/d/i/s/m/v/bpm/ph/bpb/beat/sw.
@@ -235,6 +296,11 @@ inline void _applyParam(ContractParams& pr, const char* k, size_t kl, const char
                           uint32_t d = _parseU32(v);
                           if (d > 2550UL) d = 2550UL;                 // 255 * 10ms — the score stores /10
                           pr.hasAccentDur = true; pr.accentDurMs = (uint16_t)d; }
+  // ---- v1.3: watchdog, load verification, query route. Exact-length keys, as above.
+  else if (key("wd"))   { pr.hasWd = true;    pr.wd = _parseSatU8(v, 255); }
+  else if (key("n"))    { pr.hasN = true;     pr.n = _parseSatU8(v, 255); }
+  else if (key("k"))    { uint16_t k; if (_parseHex4(v, vl, k)) { pr.hasK = true; pr.k = k; } }
+  else if (key("r"))    { pr.hasRoute = true; pr.route = _parseSatU8(v, CONTRACT_ROUTE_MAX); }
   // "sw" (swing) and any unknown key: parsed-and-ignored (forward-compatible)
 }
 inline void _parseParams(const char* s, ContractParams& pr) {

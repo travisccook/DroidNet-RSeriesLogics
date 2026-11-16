@@ -21,12 +21,7 @@
 #include "contract_core.h"
 
 static const uint8_t  SAFE_MAX_BRIGHTNESS = 200;   // heat/USB clamp (fork spec §11)
-// PHOTOSENSITIVITY (fork spec §11). >=170 ms/state => an accent may not RESTART more often
-// than every 2 * 170 = 340 ms, i.e. <= 2.94 flashes/sec, inside the <= 3 flashes/sec
-// guidance. This was 160 (a 320 ms floor => 3.13 Hz — over the line, and the only one of the
-// three boards that was), while PSI and Flthy both used 170. The three boards fire the same
-// show at the same instant; the cap must be the SAME number on all three.
-static const uint32_t STROBE_MIN_STATE_MS = 170;   // >=170 ms/state => <= ~2.9 Hz (fork spec §11)
+// STROBE_MIN_STATE_MS (the photosensitivity limit) is defined ONCE, in contract_core.h.
 static const byte     FX_CONTRACT   = 106;         // single fork effect id (appended in main.cpp)
 static const byte     NATIVE_LIGHTSOUT = 14;       // native blackout / de-energize
 static const byte     NATIVE_NORMAL = 0;           // native idle shimmer

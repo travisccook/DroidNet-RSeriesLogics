@@ -5,6 +5,7 @@
 #
 # Host checks for the RSeries contract fork (no hardware / no ESP32 toolchain needed):
 #   1. contract_core.h parser unit tests
+#   1f. contract_core.h v1.3 unit tests (safety limits, clock rules, lifecycle, score, query)
 #   1b. wifi_connect_core.h FSM unit tests
 #   1c. wdp_announce_core.h WDP device announce unit tests (shared with the PSI and Flthy forks)
 #   1d. wdp_fork.h: this fork's real WDP identity builds its line, and the Serial1 adapter
@@ -66,6 +67,8 @@ stage() {
 }
 
 stage 1  "contract_core parser unit tests" "$CXX" -std=c++17 -Wall -Wextra -O0 test_contract_core.cpp
+# Shared with the PSI and Flthy forks, like stage 1. -std=c++11: the AVR forks build the core with gnu++11.
+stage 1f "contract_core v1.3 unit tests" "$CXX" -std=c++11 -Wall -Wextra -O0 test_contract_v13.cpp
 stage 1b "wifi_connect_core FSM unit tests" "$CXX" -std=c++17 -Wall -Wextra -O0 test_wifi_connect_core.cpp
 # -std=c++11: the AVR forks build this same header with avr-gcc's gnu++11.
 stage 1c "wdp_announce_core WDP device announce unit tests" "$CXX" -std=c++11 -Wall -Wextra -Werror -O0 test_wdp_announce_core.cpp
