@@ -49,6 +49,7 @@ int main(int argc, char** argv) {
   printf("    \"ACCENT_EDGE_LATE_MS\": %u,\n    \"ACCENT_DUR_DEFAULT_MS\": %u,\n    \"ACCENT_DUR_MAX_MS\": %u,\n",
          (unsigned)ACCENT_EDGE_LATE_MS, (unsigned)ACCENT_DUR_DEFAULT_MS, (unsigned)ACCENT_DUR_MAX_MS);
   printf("    \"ACCENT_EVERY_MAX\": %u,\n    \"CONTRACT_ROUTE_MAX\": %u", (unsigned)ACCENT_EVERY_MAX, (unsigned)CONTRACT_ROUTE_MAX);
+  printf(",\n    \"CONTRACT_BEAT_MAX\": %ld", (long)CONTRACT_BEAT_MAX);   // CA1.2: at= and beat= are clamped to +/- this
   printf(",\n    \"CONTRACT_QUERY_MAX\": %u,\n    \"CONTRACT_REPLY_MAX\": %u", (unsigned)CONTRACT_QUERY_MAX, (unsigned)CONTRACT_REPLY_MAX);
   // S7: the native:<n> codes a fork accepts, as the firmware decides them.
   printf(",\n    \"NATIVE_ALLOW_LOGICS\": [");

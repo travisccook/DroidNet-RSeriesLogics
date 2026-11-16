@@ -163,7 +163,7 @@ static void test_brightness_and_native() {
   CHECK(gContract[0].ceil == 160 && FLD->px(0, 0).r == 160);
 
   // S7: a line naming a native code off the allow-list is dropped whole, live or scored
-  const int off[] = { 25, 15, 18, 99, 100, 106, 300, -1 };
+  const int off[] = { 25, 15, 18, 99, 100, 106, 300, -1, 3 };   // 3: Leia sets its own brightness, past the ceiling
   for (int code : off) {
     char l[40];
     resetAll(); send("LFA:i=solid,c=ff0000"); run(200);
@@ -305,6 +305,58 @@ static void test_score_verify_query() {
   CHECK(front == 8 && rear == 8 && both == 0);             // 16 beats: eight each, never together
 }
 
+// ---- the 2026-11-16 review's findings that the core (CA1.2) closes, seen on the displays ----
+static void test_review_r1_core() {
+  // 5 (S1): a bpm= that is not a number does not hold the show. The clock keeps its tempo, and
+  // the host's next bare correction still lands.
+  for (const char* l : { "**C:bpm=", "**C:bpm=abc", "**C:bpm=-120", "**C:bpm=x20", "**C:bpm= ", "**C:bpm=12O" }) {
+    resetAll(); send("**M:v=show"); send("LFA:i=solid,c=ff0000,at=0"); send("LFA:i=solid,c=0000ff,at=8");
+    send("**C:bpm=120,ph=0,bpb=4,beat=0"); run(1000);
+    const uint32_t anchor = gBeat.anchorMs;
+    send(l); run(100);
+    CHECK(gBeat.running && gBeat.bpm == 120 && gBeat.anchorMs == anchor);
+    send("**C:ph=0,beat=2"); run(4000);
+    CHECK(gBeat.running && gContract[0].curSection == 1 && FLD->px(0, 0).b > 0);     // it played on into the second section
+  }
+  resetAll(); send("**M:v=show"); send("LFA:i=solid,c=ff0000"); send("**C:bpm=120,ph=0,bpb=4,beat=0"); run(500);
+  send("**C:bpm=0"); CHECK(!gBeat.running);                // the real Hold is untouched
+
+  // 4 (section 7): a unit that failed its V stays on its native look. A scored line that arrives
+  // late, and then Play, must not start half a show.
+  resetAll(); send("**M:v=show,wd=15"); send("LFA:i=solid,c=ff0000,at=0"); send("LFV:n=2,k=1234"); run(50);
+  CHECK(gContract[0].loadOk == 2 && !gContract[0].inShow && FLD->_fx == 0);
+  send("LFA:i=solid,c=0000ff,at=8");                       // the mesh retry lands after the V
+  send("**C:bpm=120,ph=0,bpb=4,beat=0"); run(5000);
+  CHECK(gContract[0].scoreLen == 0 && gContract[0].base == CB_NONE && FLD->_fx == 0);
+  { const char* q; uint8_t qn; send("LFQ:r=0"); CHECK(contractReplyPending(q, qn) && strstr(q, ",n=0,ok=2,") != nullptr); contractReplyDone(); }
+  send("LFM:v=show"); send("LFA:i=solid,c=0000ff,at=0");                             // the next show loads and plays
+  send("**C:bpm=120,ph=0,bpb=4,beat=0"); run(600);
+  CHECK(gContract[0].scoreLen == 1 && gContract[0].loadOk == 0 && FLD->_fx == 106 && FLD->px(0, 0).b > 0);
+
+  // 8: a scored line delivered again while it plays changes nothing: not the section's timeline,
+  // and not a B the host sent since.
+  resetAll(); send("**M:v=show"); send("LFA:i=wipe,c=ffffff,at=0"); send("**C:bpm=120,ph=0,bpb=4,beat=0"); run(500);
+  send("LFB:b=64"); run(300);
+  const uint32_t started = gContract[0].startMs;
+  send("LFA:i=wipe,c=ffffff,at=0"); run(300);
+  CHECK(gContract[0].startMs == started && gContract[0].bright == 64 && gContract[0].curSection == 0);
+  send("LFA:i=wipe,c=ff0000,at=0"); run(50);               // a DIFFERENT line for that beat does replace it
+  CHECK(gContract[0].startMs != started && gContract[0].color.g == 0);
+
+  // 6: beat indices at the ends of the int32 range are clamped at parse (the sanitized fuzz stage
+  // proves the arithmetic; this is the layer taking such lines without harm)
+  resetAll(); send("**M:v=show"); send("LFA:i=solid,c=ff0000,at=2147483647,am=3,m=200,ae=flash");
+  send("LFA:i=solid,c=00ff00,at=-2147483648,am=2,an=16,ap=15,m=200,ae=flash");
+  send("**C:bpm=300,beat=2147483647"); run(500); send("**C:bpm=300,beat=-2147483648"); run(500);
+  CHECK(gScore[0][0].atBeat == -CONTRACT_BEAT_MAX && gScore[0][1].atBeat == CONTRACT_BEAT_MAX && gBeat.beatOffset == -CONTRACT_BEAT_MAX);
+
+  // 7 (section 10): an r= that is not a number 0..99 gets no reply
+  for (const char* l : { "LFQ:r=", "LFQ:r=zz", "LFQ:r=100", "LFQ:r=-1", "LFQ:r=1x" }) {
+    const char* q; uint8_t qn;
+    resetAll(); send(l); CHECK(!contractReplyPending(q, qn));
+  }
+}
+
 // ---- L2: the host-silence watchdog ----
 static void test_watchdog() {
   resetAll(); send("**M:v=show,wd=2"); send("LFA:i=solid,c=ff0000"); run(1900);
@@ -394,6 +446,7 @@ int main() {
   test_brightness_and_native();
   test_live_hold();
   test_score_verify_query();
+  test_review_r1_core();
   test_watchdog();
   test_shared_effect_timing();
   if (gFails) { printf("%d CHECK(s) FAILED\n", gFails); return 1; }
