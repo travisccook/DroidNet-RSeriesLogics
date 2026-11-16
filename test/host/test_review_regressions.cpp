@@ -90,7 +90,7 @@ int main() {
   resetAll(); send("LFA:i=solid,c=ffffff,m=255,am=2"); send("**C:bpm=240,ph=0,bpb=4,beat=0");
   KNOWN_BUG("S2 pump swings faster than 2.94/s at 240 BPM", swingsPerSec(30, 120) <= 2.95);
   resetAll(); send("LFA:i=solid,c=ffffff,m=255,am=2"); send("**C:bpm=600,ph=0,bpb=4,beat=0");
-  KNOWN_BUG("S1 bpm=600 is accepted", !gBeat.running);
+  CHECK(!gBeat.running);                                                // S1: bpm=600 is ignored whole
 
   // C2: a nudge just after a section boundary must not flip the section back.
   resetAll(); send("**M:v=show"); send("LFA:i=wipe,c=ff0000,at=0"); send("LFA:i=wipe,c=0000ff,at=8");

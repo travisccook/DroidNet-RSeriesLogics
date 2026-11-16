@@ -351,15 +351,6 @@ struct BeatPos {
   uint8_t barPos = 0;       // 0 == downbeat
 };
 
-// Seed/adjust the clock from a parsed C command received at nowMs.
-inline void beatClockSeed(BeatClock& bc, const ContractParams& pr, uint32_t nowMs) {
-  if (pr.hasBpm) bc.bpm = pr.bpm;
-  if (pr.hasBpb) bc.bpb = pr.bpb ? pr.bpb : 4;
-  bc.anchorMs = nowMs + (pr.hasPh ? pr.phMs : 0);
-  if (pr.hasBeat) bc.beatOffset = pr.beatAnchor;      // re-anchor (drift correction)
-  bc.running = (bc.bpm > 0);
-}
-
 // Beat position at time nowMs (drift-free between re-seeds; computed from millis).
 inline BeatPos beatPosAt(const BeatClock& bc, uint32_t nowMs) {
   BeatPos out;
@@ -374,6 +365,33 @@ inline BeatPos beatPosAt(const BeatClock& bc, uint32_t nowMs) {
   return out;
 }
 
+// What a C line did.
+//   CS_IGNORED  nothing changed (S1: a bpm outside 30..300, or a bare re-anchor with no clock running).
+//   CS_SEEK     a new timeline: the line carried bpm=, or it moved the position by a beat or more.
+//   CS_NUDGE    a bare re-anchor (no bpm=) that moved the position by less than one beat: the
+//               host's periodic drift correction. C1 and C2 treat it differently from a seek.
+//   CS_HOLD     C6: bpm=0. The clock is stopped; the score and the look stay. The fork freezes
+//               its section cursors simply by not ticking a stopped clock. Only a C with a tempo
+//               resumes it.
+enum ContractSeed : uint8_t { CS_IGNORED = 0, CS_SEEK = 1, CS_NUDGE = 2, CS_HOLD = 3 };
+
+// Seed/adjust the clock from a parsed C command received at nowMs.
+inline ContractSeed beatClockSeed(BeatClock& bc, const ContractParams& pr, uint32_t nowMs) {
+  if (pr.hasBpm && pr.bpm == 0) { bc.running = false; return CS_HOLD; }                // C6
+  if (pr.hasBpm && (pr.bpm < CONTRACT_BPM_MIN || pr.bpm > CONTRACT_BPM_MAX)) return CS_IGNORED;   // S1: the WHOLE line
+  if (!pr.hasBpm && !bc.running) return CS_IGNORED;      // a bare re-anchor neither starts nor resumes a clock
+  const BeatClock old = bc;
+  if (pr.hasBpm) bc.bpm = pr.bpm;
+  if (pr.hasBpb) bc.bpb = (pr.bpb >= 1 && pr.bpb <= CONTRACT_BPB_MAX) ? pr.bpb : 4;   // S1
+  bc.anchorMs = nowMs + (pr.hasPh ? pr.phMs : 0);
+  if (pr.hasBeat) bc.beatOffset = pr.beatAnchor;         // re-anchor (drift correction)
+  bc.running = true;
+  if (pr.hasBpm || !old.running) return CS_SEEK;
+  const BeatPos a = beatPosAt(old, nowMs), b = beatPosAt(bc, nowMs);
+  const float shift = (float)(b.beatIndex - a.beatIndex) + (b.phase - a.phase);
+  return (shift > -1.0f && shift < 1.0f) ? CS_NUDGE : CS_SEEK;
+}
+
 // Sentinel for "this unit has not accented any beat yet". A show must never inherit a
 // stale beat edge from the previous one, so every show boundary (stop / mode idle / mode
 // show / clock re-seed / score load) resets the per-unit guard to this.
@@ -381,6 +399,23 @@ inline BeatPos beatPosAt(const BeatClock& bc, uint32_t nowMs) {
 // and a re-anchored show restarts at beat 0 — either would swallow a real first edge. This
 // sentinel is outside any reachable beat index, so the first beat of a new show always fires.
 static const int32_t BEAT_NONE = (int32_t)0x80000000;
+
+// C1: the accent-edge guard a unit takes after ANY C, and after a scored A that arrives while the
+// clock runs. More than ACCENT_EDGE_LATE_MS into the current beat: that beat counts as already
+// accented, so a drift correction mid-beat cannot re-fire it. Otherwise the guard is cleared, so
+// a seek that lands on a beat still accents it. (The strobe cool-down still applies on top.)
+inline int32_t accentEdgeAfterSeed(const BeatClock& bc, uint32_t nowMs) {
+  if (!bc.running || bc.bpm == 0) return BEAT_NONE;
+  const BeatPos bp = beatPosAt(bc, nowMs);
+  const uint32_t intoMs = (uint32_t)(bp.phase * (60000.0f / (float)bc.bpm));
+  return intoMs > ACCENT_EDGE_LATE_MS ? bp.beatIndex : BEAT_NONE;
+}
+
+// C2: the section cursor after a tick. After a nudge (pinForward) it never moves backwards;
+// after a seek it follows the beat wherever it went. idx is scoreActiveIndex()'s answer.
+inline int8_t scoreCursor(int8_t cur, int idx, bool pinForward) {
+  return (pinForward && idx < cur) ? cur : (int8_t)idx;
+}
 
 // Does accent mode `am` fire an accent on a beat at bar position `barPos`?
 // am: 0 none, 1 downbeat, 2 every-beat, 3 build, 4 drop (-> downbeat).
