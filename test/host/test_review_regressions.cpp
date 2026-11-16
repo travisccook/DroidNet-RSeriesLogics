@@ -6,6 +6,7 @@
 // engine. Each KNOWN_BUG names the finding (F1..F10) and the v1.3 spec item that closes it.
 #include "logics_harness.h"
 #include <cmath>
+#include <initializer_list>
 
 // Full-field swings per second on the front display over 10 s (a swing: <= lo, then >= hi).
 static double swingsPerSec(int lo, int hi) {
@@ -80,9 +81,16 @@ int main() {
   int ob = 0, mi = 0;
   reanchorRun(120, 2, 0, ob, mi);   CHECK(ob == 0 && mi == 0);          // on the beat: always clean
   reanchorRun(120, 2, 400, ob, mi);
-  KNOWN_BUG("C1 re-anchor 400 ms into a beat re-fires the accent", ob == 0 && mi == 0);
+  CHECK(ob == 0 && mi == 0);
+  for (uint32_t off : { 61u, 200u, 339u, 341u, 360u, 450u, 499u }) {    // anywhere in the beat
+    reanchorRun(120, 2, off, ob, mi);
+    if (ob != 0 || mi != 0) printf("     (re-anchor %u ms into a beat: %d off-beat, %d missed)\n", off, ob, mi);
+    CHECK(ob == 0 && mi == 0);
+  }
+  reanchorRun(90, 2, 500, ob, mi);  CHECK(ob == 0 && mi == 0);
+  reanchorRun(176, 2, 300, ob, mi); CHECK(ob == 0 && mi == 0);
   reanchorRun(120, 1, 400, ob, mi);
-  KNOWN_BUG("C1 re-anchor adds off-beat downbeat accents", ob == 0 && mi == 0);
+  CHECK(ob == 0 && mi == 0);
 
   // F2 (S1, S2): the pump is under the same rate floor as the overlay.
   resetAll(); send("LFA:i=solid,c=ffffff,m=255,am=2"); send("**C:bpm=120,ph=0,bpb=4,beat=0");
@@ -101,7 +109,7 @@ int main() {
     frame();
     if (gContract[0].curSection != last) { last = gContract[0].curSection; switches++; }
   }
-  KNOWN_BUG("C2 a nudge flips the section back and forth", switches == 2);
+  CHECK(switches == 2);
 
   // S5: P's d= is bounded.
   resetAll(); send("L*A:i=solid,c=ff0000"); run(200); send("L*P:c=ffffff,d=-1"); run(3000);

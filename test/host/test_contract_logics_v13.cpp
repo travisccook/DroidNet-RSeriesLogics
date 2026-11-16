@@ -74,8 +74,45 @@ static void test_lifecycle() {
   CHECK(FLD->px(0, 0).r == full * 128 / 255);
 }
 
+// ---- S1, C1, C2, C6: the one clock both displays share ----
+static void test_clock() {
+  // S1: a tempo out of range changes nothing, and does not start a show
+  resetAll(); send("**M:v=show"); send("**C:bpm=600,ph=0,bpb=4,beat=0"); run(50);
+  CHECK(!gBeat.running && gContract[0].base == CB_NONE && FLD->_seq == 0);
+
+  // C6: bpm=0 holds. The score, the look and the section cursor stay; a C with a tempo resumes.
+  resetAll(); send("**M:v=show");
+  send("LFA:i=solid,c=ff0000,at=0"); send("LFA:i=solid,c=0000ff,at=8");
+  send("**C:bpm=120,ph=0,bpb=4,beat=0"); run(2000);                       // beat 4, the red section
+  CHECK(gContract[0].curSection == 0 && FLD->px(0, 0).r > 0);
+  send("**C:bpm=0"); run(10000);                                          // Pause, for ten seconds
+  CHECK(!gBeat.running && gContract[0].scoreLen == 2 && gContract[0].curSection == 0);
+  CHECK(FLD->_seq == 106 && FLD->px(0, 0).r > 0 && gContract[0].inShow);  // still the red look, still the show
+  send("**C:ph=100,beat=30"); run(100);                                   // a bare correction does not resume it
+  CHECK(!gBeat.running && gContract[0].curSection == 0);
+  send("**C:bpm=120,ph=0,bpb=4,beat=4"); run(1900);                       // Resume where it stopped: beat 4
+  CHECK(gBeat.running && gContract[0].curSection == 0);
+  run(200); CHECK(gContract[0].curSection == 1 && FLD->px(0, 0).b > 0);   // beat 8 arrives 2 s after the resume
+
+  // C1 for a scored A that arrives while the clock runs: mid-beat it must not fire that beat's accent
+  resetAll(); send("**M:v=show"); send("LFA:i=solid,c=ff0000,at=0,am=2,m=200,ae=flash");
+  send("**C:bpm=120,ph=0,bpb=4,beat=0"); run(900);                        // 400 ms into beat 1
+  const uint32_t armed = gContract[0].pulseStartMs;
+  send("LFA:i=solid,c=00ff00,at=64,am=2,m=200,ae=flash"); run(50);        // a late line for a later section
+  CHECK(gContract[0].pulseStartMs == armed);                              // no accent 400 ms off the beat
+  run(100); CHECK(gContract[0].pulseStartMs != armed);                    // beat 2 accents on time
+
+  // C2: a seek (bpm=) may move the cursor back; the regression file covers the nudge
+  resetAll(); send("**M:v=show"); send("LFA:i=solid,c=ff0000,at=0"); send("LFA:i=solid,c=0000ff,at=8");
+  send("**C:bpm=120,ph=0,bpb=4,beat=0"); run(4100);
+  CHECK(gContract[0].curSection == 1);
+  send("**C:bpm=120,ph=0,bpb=4,beat=2"); run(50);                         // the user dragged the playhead back
+  CHECK(gContract[0].curSection == 0 && FLD->px(0, 0).r > 0);
+}
+
 int main() {
   test_lifecycle();
+  test_clock();
   if (gFails) { printf("%d CHECK(s) FAILED\n", gFails); return 1; }
   printf("contract v1.3 on the RSeries layer OK\n");
   return 0;

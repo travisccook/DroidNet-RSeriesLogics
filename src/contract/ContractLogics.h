@@ -327,7 +327,7 @@ inline void applyContractToUnit(uint8_t u, const ParsedContract& p, uint16_t lin
           e.accentDur10 = (uint8_t)(t10 > 255u ? 255u : t10);             // ad<=2550 at parse
         }
         scoreAccept(g, gScore[u], SCORE_MAX, e, lineCrc);                 // a full table marks the load bad
-        g.lastAccentBeat = BEAT_NONE;                                     // a new show is loading: drop any stale beat edge
+        g.lastAccentBeat = accentEdgeAfterSeed(gBeat, now);               // C1 (BEAT_NONE while no clock runs)
         break;                                    // the display is NOT taken at load: the tick does that on the beat
       }
       _applyLook(u, lookPatchFrom(pr), now);
@@ -343,12 +343,6 @@ inline void applyContractToUnit(uint8_t u, const ParsedContract& p, uint16_t lin
                   pr.hasDur ? pr.durMs : 120);
       break;
     }
-    case CV_CLOCK:
-      beatClockSeed(gBeat, pr, now);              // one shared clock; !**C fans to both units
-      gContract[0].lastAccentBeat = BEAT_NONE;    // the beat ORIGIN moved: a beat index from the
-      gContract[1].lastAccentBeat = BEAT_NONE;    // old timeline must not gate the new one
-      if (gBeat.running && contractShowBegin(g)) _showBase(u);   // L1: the show's first C
-      break;
     case CV_LEVEL:
       if (pr.hasLevel) gLevel = pr.level;         // drives CE_METER (contract meter reads gLevel)
       break;
@@ -376,6 +370,18 @@ inline void contractHandleLine(const char* afterBang) {
   if (p.cls != 'L' && p.cls != '*') return;       // not a Logic board
   const bool f = (p.unit == 'F' || p.unit == '*'), r = (p.unit == 'R' || p.unit == '*');
   if (!f && !r) return;                           // unit 'T' (HP)
+  const uint32_t now = millis();
+  if (p.verb == CV_CLOCK) {                       // ONE shared clock: seed it once, then both displays follow
+    const ContractSeed k = beatClockSeed(gBeat, p.params, now);
+    if (k == CS_IGNORED || k == CS_HOLD) return;  // S1: ignored whole. C6: held — cursors freeze because a stopped clock is not ticked
+    for (uint8_t u = 0; u < 2; u++) {
+      ContractUnitState& g = gContract[u];
+      g.lastAccentBeat = accentEdgeAfterSeed(gBeat, now);     // C1: mid-beat, that beat counts as accented
+      g.pinForward = (k == CS_NUDGE);                         // C2: a nudge never moves a section cursor back
+      if (k == CS_SEEK && (u == 0 ? f : r) && contractShowBegin(g)) _showBase(u);   // L1: the show's first C
+    }
+    return;
+  }
   const uint16_t crc = (p.verb == CV_ANIMATE && p.params.hasAt) ? contractCrc16(afterBang) : 0;
   if (f) applyContractToUnit(0, p, crc);
   if (r) applyContractToUnit(1, p, crc);
@@ -391,6 +397,7 @@ inline void contractTick() {
     ContractUnitState& g = gContract[u];
     if (g.scoreLen == 0) continue;
     int idx = scoreActiveIndex(gScore[u], g.scoreLen, bp.beatIndex);
+    idx = scoreCursor(g.curSection, idx, g.pinForward);                       // C2
     if (idx < 0 || idx == g.curSection) continue;
     const ScoreEntry& s = gScore[u][idx];
     _arm(u);
