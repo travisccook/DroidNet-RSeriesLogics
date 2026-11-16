@@ -6,6 +6,7 @@
 // two logic displays. (The rules themselves are unit-tested in test_contract_v13.cpp.)
 #include "logics_harness.h"
 #include <cstring>
+#include <initializer_list>
 
 // ---- L1, L3, L5: the show boundaries ----
 static void test_lifecycle() {
@@ -309,6 +310,65 @@ static void test_watchdog() {
   CHECK(FLD->_seq == 3);
 }
 
+// ---- flash, pulse and scan on the core's shared timing (S8 for pulse) ----
+// Full-field swings on the front display over `ms`: the level falls to <= lo and then rises to
+// >= hi. Returns how many, and in minGapMs the shortest time between two of them (sampled every
+// 10 ms, so a 340 ms cycle reads as 330 to 350). The gap is the safety number: a count over a
+// window is off by one depending on where the window starts.
+static int levelSwings(int lo, int hi, uint32_t ms, uint32_t& minGapMs) {
+  int rises = 0; bool low = true; uint32_t last = 0; minGapMs = 0xFFFFFFFFu;
+  for (uint32_t t = 0; t < ms; t += 10) {
+    _mock_millis += 10; frame();
+    const int v = FLD->px(0, 0).r;
+    if (low && v >= hi) {
+      if (rises > 0 && _mock_millis - last < minGapMs) minGapMs = _mock_millis - last;
+      last = _mock_millis; rises++; low = false;
+    } else if (!low && v <= lo) low = true;
+  }
+  return rises;
+}
+static void test_shared_effect_timing() {
+  // pulse: the shared triangle breathe. 2 s a cycle at s=0, dark at its start, full at half way.
+  resetAll(); send("LFA:i=pulse,c=ffffff,s=0"); run(10);
+  CHECK(FLD->px(0, 0).r <= 2);
+  run(990); CHECK(FLD->px(0, 0).r >= 158 && FLD->px(0, 0).r <= 160);       // the peak is the ceiling, not above it
+  run(1000); CHECK(FLD->px(0, 0).r <= 2);
+  // S8: at the fastest speed the cycle is 340 ms, never shorter: under 2.95 swings a second
+  resetAll(); send("LFA:i=pulse,c=ffffff,s=255");
+  uint32_t gap = 0;
+  const int fast = levelSwings(30, 120, 10000, gap);
+  CHECK(fast >= 29 && fast <= 30 && gap >= 330);                           // a 340 ms cycle: 2.94 a second
+  // under the beat pump the fill is steady and the pump moves it (S2 keeps that under the same floor)
+  resetAll(); send("LFA:i=pulse,c=ffffff,s=255,m=255,am=2"); send("**C:bpm=300,ph=0,bpb=4,beat=0");
+  levelSwings(30, 120, 10000, gap); CHECK(gap >= 390);                     // 300 BPM: every second beat, 400 ms
+  resetAll(); send("LFA:i=pulse,c=ffffff,s=255,m=255,am=2"); send("**C:bpm=60,ph=0,bpb=4,beat=0");
+  levelSwings(30, 120, 10000, gap); CHECK(gap >= 990 && gap <= 1010);      // one swing a beat: the breathe is not added on top
+
+  // scan: one lit column, ping-pong, one step per fxStepMs (30 ms at s=255) on the 8-wide mock panel
+  resetAll(); send("LFA:i=scan,c=ffffff,s=255");
+  int col[16];
+  for (int step = 0; step < 16; step++) {
+    _mock_millis += (step == 0) ? 10 : 30; frame();
+    int lit = -1, count = 0;
+    for (int x = 0; x < 8; x++) if (FLD->px(x, 0).r > 0) { lit = x; count++; }
+    CHECK(count == 1);
+    col[step] = lit;
+  }
+  const int want[16] = { 0, 1, 2, 3, 4, 5, 6, 7, 6, 5, 4, 3, 2, 1, 0, 1 };
+  for (int step = 0; step < 16; step++) CHECK(col[step] == want[step]);
+  for (int y = 0; y < 10; y++) CHECK(FLD->px(1, y).r > 0);                 // a whole column, top to bottom
+
+  // flash: 170 ms a state at s=255 and 425 ms at s=0, the strobe cap at every speed
+  resetAll(); send("LFA:i=flash,c=ffffff,s=255"); run(10);
+  CHECK(FLD->px(0, 0).r == 160); run(150); CHECK(FLD->px(0, 0).r == 160);  // 160 ms: still lit
+  run(20);  CHECK(FLD->px(0, 0).r == 0);                                   // 180 ms: dark
+  run(160); CHECK(FLD->px(0, 0).r == 160);                                 // 340 ms: lit again
+  resetAll(); send("LFA:i=flash,c=ffffff,s=255");
+  levelSwings(30, 120, 10000, gap); CHECK(gap >= 330);
+  resetAll(); send("LFA:i=flash,c=ffffff,s=0"); run(420);
+  CHECK(FLD->px(0, 0).r == 160); run(20); CHECK(FLD->px(0, 0).r == 0);
+}
+
 int main() {
   test_lifecycle();
   test_clock();
@@ -316,6 +376,7 @@ int main() {
   test_live_hold();
   test_score_verify_query();
   test_watchdog();
+  test_shared_effect_timing();
   if (gFails) { printf("%d CHECK(s) FAILED\n", gFails); return 1; }
   printf("contract v1.3 on the RSeries layer OK\n");
   return 0;

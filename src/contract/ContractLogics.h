@@ -182,8 +182,7 @@ inline bool ContractRender(LogicEngineRenderer& r) {
       _fill(r, CRGB(0, 0, 0));
       break;
     case CE_FLASH: {
-      uint32_t half = STROBE_MIN_STATE_MS + (uint32_t)(255 - g.speed);   // >=170 ms/state (strobe cap)
-      bool on = ((now - t0) % (2 * half)) < half;
+      bool on = fxFlashOn(now - t0, g.speed);            // the shared timing: 170..425 ms a state (strobe cap)
       // v1.2 FIX: the lit state renders at the BEAT-PUMPED level (bri), not the raw ceiling.
       // It was the only sustained look on this board that ignored the envelope, so an
       // i=flash section pumped on the HPs/PSIs and sat flat on the Logics. During an
@@ -201,8 +200,7 @@ inline bool ContractRender(LogicEngineRenderer& r) {
       break;
     }
     case CE_SCAN: {
-      uint32_t period = 60u * (uint32_t)(256 - g.speed) + 200u;
-      int pos = (W > 0) ? (int)(((now - t0) % period) * (uint32_t)W / period) : 0;
+      int pos = fxScanPos(now - t0, g.speed, W, false);  // the shared timing: one column, ping-pong
       CRGB c = _scaled(col, bri);
       for (int y = 0; y < H; y++)
         for (int x = 0; x < W; x++)
@@ -277,10 +275,17 @@ inline bool ContractRender(LogicEngineRenderer& r) {
         }
       break;
     }
+    case CE_PULSE: {
+      // The shared breathe (fxPulseBright: a 2000..340 ms cycle, never faster, S8) when nothing
+      // pumps the look. Under the beat pump the envelope IS the breathe, so the fill is steady
+      // and the pump moves it; two modulations at once would beat against each other.
+      const bool pumped = !g.pulseActive && g.accentMode != 0 && g.beatMod != 0 && gBeat.running;
+      const uint8_t v = pumped ? bri : (uint8_t)(((uint16_t)bri * fxPulseBright(now - t0, g.speed)) / 255u);
+      _fill(r, _scaled(col, v));
+      break;
+    }
     case CE_SOLID:
     default:
-      // (CE_PULSE has no dedicated renderer on this board and lands here as a solid —
-      // a pre-existing cross-fork divergence vs Flthy's triangle breathe, unchanged by v1.2.)
       _fill(r, _scaled(col, bri));
       break;
   }
