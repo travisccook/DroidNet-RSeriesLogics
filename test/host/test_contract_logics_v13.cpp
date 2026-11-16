@@ -536,6 +536,64 @@ static void test_native_takeover() {
   resetAll(); FLD->selectSequence(106); run(30); CHECK(FLD->_fx == 0 && FLD->_seq == 0);
 }
 
+// ---- the 2026-11-16 re-review of ab9addd: N2, N3 and N5 (N1 and the gate's step are stage 2e's) ----
+// The owner moves the display's brightness during a show: the web slider or the trimpot writes
+// the default object and the live value (LogicEngine's changeDefaultSettings()).
+static void ownerSets(int v) { LogicEngineFLDDefault.fBri = (byte)v; FLD->setBrightness((byte)v); }
+static int brightestPixel(const LogicEngineRenderer* r) {
+  int m = 0;
+  for (int y = 0; y < 10; y++) for (int x = 0; x < 8; x++) { const CRGB c = r->px(x, y); const int v = c.r > c.g ? (c.r > c.b ? c.r : c.b) : (c.g > c.b ? c.g : c.b); if (v > m) m = v; }
+  return m;
+}
+static void test_rereview() {
+  // N3: the owner turns the display DOWN while a contract-dimmed native look is up, and the host
+  // arms again (Studio's Resend). The owner's 80 is the display's brightness from then on: the
+  // re-arm must not put the old 160 back, the next look's ceiling is 80, and idle leaves 80.
+  resetAll(); send("**M:v=show"); send("LFA:i=native:0,b=64"); run(500);
+  CHECK(LogicEngineFLDDefault.fBri == 40);
+  ownerSets(80); run(200);
+  send("**M:v=show"); run(600);
+  KNOWN_BUG("N3: a re-arm overwrites the brightness the owner set during the show", LogicEngineFLDDefault.fBri == 80 && FLD->_liveBri == 80);
+  send("LFA:i=solid,c=ffffff"); run(600);
+  KNOWN_BUG("N3: the next look's ceiling is the owner's new brightness", gContract[0].ceil == 80 && brightestPixel(FLD) == 80);
+  send("**M:v=idle"); run(600);
+  KNOWN_BUG("N3: idle leaves the owner's new brightness", LogicEngineFLDDefault.fBri == 80 && FLD->_liveBri == 80);
+  // ...the same when the next line is a native look at b=255: 255 is the ceiling, and the ceiling is the owner's 80
+  resetAll(); send("**M:v=show"); send("LFA:i=native:0,b=64"); run(500); ownerSets(80); run(200);
+  send("LFA:i=native:1,b=255"); run(600);
+  KNOWN_BUG("N3: a native look at b=255 after the owner turned the display down", LogicEngineFLDDefault.fBri == 80 && FLD->_liveBri == 80);
+  send("**M:v=idle"); run(600);
+  KNOWN_BUG("N3: ...and idle after it", LogicEngineFLDDefault.fBri == 80);
+  // (while a contract look is up the engine's brightness is the owner's anyway: this always worked)
+  resetAll(); send("**M:v=show"); send("LFA:i=solid,c=ffffff"); run(500); ownerSets(80); run(200); send("**M:v=show"); run(600);
+  send("LFA:i=solid,c=ffffff"); run(600);
+  CHECK(LogicEngineFLDDefault.fBri == 80 && gContract[0].ceil == 80 && brightestPixel(FLD) == 80);
+
+  // N5: after the owner's change the host's NEXT B is honoured again, as a fraction of the new brightness
+  resetAll(); send("**M:v=show"); send("LFA:i=native:0"); send("LFB:b=64"); run(500); ownerSets(80); run(200);
+  CHECK(LogicEngineFLDDefault.fBri == 80);                                  // theirs stands...
+  send("LFB:b=255"); run(600);
+  CHECK(LogicEngineFLDDefault.fBri == 80);                                  // ...b=255 of 80 is 80
+  send("LFB:b=128"); run(600);
+  KNOWN_BUG("N5: every B after an owner change is ignored for the rest of the show", LogicEngineFLDDefault.fBri == 40 && FLD->_liveBri == 40);
+
+  // N2: a native look the contract selected is not always steady light. FAILURE (2) is dark from
+  // 8 s and ends itself at 18 s: the engine relights NORMAL then, by itself. An X and a relight
+  // straight after that is a second onset a few milliseconds after the first.
+  resetAll(); send("**M:v=show"); send("LFA:i=native:2"); run(17990);
+  CHECK(FLD->_fx == 2 && fieldLevel(FLD) == 0);                             // (the mock has FAILURE's timing)
+  run(30); CHECK(FLD->_fx == 0 && fieldLevel(FLD) == 160 && gContract[0].inShow);   // it ran out: NORMAL, and the show goes on
+  send("LFX"); run(10); send("LFA:i=solid,c=ffffff"); run(20);
+  KNOWN_BUG("N2: a relight 30 ms after the engine's own relight from FAILURE", fieldLevel(FLD) <= 40);
+  // ...and FLASHCOLOR (6) is full and 50/255 by turns, every 250 ms
+  resetAll(); send("**M:v=show"); send("LFA:i=native:6"); run(20);
+  CHECK(FLD->_fx == 6 && fieldLevel(FLD) == 160);
+  run(250); CHECK(fieldLevel(FLD) == 31);
+  run(250); CHECK(fieldLevel(FLD) == 160);                                  // its own ON edge, 510 ms in
+  send("LFX"); run(10); send("LFA:i=solid,c=ffffff"); run(20);
+  KNOWN_BUG("N2: a relight 30 ms after FLASHCOLOR's own ON edge", fieldLevel(FLD) <= 40);
+}
+
 // ---- L2: the host-silence watchdog ----
 static void test_watchdog() {
   resetAll(); send("**M:v=show,wd=2"); send("LFA:i=solid,c=ff0000"); run(1900);
@@ -611,6 +669,7 @@ int main() {
   test_review_r1_core();
   test_s9_paths();
   test_native_takeover();
+  test_rereview();
   test_watchdog();
   test_shared_effect_timing();
   if (gFails) { printf("%d CHECK(s) FAILED\n", gFails); return 1; }

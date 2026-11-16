@@ -18,6 +18,12 @@
 //     (LE:804-813). The fork's selectors in main.cpp report that to contractEngineLatched(), and
 //     so does this mock;
 //   * LogicEffectDefaultSelector() indexes one past its 25-entry table for 25 (LE:2733).
+//   * animate() draws at most every 10 ms (LE:792), however often the loop passes. A selection
+//     made between two frames waits for the next one; the contract's tick does not;
+//   * two stock effects that are NOT steady light, because the contract may select them and the
+//     S9 gate has to live with what they do by themselves: FLASHCOLOR (6) alternates full and
+//     50/255 every 250 ms (LE:2081-2091), and FAILURE (2) is dark from 8 s until it ends itself
+//     at 18 s, when the engine falls back to its default look (LE:2014-2046).
 // It is still a mock. A native look is not drawn pixel by pixel: every native sequence but
 // LIGHTSOUT fills the display with its live brightness (a stand-in for "lit": the worst case for
 // a full-field measurement), and LIGHTSOUT fills it black.
@@ -47,6 +53,8 @@ struct LogicEngineRenderer {
   unsigned _id = 1;
   int  _seq = 0, _prevSeq = -1;       // fDisplayEffectVal's sequence, and fPreviousEffectVal's
   int  _fx = 0;                       // the LATCHED effect: what animate() actually runs
+  uint32_t _lastFrame = 0, _fxStart = 0; bool _drawn = false;   // the 10 ms frame gate; when the effect started
+  long _frames = 0;                   // frames drawn
   int  _selects = 0;                  // selectSequence() calls
   int  _restarts[256] = {0};          // effect changes into each sequence
   int  _nativeFrames = 0;             // frames a native look ran
@@ -81,7 +89,11 @@ inline void contractEngineLatched(uint8_t u, unsigned seq);   // main.cpp's effe
 // One engine frame for one display: LogicEngineRenderer::animate() (LE:789-831), reduced, in the
 // engine's own order.
 inline void mockEngineFrame(LogicEngineRenderer& r) {
+  const uint32_t now = millis();
+  if (r._drawn && (uint32_t)(now - r._lastFrame) < 10u) return;   // not yet: a frame every 10 ms at most  LE:792
+  r._drawn = true; r._lastFrame = now; r._frames++;
   if (r._seq != r._prevSeq) {                                   // hasEffectChanged()              LE:804
+    r._fxStart = now;
     r._liveBri = (r._id == 1 ? LogicEngineFLDDefault : LogicEngineRLDDefault).fBri;   // restoreSettings() LE:807
     r._restarts[r._seq & 255]++;
     r._fx = r._seq;                                             // fLogicEffect = fEffectSelector() LE:813
@@ -92,8 +104,12 @@ inline void mockEngineFrame(LogicEngineRenderer& r) {
   else if (r._fx == 25) r._oobCalls++;                          // LE:2733: '>' lets 25 through
   else {
     r._nativeFrames++;
-    const byte level = (r._fx == 14) ? 0 : r._liveBri;          // LIGHTSOUT is dark; any other native look is "lit"
+    const uint32_t ran = now - r._fxStart;
+    byte level = (r._fx == 14) ? 0 : r._liveBri;                // LIGHTSOUT is dark; any other native look is "lit"
     if (r._fx == 14) r._liveBri = 0;
+    if (r._fx == 6 && (ran / 250u) % 2u == 1u) level = (byte)((unsigned)r._liveBri * 50u / 255u);   // FLASHCOLOR's low half
+    if (r._fx == 2 && ran >= 8000u) level = 0;                  // FAILURE has faded out...
+    if (r._fx == 2 && ran >= 18000u) keep = false;              // ...and ends itself: back to the default look
     for (int y = 0; y < 10; y++) for (int x = 0; x < 8; x++) r._px[y][x] = CRGB(level, level, level);
   }
   r._prevSeq = r._seq;                                          // fPreviousEffectVal = fDisplayEffectVal  LE:819 (AFTER the effect)

@@ -10,7 +10,11 @@
 //     (c) is back on a native sequence, and stays there, after M:v=idle or a watchdog expiry;
 //     (d) is dark at once after X, and stays dark until a line that may relight it;
 //     (e) L6: runs the sequence a button started on it, and keeps running it, when the contract
-//         held the display at that moment. The show does not come back for it by itself.
+//         held the display at that moment. The show does not come back for it by itself;
+//     (f) the same limit as (a) in LUMINANCE (Rec.709), which is what a colour change moves when
+//         the brightest channel stays where it was (white to blue and back);
+//     (g) changes its look or colour across the whole field at most once in 170 ms (S4, for
+//         every path: a live A, a section reached by time or by a seek, an accent, a restore).
 //
 // Lines go in through contractHandleLine(), a frame is rendered through the mock engine every
 // 10 ms (now and then later), and what is measured is the PIXELS: the full-field level of each
@@ -18,6 +22,16 @@
 // over, with three pairs of thresholds for "dark" and "lit", because the limit must not depend on
 // where an observer draws those lines: 10 % and 50 % of the ceiling, 19 % and 75 % (the pair the
 // 2026-11-16 review used), and 4 % and 31 %.
+//
+// TWO PHOTOMETERS. The first reads each pixel's brightest channel (fieldLevel()), so a saturated
+// red or blue field counts as much as a white one. The second reads the field's mean colour: its
+// Rec.709 luminance for (f), and its chromaticity for (g) (a change of look that the first
+// photometer cannot see at all). (a) and (f) are each counted by several observers: three with
+// wide bands, and for (a) four with bands only an eighth of the ceiling wide (3 to 15 %, 40 to
+// 52 %, 45 to 60 %, 80 to 95 %), because S9's step is a tenth of the ceiling.
+//
+// THE ENGINE draws a frame every 10 ms at most; a quarter of the random streams pass through the
+// loop every 1 to 4 ms, as the board does, so lines and ticks fall between frames.
 //
 // Two kinds of stream, all from one fixed seed:
 //   * HOSTILE PROFILES: one per way a host was found able to flash a display (the review's
@@ -65,7 +79,11 @@ struct Onsets {
 // ---- what is measured, per display ----
 struct Watch {
   LogicEngineRenderer* r = nullptr; int ceil = 255;
-  Onsets obs[3];
+  Onsets obs[3];                 // (a), wide bands
+  Onsets narrow[4];              // (a), bands an eighth of the ceiling wide
+  Onsets lum[3];                 // (f), on Rec.709 luminance
+  int chroma[3] = { 0, 0, 0 }; bool chromaKnown = false;        // (g): the field's colour when it was last lit
+  uint32_t colourAt = 0; bool colourAny = false; uint32_t colourMinGap = 0xFFFFFFFFu; long colourChanges = 0;
   int overCeiling = 0;           // (b) frames with a pixel above the ceiling while effect 106 draws
   int notNative = 0;             // (c) frames not on a native look when the display should be
   int notDark = 0;               // (d) frames lit when the display should be dark
@@ -75,24 +93,50 @@ struct Watch {
   int notButton = 0;             // (e) frames on something else when a button's sequence should be running
   uint32_t buttonFrom = 0; int expectButton = -1;
   bool ownerDark = false;        // the owner chose lights-out, by button: a display the contract gives back, or leaves alone, is then dark
+  bool ownerDarkUp = false;      // ...and the engine has started it (a frame or two after the press)
   void reset(LogicEngineRenderer* rr, int u) {
     *this = Watch(); r = rr; ceil = (u == 0 ? LogicEngineFLDDefault : LogicEngineRLDDefault).fBri;
     obs[1].darkPct = 19; obs[1].litPct = 75; obs[2].darkPct = 4; obs[2].litPct = 31;
+    lum[1].darkPct = 19; lum[1].litPct = 75; lum[2].darkPct = 4; lum[2].litPct = 31;
+    static const int kNarrow[4][2] = { { 3, 15 }, { 40, 52 }, { 45, 60 }, { 80, 95 } };
+    for (int i = 0; i < 4; i++) { narrow[i].darkPct = kNarrow[i][0]; narrow[i].litPct = kNarrow[i][1]; }
   }
   void native(uint32_t now) { if (!expectNative) nativeFrom = now; expectNative = true; expectDark = false; }
   void dark(uint32_t now)   { darkFrom = now; expectDark = true; expectNative = false; expectButton = -1; }
   void unknown()            { expectNative = expectDark = false; expectButton = -1; }
   void button(uint32_t now, int seq, bool held) {
     for (Onsets& o : obs) o.n = 0;                 // the owner's light: not the contract's onset
+    for (Onsets& o : narrow) o.n = 0;
+    for (Onsets& o : lum) o.n = 0;
+    chromaKnown = false; colourAny = false;        // ...nor the contract's change of look
     expectDark = false;
-    ownerDark = seq == 14;
+    if (seq == 14) { ownerDark = true; ownerDarkUp = false; }   // (any other press ends it when the engine starts that one)
     expectButton = held ? seq : -1; buttonFrom = now;
   }
   void frame(uint32_t now, uint32_t dt) {
     const int level = fieldLevel(r);
-    if (r->_fx != 14) ownerDark = false;
+    if (ownerDark && r->_fx == 14) ownerDarkUp = true;
+    if (ownerDarkUp && r->_fx != 14) ownerDark = ownerDarkUp = false;
     if (level * 2 >= ceil) litMs += dt;
     for (Onsets& o : obs) o.see(level, ceil, now);
+    for (Onsets& o : narrow) o.see(level, ceil, now);
+    // the second photometer: the field's mean colour
+    long sr = 0, sg = 0, sb = 0;
+    for (int y = 0; y < 10; y++) for (int x = 0; x < 8; x++) { const CRGB c = r->px(x, y); sr += c.r; sg += c.g; sb += c.b; }
+    const int luminance = (int)((2126 * sr + 7152 * sg + 722 * sb) / 800000);          // Rec.709, 0..255
+    for (Onsets& o : lum) o.see(luminance, ceil, now);
+    const long top = sr > sg ? (sr > sb ? sr : sb) : (sg > sb ? sg : sb);
+    if (top * 100 >= (long)ceil * 80 * 12) {       // lit enough to have a colour: 12 % of the ceiling
+      const int c[3] = { (int)(sr * 255 / top), (int)(sg * 255 / top), (int)(sb * 255 / top) };
+      int far = 0;
+      for (int i = 0; i < 3; i++) { const int d = c[i] > chroma[i] ? c[i] - chroma[i] : chroma[i] - c[i]; if (d > far) far = d; }
+      if (chromaKnown && far > 96) {               // a different colour than the field last had: a change of look
+        if (colourAny && now - colourAt < colourMinGap) colourMinGap = now - colourAt;
+        colourAt = now; colourAny = true; colourChanges++;
+      }
+      for (int i = 0; i < 3; i++) chroma[i] = c[i];
+      chromaKnown = true;
+    }
     if (r->_fx == 106) contractFrames++;
     if (r->_fx == 106)
       for (int y = 0; y < 10; y++) for (int x = 0; x < 8; x++) {
@@ -119,6 +163,7 @@ static std::vector<TraceEv> gTrace; static bool gTraceOn = false, gTraced = fals
 static void trace(const std::string& what) { if (gTraceOn) gTrace.push_back({ _mock_millis, what }); }
 static void traceDump(const char* why, int u) {
   if (!gTraceOn || gTraced) return;
+  if (const char* only = getenv("PROPERTY_TRACE_ONLY")) if (strstr(why, only) == nullptr) return;   // e.g. "native", "lit after X"
   gTraced = true;
   printf("TRACE: %s on display %d at %u ms. The last 2.5 s:\n", why, u, _mock_millis);
   for (const TraceEv& e : gTrace) if (_mock_millis - e.t <= 2500) printf("  %7u  %s\n", e.t, e.what.c_str());
@@ -207,7 +252,8 @@ static std::string randomLine() {
   const char* cls = pick({ "L", "L", "L", "L", "*", "*", "P", "H" });
   const char* unit = pick({ "F", "F", "R", "*", "*", "T" });
   const char* fx = pick({ "solid", "solid", "off", "flash", "pulse", "rainbow", "scan", "sparkle", "meter", "comet", "chase",
-                          "wipe", "gradient", "colorcycle", "twinkle", "native:0", "native:4", "native:14", "native:25", "bogus" });
+                          "wipe", "gradient", "colorcycle", "twinkle", "native:0", "native:4", "native:14", "native:25", "bogus",
+                          "native:6", "native:2", "native:20" });
   const char* col = pick({ "ffffff", "ffffff", "ff0000", "000000", "0000ff", "101010", "zzzzzz" });
   const uint32_t kind = rnd(17);
   const uint32_t r1 = rnd(256), r2 = rnd(2) ? 255 : rnd(300), r3 = rnd(2) ? 255 : rnd(256), r4 = rnd(6), r5 = rnd(5), r6 = rnd(4);
@@ -256,49 +302,85 @@ static std::string randomLine() {
 }
 
 // ---- the hostile profiles: the rows of the review's table, and three more of the same kind ----
-struct Profile { const char* name; void (*setup)(); void (*at)(uint32_t t); uint32_t period; };
+struct Profile { const char* name; void (*setup)(); void (*at)(uint32_t t); uint32_t period; int expected; };
 static void pShow() { tx("**M:v=show"); }
 static const Profile kProfiles[] = {
   { "X between live A lines", pShow,
-    [](uint32_t t) { if (t == 0) tx("LFA:i=solid,c=ffffff"); if (t == 50) tx("LFX"); if (t == 100) tx("LFA:i=solid,c=ffffff"); }, 170 },
+    [](uint32_t t) { if (t == 0) tx("LFA:i=solid,c=ffffff"); if (t == 50) tx("LFX"); if (t == 100) tx("LFA:i=solid,c=ffffff"); }, 170, 2 },
   { "B 0/255 alternation", []() { pShow(); tx("LFA:i=solid,c=ffffff"); },
-    [](uint32_t t) { if (t == 0) tx("LFB:b=0"); if (t == 50) tx("LFB:b=255"); }, 100 },
+    [](uint32_t t) { if (t == 0) tx("LFB:b=0"); if (t == 50) tx("LFB:b=255"); }, 100, 2 },
   { "P:b= alternation", []() { pShow(); tx("LFA:i=solid,c=ffffff"); },
-    [](uint32_t t) { if (t == 0) tx("LFP:i=solid,c=ffffff,b=0"); if (t == 50) tx("LFP:i=solid,c=ffffff,b=255"); }, 100 },
+    [](uint32_t t) { if (t == 0) tx("LFP:i=solid,c=ffffff,b=0"); if (t == 50) tx("LFP:i=solid,c=ffffff,b=255"); }, 100, 0 },
   { "meter following L 0/255", []() { pShow(); tx("LFA:i=meter,c=ffffff"); },
-    [](uint32_t t) { if (t == 0) tx("L*L:v=0"); if (t == 50) tx("L*L:v=255"); }, 100 },
+    [](uint32_t t) { if (t == 0) tx("L*L:v=0"); if (t == 50) tx("L*L:v=255"); }, 100, 2 },
   { "C seeks across two scored sections", []() { pShow(); tx("LFA:i=solid,c=ffffff,at=0"); tx("LFA:i=off,at=100"); },
-    [](uint32_t t) { if (t == 0) tx("L*C:bpm=120,beat=100"); if (t == 50) tx("L*C:bpm=120,beat=0"); }, 100 },
+    [](uint32_t t) { if (t == 0) tx("L*C:bpm=120,beat=100"); if (t == 50) tx("L*C:bpm=120,beat=0"); }, 100, 2 },
   { "C:bpm= re-seed restarting the pump", []() { pShow(); tx("LFA:i=solid,c=ffffff,am=2,m=255"); },
-    [](uint32_t t) { if (t == 0) tx("L*C:bpm=300"); }, 150 },
+    [](uint32_t t) { if (t == 0) tx("L*C:bpm=300"); }, 150, 0 },
   { "A cancelling an overlay, with P", []() { pShow(); tx("LFA:i=off"); },
     [](uint32_t t) { if (t == 0) tx("LFP:i=solid,c=ffffff"); if (t == 90) tx("LFA:i=off"); if (t == 260) tx("LFA:i=solid,c=ffffff");
-                     if (t == 340) tx("LFP:i=off"); if (t == 430) tx("LFA:i=solid,c=ffffff"); if (t == 600) tx("LFA:i=off"); }, 680 },
+                     if (t == 340) tx("LFP:i=off"); if (t == 430) tx("LFA:i=solid,c=ffffff"); if (t == 600) tx("LFA:i=off"); }, 680, 2 },
   { "pump across section seams at 300 BPM",
     []() { pShow(); for (int b = 0; b < 32; b++) { char l[96]; snprintf(l, sizeof l, "LFA:i=solid,c=ffffff,at=%d,am=2,m=255,an=2,ap=%d", b, b % 2); tx(l); }
            tx("**C:bpm=300,ph=0,bpb=4,beat=0"); },
-    [](uint32_t t) { if (t == 0) tx("**C:bpm=300,ph=0,bpb=4,beat=0"); }, 6200 },
+    [](uint32_t t) { if (t == 0) tx("**C:bpm=300,ph=0,bpb=4,beat=0"); }, 6200, 2 },
   { "X and M:v=idle alternation (dark, then the native look)", []() { tx("LFA:i=solid,c=ffffff"); },
-    [](uint32_t t) { if (t == 0) tx("LFX"); if (t == 50) tx("LFM:v=idle"); }, 100 },
+    [](uint32_t t) { if (t == 0) tx("LFX"); if (t == 50) tx("LFM:v=idle"); }, 100, 0 },
   { "live A restarting a pulse", pShow,
-    [](uint32_t t) { if (t == 0) tx("LFA:i=pulse,c=ffffff,s=255"); }, 170 },
+    [](uint32_t t) { if (t == 0) tx("LFA:i=pulse,c=ffffff,s=255"); }, 170, 0 },
   { "live A between white and native lights-out", pShow,
-    [](uint32_t t) { if (t == 0) tx("LFA:i=solid,c=ffffff"); if (t == 50) tx("LFX"); if (t == 60) tx("LFA:i=native:14"); if (t == 120) tx("LFA:i=solid,c=ffffff"); }, 240 },
+    [](uint32_t t) { if (t == 0) tx("LFA:i=solid,c=ffffff"); if (t == 50) tx("LFX"); if (t == 60) tx("LFA:i=native:14"); if (t == 120) tx("LFA:i=solid,c=ffffff"); }, 240, 2 },
   { "a scored flash section delivered again and again", []() { pShow(); tx("LFA:i=flash,c=ffffff,s=255,at=0"); tx("L*C:bpm=120"); },
-    [](uint32_t t) { if (t == 0) tx("LFA:i=flash,c=ffffff,s=255,at=0"); }, 200 },
+    [](uint32_t t) { if (t == 0) tx("LFA:i=flash,c=ffffff,s=255,at=0"); }, 200, 2 },
+  // ---- the 2026-11-16 re-review: what the gate could not see, and what it let through ----
+  { "C seeks between a white and a blue section (the brightest channel never moves)",
+    []() { pShow(); tx("LFA:i=solid,c=ffffff,at=0"); tx("LFA:i=solid,c=0000ff,at=100"); },
+    [](uint32_t t) { if (t == 0) tx("L*C:bpm=120,beat=100"); if (t == 50) tx("L*C:bpm=120,beat=0"); }, 100, 12 },
+  { "C seeks between a red and a blue section",
+    []() { pShow(); tx("LFA:i=solid,c=ff0000,at=0"); tx("LFA:i=solid,c=0000ff,at=100"); },
+    [](uint32_t t) { if (t == 0) tx("L*C:bpm=120,beat=100"); if (t == 50) tx("L*C:bpm=120,beat=0"); }, 100, 8 },
+  { "C seeks between a native section and a red one", []() { pShow(); tx("LFA:i=native:0,at=0"); tx("LFA:i=solid,c=ff0000,at=100"); },
+    [](uint32_t t) { if (t == 0) tx("L*C:bpm=120,beat=100"); if (t == 50) tx("L*C:bpm=120,beat=0"); }, 100, 8 },
+  { "a white accent between two colours of a live look", []() { pShow(); tx("LFA:i=solid,c=ff0000"); },
+    [](uint32_t t) { if (t == 0) tx("LFP:c=ffffff,d=170"); if (t == 20) tx("LFA:i=solid,c=0000ff"); if (t == 340) tx("LFP:c=ffffff,d=300");
+                     if (t == 360) tx("LFA:i=solid,c=ff0000"); }, 680, 8 },
+  { "white by a colour change, X, white again by an accent (two luminance onsets, one brightness onset)",
+    []() { pShow(); tx("LFA:i=solid,c=0000ff"); },
+    [](uint32_t t) { if (t == 0) tx("LFA:i=solid,c=ffffff"); if (t == 10) tx("LFX"); if (t == 20) tx("LFP:c=ffffff,d=170");
+                     if (t == 200) tx("LFA:i=solid,c=0000ff"); }, 400, 6 },
+  { "native:6 (it flashes by itself), X and a relight just after its own ON edge", []() { pShow(); tx("LFA:i=native:6"); },
+    [](uint32_t t) { if (t == 510) tx("LFX"); if (t == 520) tx("LFA:i=solid,c=ffffff"); if (t == 690) tx("LFA:i=native:6"); }, 1205, 2 },
+  { "B between 0 and 63 (under a quarter of the ceiling)", []() { pShow(); tx("LFA:i=solid,c=ffffff"); },
+    [](uint32_t t) { if (t == 0) tx("LFB:b=0"); if (t == 50) tx("LFB:b=63"); }, 100, 2 },
+  { "B between 192 and 255 (the top quarter)", []() { pShow(); tx("LFA:i=solid,c=ffffff"); },
+    [](uint32_t t) { if (t == 0) tx("LFB:b=192"); if (t == 50) tx("LFB:b=255"); }, 100, 2 },
+  { "the top fifth of a meter following L", []() { pShow(); tx("LFA:i=meter,c=ffffff"); tx("L*L:v=255"); },
+    [](uint32_t t) { if (t == 0) tx("L*L:v=204"); if (t == 50) tx("L*L:v=255"); }, 100, 2 },
 };
 static const int kProfileCount = (int)(sizeof kProfiles / sizeof kProfiles[0]);
+static const int kRandomExpected = 15;
 
+// What a stream broke, as bits, so each fix can be seen to clear its own.
+enum : int { BROKE_ONSETS = 1,      // (a), the wide observers: two onsets under 340 ms apart, or four in a second
+             BROKE_NARROW = 2,      // (a), the narrow ones
+             BROKE_LUMINANCE = 4,   // (f)
+             BROKE_COLOUR = 8,      // (g)
+             BROKE_OTHER = 16 };    // (b) to (e)
 struct Result {
-  int worst = 0; uint32_t minGap = 0xFFFFFFFFu; int overCeiling = 0, notNative = 0, notDark = 0, wdLate = 0;
+  int worst = 0; uint32_t minGap = 0xFFFFFFFFu, narrowGap = 0xFFFFFFFFu, lumGap = 0xFFFFFFFFu, colourGap = 0xFFFFFFFFu;
+  int overCeiling = 0, notNative = 0, notDark = 0, wdLate = 0;
   long onsets = 0, darkChecked = 0, nativeChecked = 0, contractFrames = 0, lines = 0;   // how much was looked at
-  long presses = 0, buttonChecked = 0; int notButton = 0;
+  long presses = 0, buttonChecked = 0, colourChanges = 0, lumOnsets = 0; int notButton = 0;
   void take() {
     for (int u = 0; u < 2; u++) {
       for (const Onsets& o : gW[u].obs) { if (o.worst > worst) worst = o.worst; if (o.minGap < minGap) minGap = o.minGap; }
+      for (const Onsets& o : gW[u].narrow) if (o.minGap < narrowGap) narrowGap = o.minGap;
+      for (const Onsets& o : gW[u].lum) if (o.minGap < lumGap) lumGap = o.minGap;
+      if (gW[u].colourMinGap < colourGap) colourGap = gW[u].colourMinGap;
       overCeiling += gW[u].overCeiling; notNative += gW[u].notNative; notDark += gW[u].notDark;
       onsets += gW[u].obs[0].total; darkChecked += gW[u].darkChecked; nativeChecked += gW[u].nativeChecked; contractFrames += gW[u].contractFrames;
       notButton += gW[u].notButton; buttonChecked += gW[u].buttonChecked;
+      colourChanges += gW[u].colourChanges; lumOnsets += gW[u].lum[0].total;
     }
     presses += gPresses; gPresses = 0;
     wdLate += gWatchdogLate; gWatchdogLate = 0;
@@ -307,21 +389,36 @@ struct Result {
   void add(const Result& o) {
     if (o.worst > worst) worst = o.worst;
     if (o.minGap < minGap) minGap = o.minGap;
+    if (o.narrowGap < narrowGap) narrowGap = o.narrowGap;
+    if (o.lumGap < lumGap) lumGap = o.lumGap;
+    if (o.colourGap < colourGap) colourGap = o.colourGap;
     overCeiling += o.overCeiling; notNative += o.notNative; notDark += o.notDark; wdLate += o.wdLate;
     onsets += o.onsets; darkChecked += o.darkChecked; nativeChecked += o.nativeChecked; contractFrames += o.contractFrames; lines += o.lines;
     notButton += o.notButton; presses += o.presses; buttonChecked += o.buttonChecked;
+    colourChanges += o.colourChanges; lumOnsets += o.lumOnsets;
   }
   // (a) is the spec's "at most three in any second". The gate promises more, and that is held to
   // as well: no two onsets less than 340 ms apart, for every observer.
-  bool holds() const { return worst <= 3 && minGap >= 2 * STROBE_MIN_STATE_MS && overCeiling == 0 && notNative == 0 && notDark == 0 && wdLate == 0 && notButton == 0; }
+  int broke() const {
+    return (worst > 3 || minGap < 2 * STROBE_MIN_STATE_MS ? BROKE_ONSETS : 0)
+         | (narrowGap < 2 * STROBE_MIN_STATE_MS ? BROKE_NARROW : 0)
+         | (lumGap < 2 * STROBE_MIN_STATE_MS ? BROKE_LUMINANCE : 0)
+         | (colourGap < STROBE_MIN_STATE_MS ? BROKE_COLOUR : 0)
+         | (overCeiling || notNative || notDark || wdLate || notButton ? BROKE_OTHER : 0);
+  }
   void print(const char* verdict, const char* name) const {
-    printf("%s S9 %s: %d onsets in one second", verdict, name, worst);
-    if (minGap != 0xFFFFFFFFu) printf(" (closest two %u ms apart)", minGap);
-    if (notDark)     printf(", %d frames lit after X", notDark);
-    if (notNative)   printf(", %d frames not native after idle", notNative);
-    if (overCeiling) printf(", %d frames over the ceiling", overCeiling);
-    if (wdLate)      printf(", the watchdog was late %d times", wdLate);
-    if (notButton)   printf(", %d frames not on the sequence a button started", notButton);
+    printf("%s S9 %s:", verdict, name);
+    const int b = broke();
+    if (b == 0) printf(" holds");
+    if (b & BROKE_ONSETS)    printf(" onsets %u ms apart (%d in one second);", minGap, worst);
+    if (b & BROKE_NARROW)    printf(" narrow-band onsets %u ms apart;", narrowGap);
+    if (b & BROKE_LUMINANCE) printf(" luminance onsets %u ms apart;", lumGap);
+    if (b & BROKE_COLOUR)    printf(" colour changes %u ms apart;", colourGap);
+    if (notDark)     printf(" %d frames lit after X;", notDark);
+    if (notNative)   printf(" %d frames not native after idle;", notNative);
+    if (overCeiling) printf(" %d frames over the ceiling;", overCeiling);
+    if (wdLate)      printf(" the watchdog was late %d times;", wdLate);
+    if (notButton)   printf(" %d frames not on the sequence a button started;", notButton);
     printf("\n");
   }
 };
@@ -349,6 +446,17 @@ static Result runRandom(int streams) {
                        gW[0].ceil = LogicEngineFLDDefault.fBri; }
     const uint32_t busy = 2 + rnd(30);            // one line every `busy` frames on average
     const bool buttons = rnd(2) == 0;             // half the streams have an owner at the controller
+    const bool fine = rnd(4) == 0;                // a quarter pass through the loop as the board does: every 1 to 4 ms
+    if (fine) {
+      for (uint32_t t = 0; t < 12000; ) {
+        if (rnd(busy * 4) == 0) { const bool burst = rnd(8) == 0; for (uint32_t n = 1 + (burst ? rnd(12) : 0); n > 0; n--) tx(randomLine()); }
+        if (buttons && rnd(1400) == 0) { static const int kSeq[] = { 0, 1, 2, 4, 5, 6, 14, 20, 3 }; const int u = (int)rnd(2); press(u, kSeq[rnd(9)]); }
+        const uint32_t dt = 1 + rnd(4);
+        step(dt); t += dt;
+      }
+      res.take();
+      continue;
+    }
     for (uint32_t t = 0; t < 12000; t += 10) {
       if (rnd(busy) == 0) { const bool burst = rnd(8) == 0; for (uint32_t n = 1 + (burst ? rnd(12) : 0); n > 0; n--) tx(randomLine()); }
       if (buttons && rnd(350) == 0) {              // about three presses a stream
@@ -363,13 +471,17 @@ static Result runRandom(int streams) {
   return res;
 }
 
-// A stream the layer does not hold yet. `still` is true while the defect is in the code: the line
-// prints XFAIL and the suite stays green; the task that fixes it sets it to false, and from then
-// on the stream must hold. (Fixed while still marked: the suite fails, as with KNOWN_BUG.)
-static void verdict(const char* name, const Result& res, bool still) {
-  if (!still) { if (!res.holds()) { res.print("FAIL ", name); gFails++; } return; }
-  if (res.holds()) { res.print("XPASS", name); printf("      fixed: clear its `still` flag\n"); gFails++; }
-  else { res.print("XFAIL", name); gKnown++; }
+// A stream, and what it is EXPECTED to break on the layer as it stands (BROKE_ bits; 0: it holds).
+// While a defect is in the code its streams print XFAIL and the suite stays green. The task that
+// fixes it clears the bits; a stream that breaks anything else than expected, or that no longer
+// breaks what it is marked for, fails the suite (as KNOWN_BUG does).
+static void verdict(const char* name, const Result& res, int expected) {
+  const int b = res.broke();
+  if (getenv("PROPERTY_DISCOVER")) { printf("%2d  %s\n", b, name); return; }
+  if (b == expected) { if (b) { res.print("XFAIL", name); gKnown++; } return; }
+  res.print((b & ~expected) ? "FAIL " : "XPASS", name);
+  printf("      expected to break %d, broke %d (1 onsets, 2 narrow-band onsets, 4 luminance, 8 colour changes, 16 other)\n", expected, b);
+  gFails++;
 }
 
 int main() {
@@ -387,15 +499,14 @@ int main() {
   if (gW[1].litMs > 1000) printf("      (the rear display was lit %ld ms of 10000)\n", gW[1].litMs);
   CHECK(gW[1].litMs >= 700 && gW[1].litMs <= 1000);
 
-  // On the layer of 4dbb04b every stream below fails. Clear a flag in the task that fixes it.
-  static const bool kStill[] = { false, false, false, false, false, false, false, false, false, false, false, false };
-  static_assert(sizeof kStill / sizeof kStill[0] == sizeof kProfiles / sizeof kProfiles[0], "one flag a profile");
   Result all;
-  for (int i = 0; i < kProfileCount; i++) { const Result r = runProfile(kProfiles[i], 8); verdict(kProfiles[i].name, r, kStill[i]); all.add(r); }
+  for (int i = 0; i < kProfileCount; i++) { const Result r = runProfile(kProfiles[i], 8); verdict(kProfiles[i].name, r, kProfiles[i].expected); all.add(r); }
   const Result rr = runRandom(streams);
-  verdict("random streams", rr, false); all.add(rr);
+  verdict("random streams", rr, kRandomExpected); all.add(rr);
 
   if (gFails) { printf("%d CHECK(s) FAILED\n", gFails); return 1; }
+  printf("     (colour changes: %ld, the closest two %u ms apart; luminance onsets: %ld, the closest two %u ms apart; narrow-band onsets the closest two %u ms apart)\n",
+         all.colourChanges, all.colourGap, all.lumOnsets, all.lumGap, all.narrowGap);
   printf("S9 property OK (%d known defect(s) still open): %ld lines, %ld frames drawn by the contract, %ld onsets, the closest two %u ms apart;\n"
          "   %ld frames checked dark after X, %ld checked native after idle or the watchdog, %ld button presses and %ld frames\n"
          "   checked on the button's sequence (seed 0x%08X, %d random streams)\n",
