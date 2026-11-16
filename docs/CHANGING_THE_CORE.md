@@ -42,9 +42,12 @@ the firmware and the preview cannot disagree without a test failing. Schema 1:
 - `constants`: the safety limits and other named values (an integer, or a list of integers).
 - `lines`: a wire line (the bytes after `!`) and its CRC-16/CCITT-FALSE as `crc16`.
 - `groups`: one per function. `args` and `out` are name lists; each row is the arguments, then the results.
-  Every value is an integer. A float is carried scaled (`phase_e6` is the phase times a million, rounded).
+  Every value is an integer, and since CA1.3 every one is exact: the core has no float, so a mirror is compared
+  with no tolerance. `phase16` and `progress16` are Q16 (a fraction times 65536, rounded down).
 
-Groups are append-only: a later change adds a group, it never reshapes one.
+Groups are append-only: a later change adds a group, it never reshapes one. There has been one exception: at
+CA1.3 the last `out` column of `beatPosAt` and `beatPosAtReseed` changed from `phase_e6` (a float, times a million)
+to `phase16`, when the phase itself stopped being a float.
 
 ### A stateful group
 
@@ -90,3 +93,89 @@ section cursor, and the logics allow-list loses code 3. Three things are a fork'
 
 Each fork also needs its own copy of the S9 property stage (`test/host/test_contract_property.cpp` here): the
 streams and the bookkeeping carry over; the part that renders a frame and measures it is the fork's.
+
+## Core revision CA1.3 (2026-11-16): the beat clock in integers
+
+There is no float left in `contract_core.h`. The reason is the 8-bit forks: one float expression links the
+compiler's soft-float library, about 1.3 KB of a 28 KB part. On the probe programs (avr-gcc 7.3, atmega32u4, the
+whole core in one image) CA1.3 is 1,448 B of flash smaller than CA1.2, with the same static RAM. Stage 1h of the
+host suite fails if a float comes back into the core or into the logics layer.
+
+### What changed in the API
+
+| Was | Is |
+| --- | --- |
+| `BeatPos.phase` (`float`, 0 to 1) | `BeatPos.phase16` (`uint16_t`, Q16: 0 at the beat, 65535 just before the next) |
+| `float beatSectionProgress(beat, start, end)` (the raw ratio) | `uint32_t beatSectionProgress16(beat, start, end)` (Q16, clamped to 0 .. 65536) |
+| `beatAccentAmount(am, bp, m, float progress, bc, every)` | `beatAccentAmount(am, bp, m, uint32_t progress16, bc, every)` |
+| `#include <math.h>` in the core | gone |
+
+`beatPosAt()`, `beatClockSeed()`, `accentEdgeAfterSeed()`, `beatAccentFires()` and `envBright()` keep their
+signatures. New: `BEAT_UNITS` (60000) and `_beatSplit(bc, nowMs, unitsInto)`. The field and the function were
+renamed on purpose: a layer that still reads `bp.phase` or holds the progress in a `float` stops compiling, instead
+of compiling and keeping the soft-float library linked.
+
+A fork's layer changes two things: it passes `beatSectionProgress16(...)` to `beatAccentAmount()`, and anything of
+its own that read `bp.phase` reads `bp.phase16` (a fraction `f` of a beat is `phase16 >= f * 65536`).
+
+### The definitions, for a mirror
+
+All values are integers; `floor(a / b)` rounds towards minus infinity; `>> 16` is `floor(x / 65536)`. No
+intermediate value needs more than 32 bits.
+
+**The clock.** One beat is 60000 units, where a unit is one millisecond times the tempo (`ms * bpm`).
+
+```text
+delta   = (nowMs - anchorMs) as a signed 32-bit number      (the uint32 difference, wrapped)
+minutes = floor(delta / 60000)
+ms      = delta - minutes * 60000                           0 .. 59999
+t       = ms * bpm
+beats   = minutes * bpm + floor(t / 60000)
+units   = t mod 60000                                       0 .. 59999
+
+beatIndex = beatOffset + beats
+phase16   = floor(units * 65536 / 60000)                    0 .. 65535
+barPos    = beatIndex mod bpb, floored                      0 .. bpb - 1
+```
+
+This is exact for any `nowMs` within 2^31 ms (24.8 days) of the anchor, either way and across the `millis()`
+wrap. Beat `k` begins at the first whole millisecond at or after its true instant: never early, under a
+millisecond late, at ten minutes, at an hour and at 24 days alike.
+
+**Nudge or seek** (a bare `C` on a running clock). With `(beatsA, unitsA)` the position before the line and
+`(beatsB, unitsB)` after it, both at the moment the line arrived, and `d = beatIndexB - beatIndexA`: it is a nudge
+when `d == 0`, or `d == 1 and unitsB < unitsA`, or `d == -1 and unitsB > unitsA`. Otherwise a seek.
+
+**The accent-edge guard** (C1). The current beat counts as already accented when
+`units >= (ACCENT_EDGE_LATE_MS + 1) * bpm`, that is `units >= 61 * bpm`: more than 60 whole milliseconds into it.
+
+**The section progress.**
+
+```text
+if sectionEnd <= sectionStart or beatIndex <= sectionStart:  progress16 = 0
+else if beatIndex >= sectionEnd:                             progress16 = 65536
+else:
+    n = beatIndex - sectionStart,  d = sectionEnd - sectionStart
+    while d > 65535:  n = floor(n / 2),  d = floor(d / 2)
+    progress16 = floor(n * 65536 / d)
+```
+
+**The envelope** (`beatAccentAmount`, when the beat fires and `m > 0`), with `p = phase16`:
+
+```text
+env = 65536 + ((p * p) >> 16) - 2 * p                        this is floor((65536 - p)^2 / 65536)
+if barPos == 0:   env = min(65536, env + ((env * 19661) >> 16))
+if am == 3 and progress16 < 65536:   env = (env * progress16) >> 16
+amount = (env * m) >> 16
+```
+
+`envBright()` was already integer and is unchanged. Against the float envelope it replaces, at the same phase,
+the amount is never more than 1 away, and it is the same value 999 times in 1000.
+
+### The vector file
+
+`beatPosAt` and `beatPosAtReseed` carry `phase16`. Five groups are new, one for each step above, so a mirror can
+be pinned piece by piece: `beatPosAtLong` (up to 24 days after the seed and across the wrap, with `units`),
+`beatSectionProgress16`, `beatAccentAmount` (the envelope from its integer inputs alone), `beatClockSeedKind`
+(1 a seek, 2 a nudge) and `accentEdgeAfterSeed` (`counted`, and the beat). `accentAt` did not change by a single
+value; `accentAtEvery` changed by 1 in 7 of its 1800 rows.

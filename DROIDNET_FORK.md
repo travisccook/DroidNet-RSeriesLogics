@@ -64,7 +64,9 @@ is the DroidNet layer (`git log --oneline 6bba8b1..HEAD`).
   column sweeping back and forth.
 - **Beat clock.** One clock for both displays. `C:bpm=,ph=,bpb=,beat=` seeds it; a bare `C:ph=,beat=` re-anchors
   it (the host's drift correction); `C:bpm=0` holds the show. A tempo outside 30-300, or a `bpm=` that is not a
-  plain number, makes the whole line a no-op.
+  plain number, makes the whole line a no-op. The clock and the accent envelope are integer arithmetic
+  (no float in the core or in this layer): a beat falls on the exact millisecond however long the show runs, and
+  the Studio preview's mirror can be tested against it with no tolerance.
 - **Score.** 32 entries a display. Each carries its look, `b=`, `m=`, `am=`, `an=`/`ap=` (every-N accents) and an
   optional accent (`ae=`/`ac=`/`ad=`), which the board fires itself on the section's accent beats. A scored `A`
   with no `i=` is dropped. A line delivered twice changes nothing, the section that is playing included.

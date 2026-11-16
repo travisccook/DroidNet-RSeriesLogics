@@ -66,7 +66,7 @@ the shared core's unit tests and parser fuzz, the RSeries layer on a mock of the
 2026-11-15 and 2026-11-16 reviews is a regression test there), the contract's "never flash a display" rule as a
 property of hostile and random line streams measured on the rendered pixels, the Serial1 reader, and, with
 PlatformIO installed, the real ESP32 cross-compile. CI runs the same on every push. At this source state
-`pio run -e wlogicengine32` links at **1,134,789 B of flash (57.7%)** and 64,908 B of SRAM (19.8%). A link is not
+`pio run -e wlogicengine32` links at **1,134,545 B of flash (57.7%)** and 64,908 B of SRAM (19.8%). A link is not
 a run.
 
 This used to say the code had never been compiled for the ESP32 at all, and that was the honest
@@ -315,6 +315,7 @@ ONLY="1 1f 4" bash test/host/run.sh   # just those stages
 | Stage | What it checks |
 | --- | --- |
 | 1, 1f | `contract_core.h` unit tests: the v1.2 vectors, and the v1.3 rules (limits, clock, lifecycle, score, query) |
+| 1h | no floating point in the shared core or in the layer that calls it every frame |
 | 1b | the WiFi connect-else-AP state machine |
 | 1c, 1d | the WDP announce core, and this board's identity and Serial1 adapter |
 | 1e | `test/host/vectors/contract_vectors.json` is what the core generates |
