@@ -66,7 +66,7 @@ the shared core's unit tests and parser fuzz, the RSeries layer on a mock of the
 2026-11-15 and 2026-11-16 reviews is a regression test there), the contract's "never flash a display" rule as a
 property of hostile and random line streams measured on the rendered pixels, the Serial1 reader, and, with
 PlatformIO installed, the real ESP32 cross-compile. CI runs the same on every push. At this source state
-`pio run -e wlogicengine32` links at **1,136,549 B of flash (57.8%)** and 64,932 B of SRAM (19.8%). A link is not
+`pio run -e wlogicengine32` links at **1,136,893 B of flash (57.8%)** and 64,932 B of SRAM (19.8%). A link is not
 a run.
 
 This used to say the code had never been compiled for the ESP32 at all, and that was the honest
@@ -151,8 +151,10 @@ What v1.3 adds on top (the details are in [DROIDNET_FORK.md](DROIDNET_FORK.md)):
   did not get its whole show goes back to its native look. `Q` reports it.
 - **A show that ends by itself.** `M:v=show,wd=15` returns the displays to their native look after 15 seconds
   without a line from the host.
-- **`native:<code>` is an allow-list:** 0, 1, 4, 5, 7-14, 19-21, 23, 24, 101 and 105. `DROIDNET_FORK.md`
-  ("Native sequences") says why each of the others is off it.
+- **`native:<code>` is an allow-list:** 0-2, 4-14, 19-24, 101 and 105. Four of them (march, roaming pixel,
+  horizontal scan line, fire) are started at a slower speed than the engine's default so that they pass the
+  contract's flash rule. `DROIDNET_FORK.md` ("Native sequences") has the test, its numbers for every code, and
+  why each of the others is off the list.
 
 **Every native command still works exactly as before.** `~RTLE…`, `@nT…`, `#LE…`, JawaLite, the web
 interface, the SD-card updater, the menus — all untouched. This is backward-compatible and it is not
@@ -317,6 +319,7 @@ ONLY="1 1f 4" bash test/host/run.sh   # just those stages
 | --- | --- |
 | 1, 1f | `contract_core.h` unit tests: the v1.2 vectors, and the v1.3 rules (limits, clock, lifecycle, score, query) |
 | 1h | no floating point in the shared core or in the layer that calls it every frame |
+| 1i | contract S10: every `native:<code>` on the allow-list passes the flash rule at the speed the core gives it, on a model of the stock sequences |
 | 1b | the WiFi connect-else-AP state machine |
 | 1c, 1d | the WDP announce core, and this board's identity and Serial1 adapter |
 | 1e | `test/host/vectors/contract_vectors.json` is what the core generates |

@@ -48,6 +48,9 @@ What is verified is host-side, by `bash test/host/run.sh` (and by CI, `.github/w
   170 ms apart (five readings); no pixel above the owner's brightness; the native look after idle or the
   watchdog; dark after `X`; a button's sequence left running. The mock engine draws a frame every 10 ms at most
   and has the timing of the two stock sequences that flash by themselves (FLASHCOLOR and FAILURE);
+- contract S10 as a test (stage 1i): a model of the stock sequences, on every display size the engine knows,
+  counts each allow-listed code's onsets over the whole field and over every region of a quarter or more, at the
+  speed the core starts it with. It is a model of the stock code, not a measurement of a display;
 - the Serial1 reader, including a 400-byte burst of back-to-back lines, with and without the pass-through;
 - the real ESP32 cross-compile (`pio run -e wlogicengine32`), which is a link, not a run.
 
@@ -61,11 +64,13 @@ is the DroidNet layer (`git log --oneline 6bba8b1..HEAD`).
 - **Verbs.** `A` (animate: live, or scored with `at=`), `P` (pulse: the accent overlay), `C` (beat clock),
   `B` (brightness), `L` (level), `X` (stop), `M` (mode: `show` / `idle`), `V` (verify the load), `Q` (query).
 - **Looks.** `off`, `solid`, `flash`, `pulse`, `rainbow`, `scan`, `sparkle`, `meter`, `comet`, `chase`, `wipe`,
-  `gradient`, `colorcycle`, `twinkle`, and `native:<code>` for the codes on the allow-list: 0, 1, 4, 5, 7 to 14,
-  19 to 21, 23, 24, 101 and 105 (see "Native sequences" below for what is off it, and why).
-  `flash`, `pulse` and `scan` use the core's shared timing, the same on all three boards: `pulse` is a breathe
-  whose cycle is never shorter than 340 ms (and a steady fill moved by the beat pump when one is on), `scan` one
-  column sweeping back and forth.
+  `gradient`, `colorcycle`, `twinkle`, and `native:<code>` for the codes on the allow-list: 0 to 2, 4 to 14,
+  19 to 24, 101 and 105 (see "Native sequences" below for the test, the speeds and what is off the list).
+  `flash`, `pulse`, `scan`, `chase` and `wipe` use the core's shared timing, the same on all three boards:
+  `flash` is 190 to 445 ms a state; `pulse` is a breathe whose cycle is never shorter than 680 ms (and a steady
+  fill moved by the beat pump when one is on); a `wipe` fills and drains in 680 ms at the least; `chase` lights
+  three of the eight columns at every step; `scan` is one column sweeping back and forth. A live `A` or a section
+  that asks for the look that is already up (the same effect, colour and speed) does not restart it.
 - **Beat clock.** One clock for both displays. `C:bpm=,ph=,bpb=,beat=` seeds it; a bare `C:ph=,beat=` re-anchors
   it (the host's drift correction); `C:bpm=0` holds the show. A tempo outside 30-300, or a `bpm=` that is not a
   plain number, makes the whole line a no-op. The clock and the accent envelope are integer arithmetic
@@ -112,11 +117,14 @@ is the DroidNet layer (`git log --oneline 6bba8b1..HEAD`).
   the engine has no public way to ask which sequence is running.
 - `native:3` (Leia). The stock effect sets its own brightness, 50 to 255, every frame, so it can neither be held
   under the owner's brightness nor dimmed by `B`. It comes back with a look of the contract's own.
-- `native:2`, `6`, `22`, `102`, `103` and `104` (failure, flash colour, fire, metaballs, fractal, fade and
-  scroll). Their whole field swings faster than S10 allows and the engine draws them, so the layer cannot gate
-  them. They still run from a button.
+- `native:102`, `103` and `104` (metaballs, fractal, fade and scroll). The first two fail S10's test and the
+  engine draws them, so the layer cannot gate them; the third draws what it does at random when it starts. They
+  still run from a button.
 - `b=` and `B` on `native:19` to `24`, `101` and `105`. Those sequences write their pixels at a level of their
   own; `NATIVE_DIMS_LOGICS` in the vector file lists the codes that do take the brightness.
+- A brighter `B` or `b=` on a native sequence whose own light moves (`native:2`, `6`, `9`, `10`) while it runs.
+  Nothing can tell when such a sequence next lights by itself, so it is given a brighter level only when it
+  starts. A dimmer one reaches it at once.
 - One limit for the two displays together. Each display has its own gates, so the front and the rear can light
   by turns, each 340 ms apart: 5.9 onsets a second between them. Not limited, and a bench item.
 - A limit on `#LEBRI`. It scales everything the board puts out, at once and as often as it is sent, outside the
@@ -138,56 +146,77 @@ is the DroidNet layer (`git log --oneline 6bba8b1..HEAD`).
 ### Native sequences (S10)
 
 The engine draws its own sequences, so the layer cannot pass their frames through the gate: on this board every
-allow-listed code runs as stock, and a sequence whose whole field swings too fast is off the list. The test
-applied here: as the contract selects the sequence (default colour, speed 0, no microphone source wired), the
-mean of the whole field must not swing by more than a tenth of its own peak more than three times in any
-second, in level or in luminance. A swing is counted the way the gate counts: a move of more than a tenth from
-the last peak or trough, up or down.
+allow-listed code runs as stock, and a sequence that fails the test is off the list. The test is S9's own
+measure, applied to the sequence as the contract starts it (default colour, the speed in the table, no microphone
+source wired): by brightness and by luminance, no two onsets closer than 340 ms, over the whole field and over any
+region of a quarter of the field or more. An onset is counted the way the gate counts: a rise of more than a
+tenth above the last trough. A sequence whose lit area never reaches a quarter of the field passes without the
+count.
 
-The figures are from a model of the stock code, not from a display: the palette as `calculateAllColors()` bakes
-it, every LED walking it, FastLED's `hsv2rgb_rainbow`, and a change of hue or scale taken as reaching all LEDs at
-once (the real display smears it over a few frames, so this is the worst case). The custom effects and fire were
-run frame by frame from their source. Nothing here is measured on hardware.
+The classification is kept as a test, `test/host/test_native_s10.cpp` (stage 1i of the suite), on a model of
+the stock code: the palette as `calculateAllColors()` bakes it, every LED walking it, FastLED's
+`hsv2rgb_rainbow`, the engine's effect delay, and the sequences that draw pixel by pixel run frame by frame on
+every display size the engine knows (front 8 by 10; rear 16 by 4, 24 by 4, 28 by 4, 32 by 8). A change of hue or
+scale is taken as reaching all LEDs at once, which is the worst case. The test fails when a code on the core's
+list does not pass at the speed the core gives it, or when a lower speed would pass too. Nothing here is measured
+on hardware; the bench confirms it.
 
-| Code | Sequence | Whole field, as the contract selects it | On the list |
-| ---- | -------- | --------------------------------------- | ----------- |
-| 0 | normal | steady texture | yes |
-| 1 | alarm | steady: with the default colour both halves of its 250 ms flip are palette 2 at hue 0 | yes |
-| 2 | failure | 1.8 to 6 s: the hue turns once in 2.56 s and the level swings by a third (front) with it, the closest two swings 310 ms apart, four inside 980 ms; at 6 s it jumps to 2.2 (front) or 3.2 (rear) times the normal level, then fades out in 2 s; dark to 18 s | no: at the limit |
-| 3 | Leia | sets its own brightness, 50 to 255, every frame | no (S6) |
-| 4 | march | steady in the mean; each half goes 2 to 100 % every 150 ms, the halves in turn | yes, see below |
-| 5 | solid colour | steady | yes |
-| 6 | flash colour | 2 to 100 % every 250 ms: 4 swings a second | no |
-| 7, 8 | flip flop | steady in the mean; each half goes 2 to 100 % every 200 ms, the halves in turn | yes, see below |
-| 9 | colour swap | the hue jumps by half a turn every 350 ms: level 69 to 100 %, luminance 40 to 100 %, 2.9 swings a second, never more than 3 in one | yes, by 10 ms |
-| 10 | rainbow | the hue steps by 20 every 200 ms: level 52 to 100 %, 2.3 swings a second, the closest two 200 ms apart, never more than 3 in one; luminance 10 to 100 %, swings 1 s apart | yes |
-| 11 | red alert | steady (no microphone source: it never leaves its colour) | yes |
-| 12, 13 | mic bright, mic rainbow | steady (no microphone source) | yes |
-| 14 | lights out | dark | yes |
-| 15 to 18 | text | need a message | no |
-| 19 | roaming pixel | one row fills, a pixel every 20 ms, and is cleared: at most 9 % of the front display lit, 24 % of a 24 by 4 rear display | yes: a small lit area |
-| 20, 21 | scan lines | one row or one column lit, moving: steady in the mean (10 % front, 25 % rear for a row) | yes |
-| 22 | fire | the stock code never resets its blend counter, so after the first second the whole field is rolled again every 200 ms: mean 37 to 100 % of its peak, 1.4 swings a second, up to 5 in one second | no |
-| 23 | PSI colour wipe | a column every 50 ms, then 1 to 3 s still: one colour change a wipe | yes |
-| 24 | pulse | a box grows from the centre and shrinks, a step every 140 ms: 1 to 100 % and back in 1.4 s (front) or 3.6 s (a 24 by 4 rear) | yes |
-| 101 | plasma | level steady; luminance 16 to 100 %, swings 1.5 s apart | yes |
-| 102 | metaballs | the colour is rolled again every 270 ms and the balls cross the display in 20 to 100 ms: 30 to 45 swings a second | no |
-| 103 | fractal | level steady; luminance 9 to 100 %, 1.9 swings a second, up to 6 in one second | no |
-| 104 | fade and scroll | random at every start; with all pixels in phase and one colour the field goes 0 to 100 % and back in 520 ms (4 swings a second) at its fastest three speeds of ten | no |
-| 105 | colour wheel | steady texture | yes |
+Closest two onsets, by the model:
 
-Three things are the owner's to decide, because the test above is about the whole field's mean:
+| Code | Sequence | Kind | Speed | Whole field, level | Whole field, luminance | Any region of a quarter or more | On the list |
+| ---- | -------- | ---- | ----- | ------------------ | ---------------------- | ------------------------------- | ----------- |
+| 0 | normal | runs as stock | 0 | none | none | none | yes |
+| 1 | alarm | runs as stock | 0 | none | none | none | yes |
+| 2 | failure | runs as stock | 0 | 580 ms | 1,810 ms | none | yes |
+| 3 | Leia | | | | | | no: sets its own brightness (S6) |
+| 4 | march | runs as stock | 1 | none | none | 350 ms | yes |
+| 5 | solid colour | runs as stock | 0 | none | none | none | yes |
+| 6 | flash colour | runs as stock | 0 | 500 ms | 500 ms | none | yes |
+| 7, 8 | flip flop | runs as stock | 0 | none | none | 400 ms | yes |
+| 9 | colour swap | runs as stock | 0 | 700 ms | 700 ms | none | yes |
+| 10 | rainbow | runs as stock | 0 | 600 ms | 2,000 ms | none | yes |
+| 11 | red alert | runs as stock | 0 | none | none | none | yes |
+| 12, 13 | mic bright, mic rainbow | runs as stock | 0 | none | none | none | yes |
+| 14 | lights out | runs as stock | 0 | dark | dark | dark | yes |
+| 15 to 18 | text | | | | | | no: they need a message |
+| 19 | roaming pixel | runs as stock | 1 | 800 ms | 800 ms | 800 ms | yes |
+| 20 | horizontal scan line | runs as stock | 2 | none | none | 450 ms | yes |
+| 21 | vertical scan line | runs as stock | 0 | a small lit area on every display | | | yes |
+| 22 | fire | runs as stock | 1 | 400 ms | 400 ms | 400 ms | yes |
+| 23 | PSI colour wipe | runs as stock | 0 | none | none | none | yes |
+| 24 | pulse | runs as stock | 0 | 700 ms | 700 ms | 700 ms | yes |
+| 101 | plasma | runs as stock | 0 | none | 5,400 ms | 2,910 ms | yes |
+| 102 | metaballs | | | 20 ms | 20 ms | 20 ms | no: fails |
+| 103 | fractal | | | none | 250 ms | 40 ms | no: fails |
+| 104 | fade and scroll | | | 510 ms | 510 ms | 510 ms | no: see below |
+| 105 | colour wheel | runs as stock | 0 | none | none | none | yes |
 
-- **March and the flip flops (4, 7, 8)** pass it only because their two halves swing against each other. Each
-  half of the display goes dim and bright every 150 ms (march; 175 ms in its last 3 s) or 200 ms. If half a
-  display counts, they come off: one line in `nativeAllowedLogics()` and a regenerated vector file.
-- **Failure (2)** fails by 20 ms on the front display in a worst-case model and passes on the rear. A bench
-  measurement could put it back.
-- **Rainbow (10)** passes by the count of three in a second, and by luminance. Its level swings are 200 ms
-  apart at their closest.
+What the speed column changes, and why:
 
-A microphone source wired to the engine (R2's level feed) changes 11, 12 and 13: they then follow the room, and
-this table has to be done again for them.
+- **March (4), speed 1.** At the engine's speed 0 its thirds flip every 150 ms, so each of them lights every
+  300 ms. At speed 1 they flip every 300 ms. (Its last 3 s run at 175 ms whatever the speed: 350 ms.)
+- **Roaming pixel (19), speed 1.** At speed 0 it adds a pixel every 10 ms and clears the row when it is full. On
+  the front display a row is a tenth of the field; on a 4-row rear display it is a quarter, and it would fill
+  every 160 to 290 ms. At speed 1 it is a pixel every 50 ms.
+- **Horizontal scan line (20), speed 2.** One row at a time: a tenth of the front display, a quarter of a 4-row
+  rear one, where an inner row is lit again 150 ms after it was at speed 0. At speed 2 the line moves every
+  150 ms and the closest two are 450 ms apart.
+- **Fire (22), speed 1.** The stock code never resets its blend counter, so after its first second the whole
+  field is rolled again at every update: every 100 ms at speed 0, every 200 ms at speed 1.
+
+Notes:
+
+- **Alarm (1)** is steady only as the contract starts it: with the default colour both halves of its flip are
+  the same palette. **Red alert and the mic effects (11, 12, 13)** are steady because no microphone source is
+  wired to the engine. A source wired there (R2's level feed) changes all three, and this table has to be done
+  again for them.
+- **Fade and scroll (104)** passes the count in its worst case (one colour, every pixel in phase, its fastest
+  speed: the field lights every 510 ms). It is off the list because its palette, pattern and speed are drawn at
+  random each time it starts, and a host cannot ask for a particular one.
+- **Which sequences are steady.** The whole field of 0, 1, 4, 5, 7, 8 and 11 to 14 stays within a tenth of the
+  level the gate is told (`nativeSteadyLogics()`). After any other sequence the gate takes the field as dark and
+  just lit, so a contract look that follows waits 340 ms, and a native look that follows comes through effect
+  106, which holds the last frame meanwhile.
 
 ### Native brightness: `#LEBRI`
 
@@ -241,19 +270,24 @@ state change and no reply: there is no clamp, and 0 is never applied.
   the contract gives it) is ASKED for before the hand-over and TOLD to the gate at the frame the engine starts
   it. The gate is never told about light that did not reach the LEDs.
 - **S4 at the output.** `ContractRender` passes every lit frame's look (effect and colour) through
-  `contractLookGate()` and leaves the frame that is up when the answer is no. A live `A` or a section restarts
-  the look's timeline, so both call `contractLookRestart()`: the next lit frame is a change of look even when
-  the look has the same name.
+  `contractLookGate()` and leaves the frame that is up when the answer is no. A live `A` or a section that
+  changes the look (`contractLookSame()` says no: another effect, native code, colour or speed) restarts the
+  look's timeline and calls `contractLookRestart()`, so the next lit frame is a change of look. One that asks
+  for the look that is up leaves its timeline alone (S11): the look goes on from where it was.
 - **S10: a native sequence runs as stock.** Its frames are never held. The layer asks before it hands the
   display over (`contractNativeMayStart()`: yes only when an onset is allowed, whether the display is lit or dark
   just then, because a stock sequence may clear the display and light it at once; the same for the hand-back to
   the display's own look), tells the gate at the frame the engine starts the sequence
   (`contractNativeStarted()`, with the level it runs at: the engine's brightness, 0 for lights-out, full scale for
   a sequence that draws at a level of its own) and tells it when effect 106 takes the display back
-  (`contractNativeEnded()`). A sequence that is not on the allow-list, or that draws at its own level, leaves
-  the gate knowing nothing about the field: it is then taken as dark and just lit, so the contract's next light
-  waits 340 ms, and a native look that is to follow it comes through effect 106, which holds the last frame
-  meanwhile. The owner's own sequences (not on the list) keep the owner's brightness; `B` does not reach them.
+  (`contractNativeEnded()`). A sequence whose light is not steady (`nativeSteadyLogics()` says no: it is off the
+  allow-list, draws at a level of its own, or moves its own light) leaves the gate knowing nothing about the
+  field: it is then taken as dark and just lit, so the contract's next light waits 340 ms, and a native look that
+  is to follow it comes through effect 106, which holds the last frame meanwhile. A brighter level reaches such a
+  sequence only when it next starts. The owner's own sequences (not on the list) keep the owner's brightness; `B`
+  does not reach them.
+- **The contract selects a native sequence at the core's speed** (`nativeSpeedLogics()`: 1 for march, roaming
+  pixel and fire, 2 for the horizontal scan line, 0 for the rest). `_select()` is the one place that does it.
 - `setPixelRGB` bypasses the engine's `fBri`, so brightness and the beat envelope are applied inside the layer.
 - **Brightness.** The ceiling is the display's own `fBri` (the RAM default object, read when a show arms or the
   first cue arrives). `b=`/`B` are fractions of it. For native looks the level is written to that default object,

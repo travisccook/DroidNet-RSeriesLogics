@@ -358,3 +358,114 @@ core, should a fork need room: `_applyParam` 874 B, `beatAccentFires` 336 B, `_e
 `contractFormatQuery` 306 B, `scoreInsertEx` 220 B.
 
 Static RAM: 10 B more a unit (the luminance pair and the look gate's two words), 75 B to 85 B on that part.
+
+## Core revision CA1.5 (2026-11-16): the revision all three forks and Studio adopt
+
+### Everything that changed, in one place
+
+For the Flthy fork and Studio, coming from CA1.2, and for the PSI fork, coming from CA1.3. A row marked CA1.3 is
+already in the PSI's copy. "Shape" means a group's `args` or `out` changed; "rows" means only its values did.
+
+**API.**
+
+| Since | Was | Is |
+| ----- | --- | --- |
+| CA1.3 | `BeatPos.phase` (`float`) | `BeatPos.phase16` (`uint16_t`, Q16) |
+| CA1.3 | `float beatSectionProgress(beat, start, end)` | `uint32_t beatSectionProgress16(beat, start, end)` (Q16, 0 .. 65536) |
+| CA1.3 | `beatAccentAmount(am, bp, m, float progress, bc, every)` | `beatAccentAmount(am, bp, m, uint32_t progress16, bc, every)` |
+| CA1.3 | `#include <math.h>` in the core | gone; new `BEAT_UNITS`, `_beatSplit()` |
+| CA1.4 | `contractFieldStep(ceil)` = `ceil / 4 + 1` | `ceil / 10 + 1`, never under 2 |
+| CA1.4 | one measure of a frame | two: level and luminance. New `contractLuminance()`, `contractFieldAsk()`, `contractFieldTell()`, `contractFieldScale()`; `contractFieldGate()`, `contractFieldAllowed()`, `contractFieldForced()` and `contractFieldMayLight()` stay |
+| CA1.4 | no look gate | `contractLookSig()`, `contractLookSigNative()`, `contractLookAllowed()`, `contractLookGate()`, `contractLookForced()`, `contractLookRestart()`, `contractSectionMayApply()` |
+| CA1.4 | a native look told with `contractFieldGate()` | `contractNativeMayStart()`, `contractNativeStarted()`, `contractNativeLevel()`, `contractNativeEnded()` |
+| CA1.4 | no list of kinds | `nativeDimsLogics()`, `nativeGatedLogics()`, `nativeGatedPsi()`, `nativeGatedFlthy()` |
+| CA1.4 | `ContractUnitState` holds its anchors among its fields | `struct ContractAnchors` is its base; four new anchors: `fieldRefY`, `fieldLitY`, `lookSig`, `lookMs` |
+| CA1.5 | a live `A` or a section always restarts the look | `contractLookSame()`: the same look applied again does not (S11) |
+| CA1.5 | `fxChaseLit(p, elapsed, speed)` | `fxChaseLit(p, elapsed, speed, N)`: a constant lit count, `ceil(N / 3)` |
+| CA1.5 | a wipe step is `fxStepMs(speed)` | `fxWipeStepMs(speed, N)`: a cycle of `2 * N` steps is never under `FX_CYCLE_MIN_MS` |
+| CA1.5 | `fxPulsePeriodMs()` runs 2000 .. 340 ms | 2000 .. 680 ms (`FX_CYCLE_MIN_MS`) |
+| CA1.5 | `fxFlashHalfMs()` runs 425 .. 170 ms | 445 .. 190 ms (`FX_FLASH_MIN_STATE_MS`) |
+| CA1.5 | no speed for a native look | `nativeSpeedLogics()`; `nativeSteadyLogics()` |
+
+**The native lists.**
+
+| | CA1.2 and CA1.3 | CA1.4 | CA1.5 |
+| --- | --- | --- | --- |
+| logics | 0 to 2, 4 to 14, 19 to 24, 101 to 105 | 0, 1, 4, 5, 7 to 14, 19 to 21, 23, 24, 101, 105 | 0 to 2, 4 to 14, 19 to 24, 101, 105 |
+| PSI | 0, 1, 4, 6 to 22, 92 | the same | the same |
+| Flthy | 1, 6 | the same | the same |
+
+**Constants in the vector file.** New since CA1.2 and CA1.3: `NATIVE_DIMS_LOGICS`, `NATIVE_GATED_LOGICS`,
+`NATIVE_GATED_PSI`, `NATIVE_GATED_FLTHY`, `FIELD_STEP_DIV`, `FIELD_STEP_MIN` (CA1.4); `NATIVE_SPEED_LOGICS`,
+`FX_CYCLE_MIN_MS`, `FX_FLASH_MIN_STATE_MS` (CA1.5). Changed: `NATIVE_ALLOW_LOGICS`.
+`NATIVE_SPEED_LOGICS` is in the order of `NATIVE_ALLOW_LOGICS`: its n-th number is the speed of the n-th code.
+
+**Vector groups.**
+
+| Group | Since CA1.2 | Since CA1.3 |
+| ----- | ----------- | ----------- |
+| `beatPosAt`, `beatPosAtReseed` | shape: `phase_e6` is now `phase16` | the same as the PSI has |
+| `accentAtEvery` | rows (7 of 1800 moved by 1) | the same |
+| `beatPosAtLong`, `beatSectionProgress16`, `beatAccentAmount`, `beatClockSeedKind`, `accentEdgeAfterSeed` | new | the same |
+| `contractFieldGate` | new (added after CA1.2), stateful | rows: the tenth step |
+| `contractFrameGate` | new, stateful | new |
+| `fxChaseLit` | shape: `N` is a fourth argument | shape |
+| `fxWipeLit`, `fxPulseBright`, `fxFlashOn` | rows | rows |
+
+Nothing else in the file changed: the `lines` and every other group are as they were at CA1.2.
+
+### What CA1.5 itself is
+
+1. **S10 by onsets.** The test for a native look is S9's own measure: no two onsets closer than 340 ms, by
+   brightness and by luminance, over the whole field and over any region of a quarter of it or more. On the logics
+   that puts failure, flash colour and fire back on the list. Where a stock sequence's rate follows the engine's
+   speed digit, the contract starts it at the fastest speed that passes: `nativeSpeedLogics()` (march 1, roaming
+   pixel 1, horizontal scan line 2, fire 1, the rest 0). `test/host/test_native_s10.cpp` (stage 1i) is the
+   classification kept as a test, on a model of the stock code; `DROIDNET_FORK.md` has its table.
+2. **A look whose own light moves.** `nativeSteadyLogics()` lists the codes whose whole field stays within a
+   tenth of the level the gate is told. After any other look the layer passes `known = false` to
+   `contractNativeEnded()`, and it gives such a look a brighter `B` or `b=` only when the look starts; a dimmer one
+   is at once. A fork with native looks of its own needs the same two decisions for each.
+3. **S11: the same look applied again does not restart.** Before a live `A` or a section is written into the
+   unit, `contractLookSame(state, effect, nativeCode, colour, speed)`. When it says no, the fork sets the look's
+   start time and calls `contractLookRestart()`; when it says yes, it does neither.
+4. **Chase** lights `ceil(N / 3)` positions at every step, on any `N`: every third position of a ring of `N`. A
+   fork passes its strand length as the fourth argument. Where `N` is a multiple of 3 nothing changed.
+5. **Pulse, wipe and flash** have longer shortest cycles, so that the S9 gate lets them through as drawn:
+   680 ms for pulse and for a wipe's fill and drain (`FX_CYCLE_MIN_MS`), and 190 ms a state for flash
+   (`FX_FLASH_MIN_STATE_MS`). The gate lets a field light again 340 ms after it last got brighter, which is a
+   cycle's peak, not its start. And a look that lights exactly every 340 ms has no room for a late frame: one
+   held edge moves the next later still, until a whole flash is lost.
+
+### What the gate costs a look, after CA1.5
+
+`test/host/gate_held_table.cpp`, 60 s a look, on the logics mock, with frames 10 ms apart and with frames 10 to
+15 ms apart. One look is still touched:
+
+| Look | Held back |
+| ---- | --------- |
+| solid, flash, pulse, rainbow, scan, meter, comet, chase, wipe, gradient, colorcycle, twinkle | never, at any speed |
+| the beat pump on a solid look (`am=1`, `m=` 64 to 255, 60 to 240 BPM) | never |
+| sparkle | 0.1 to 1.7 % of frames from `s=` 128 up, by 5 to 6 % of the frame's level |
+
+With frames up to 40 ms apart the table is the same (sparkle: up to 1.9 %). How the three cycles were chosen, at
+`s=255`:
+
+| Shortest cycle | Frames 10 ms | 10 to 15 ms | 10 to 20 ms | 10 to 40 ms |
+| -------------- | ------------ | ----------- | ----------- | ----------- |
+| pulse, wipe: 600 ms | 0 % | 0.7 % | | |
+| pulse, wipe: 620 ms | 0 % | 0.1 % (wipe) | | |
+| pulse, wipe: 640 ms | 0 % | 0 % | 0 % | 0.2 % (wipe) |
+| pulse, wipe: 680 ms | 0 % | 0 % | 0 % | 0 % |
+| flash: 170 ms a state | 0 % | 25 % | 23 % | 23 % |
+| flash: 180 ms a state | 0 % | 0 % | 0 % | 0.7 % |
+| flash: 190 ms a state | 0 % | 0 % | 0 % | 0 % |
+
+### What it costs in flash
+
+The probe programs (avr-gcc 7.3, atmega32u4, link-time optimised). CA1.5 adds nothing to the three images of the
+CA1.4 table: 8,700 B for a single-colour layer, 9,098 B and 9,958 B for the colour fork's first and last rows. A
+fork that draws chase and wipe pays for the ring and for the stretched step: a probe that draws chase, wipe, pulse
+and flash on a strand is 924 B at CA1.4 and 1,018 B at CA1.5. Doing that arithmetic in 16 bits made it 1,030 B,
+and reading the 0 to 255 value once in `_applyParam` made one image 78 B smaller and two others 48 B and 106 B
+larger; neither was kept.
