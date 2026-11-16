@@ -93,7 +93,7 @@ static inline uint8_t _beatBright(const ContractUnit& g, const BeatPos& bp) {
   float prog = 0.0f;
   if (g.sectionEnd > g.sectionStart)
     prog = (float)(bp.beatIndex - g.sectionStart) / (float)(g.sectionEnd - g.sectionStart);
-  uint8_t amt = beatAccentAmount(g.accentMode, bp, g.beatMod, prog);
+  uint8_t amt = beatAccentAmount(g.accentMode, bp, g.beatMod, prog, gBeat);
   return envBright(g.bright, g.beatMod, amt);
 }
 
@@ -430,7 +430,7 @@ inline void contractTick() {
     if (gScoreLen[u] == 0 || g.curSection < 0) continue;         // no active section
     const ScoreEntry& e = gScore[u][g.curSection];
     if (e.accentFx == CE_NONE) continue;                         // v1.1 entry -> never accents
-    if (!beatAccentFires(e.accentMode, bp.barPos)) continue;     // SAME predicate as the pump
+    if (!beatAccentFires(e.accentMode, bp, gBeat)) continue;     // SAME predicate as the pump (S2)
     _fireAccent(u, e.accentFx, e.accentColor, (uint32_t)e.accentDur10 * 10u);
   }
 }

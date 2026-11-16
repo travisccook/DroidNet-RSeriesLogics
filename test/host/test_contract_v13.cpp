@@ -119,10 +119,78 @@ static void test_seed_kinds_and_edge() {
   CHECK(scoreCursor(1, 2, true) == 2 && scoreCursor(-1, 0, true) == 0 && scoreCursor(3, -1, true) == 3);
 }
 
+// ---- S2: the rate floor covers the pump and the overlay; every-N accents ----
+static BeatPos posAt(int32_t beat, uint8_t bpb) {
+  BeatPos bp; bp.beatIndex = beat; bp.barPos = (uint8_t)(((beat % bpb) + bpb) % bpb); return bp;
+}
+static void test_rate_floor_and_every_n() {
+  CHECK(beatRateDivisor(30) == 1 && beatRateDivisor(120) == 1 && beatRateDivisor(176) == 1);
+  CHECK(beatRateDivisor(177) == 2 && beatRateDivisor(300) == 2);
+  CHECK(barRateDivisor(300, 4) == 1 && barRateDivisor(300, 1) == 2 && barRateDivisor(176, 1) == 1);
+  CHECK(barRateDivisor(300, 2) == 1 && barRateDivisor(120, 0) == 1);     // bpb 0 reads as 4
+  for (int bpm = 30; bpm <= 300; bpm++) {            // the property, for every legal tempo and group
+    for (int grp = 1; grp <= 16; grp++) {
+      const uint32_t k = barRateDivisor((uint16_t)bpm, (uint8_t)grp);
+      CHECK(k * (uint32_t)grp * 60000u >= 340u * (uint32_t)bpm);                 // k groups last >= 340 ms
+      CHECK(k == 1 || (k - 1) * (uint32_t)grp * 60000u < 340u * (uint32_t)bpm);  // and k is the smallest
+    }
+  }
+  BeatClock bc; bc.running = true; bc.bpm = 240; bc.bpb = 4;
+  int fired = 0;
+  for (int32_t beat = -8; beat < 8; beat++) {
+    const BeatPos bp = posAt(beat, 4);
+    const bool f = beatAccentFires(2, bp, bc);
+    CHECK(f == (beat % 2 == 0));                     // every second beat at 240 BPM
+    if (f) fired++;
+    CHECK((beatAccentAmount(2, bp, 255, 0, bc) > 0) == f);          // pump and overlay agree
+    CHECK(beatAccentFires(3, bp, bc) == f);                         // build is every beat too, same floor
+    CHECK(beatAccentFires(1, bp, bc) == (bp.barPos == 0));          // a 1 s bar needs no divisor
+    CHECK(beatAccentFires(4, bp, bc) == (bp.barPos == 0));
+    CHECK(!beatAccentFires(0, bp, bc) && !beatAccentFires(9, bp, bc));   // none, and an unknown mode: silent
+  }
+  CHECK(fired == 8);
+  bc.bpm = 300; bc.bpb = 1;                          // a one-beat bar at 300 BPM is a 200 ms bar
+  for (int32_t beat = -4; beat < 4; beat++) CHECK(beatAccentFires(1, posAt(beat, 1), bc) == (beat % 2 == 0));
+  bc.bpm = 120; bc.bpb = 4;
+  for (int32_t beat = -9; beat < 9; beat++) {        // ordinary tempos: the v1.2 predicate, unchanged
+    const BeatPos bp = posAt(beat, 4);
+    CHECK(beatAccentFires(2, bp, bc) && beatAccentFires(3, bp, bc));
+    CHECK(beatAccentFires(1, bp, bc) == (bp.barPos == 0));
+  }
+
+  // every-N: one byte, n 1..16 in the high nibble (as n-1), the phase in the low one
+  CHECK(accentEveryPack(1, 0) == 0 && accentEveryN(0) == 1 && accentEveryPhase(0) == 0);
+  CHECK(accentEveryPack(4, 2) == 0x32 && accentEveryN(0x32) == 4 && accentEveryPhase(0x32) == 2);
+  CHECK(accentEveryPack(16, 15) == 0xFF && accentEveryN(0xFF) == 16 && accentEveryPhase(0xFF) == 15);
+  CHECK(accentEveryPack(0, 0) == 0 && accentEveryPack(200, 3) == 0xF3);     // n clamps to 1..16
+  CHECK(accentEveryPack(4, 4) == 0x30 && accentEveryPack(4, 250) == 0x30);  // a phase >= n is 0
+  CHECK(accentEveryPhase(0x1F) == 0);                                       // even from a byte nobody packed
+  CHECK(accentEveryFrom(P("LFA:am=2")) == 0 && accentEveryFrom(P("LFA:am=2,an=2,ap=1")) == 0x11);
+  CHECK(accentEveryFrom(P("LFA:am=2,an=0")) == 0 && accentEveryFrom(P("LFA:am=2,an=99,ap=99")) == 0xF0);
+  for (int32_t beat = -9; beat < 17; beat++) {
+    const BeatPos bp = posAt(beat, 4);
+    CHECK(beatAccentFires(2, bp, bc, accentEveryPack(2, 0)) == (((beat % 2) + 2) % 2 == 0));   // front
+    CHECK(beatAccentFires(2, bp, bc, accentEveryPack(2, 1)) == (((beat % 2) + 2) % 2 == 1));   // rear: alternate
+    CHECK(beatAccentFires(2, bp, bc, accentEveryPack(4, 3)) == (((beat % 4) + 4) % 4 == 3));
+    CHECK(beatAccentFires(1, bp, bc, accentEveryPack(4, 3)) == (bp.barPos == 0));              // am=1 ignores it
+    CHECK((beatAccentAmount(2, bp, 200, 0, bc, accentEveryPack(4, 3)) > 0)
+          == beatAccentFires(2, bp, bc, accentEveryPack(4, 3)));
+  }
+  bc.bpm = 300;                                      // the floor applies to the RESULT of every-N
+  for (int32_t beat = -8; beat < 16; beat++) {
+    const BeatPos bp = posAt(beat, 4);
+    CHECK(beatAccentFires(2, bp, bc, accentEveryPack(2, 1)) == (((beat % 2) + 2) % 2 == 1));   // 400 ms apart: all kept
+    CHECK(beatAccentFires(2, bp, bc, accentEveryPack(1, 0)) == (beat % 2 == 0));               // 200 ms apart: every other
+  }
+  CHECK(beatSectionProgress(8, 0, 16) == 0.5f && beatSectionProgress(8, 16, 16) == 0.0f);
+  CHECK(beatSectionProgress(4, 8, 4) == 0.0f);
+}
+
 int main() {
   test_saturating_params();
   test_bpm_range_and_hold();
   test_seed_kinds_and_edge();
+  test_rate_floor_and_every_n();
   printf("%s  %d/%d checks passed\n", g_fail ? "FAILURES" : "OK", g_total - g_fail, g_total);
   return g_fail ? 1 : 0;
 }

@@ -88,7 +88,7 @@ int main() {
   resetAll(); send("LFA:i=solid,c=ffffff,m=255,am=2"); send("**C:bpm=120,ph=0,bpb=4,beat=0");
   CHECK(fabs(swingsPerSec(30, 120) - 2.0) < 0.11);                      // unchanged at 120 BPM
   resetAll(); send("LFA:i=solid,c=ffffff,m=255,am=2"); send("**C:bpm=240,ph=0,bpb=4,beat=0");
-  KNOWN_BUG("S2 pump swings faster than 2.94/s at 240 BPM", swingsPerSec(30, 120) <= 2.95);
+  CHECK(swingsPerSec(30, 120) <= 2.95);                                 // S2: the pump is under the rate floor
   resetAll(); send("LFA:i=solid,c=ffffff,m=255,am=2"); send("**C:bpm=600,ph=0,bpb=4,beat=0");
   CHECK(!gBeat.running);                                                // S1: bpm=600 is ignored whole
 

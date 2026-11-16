@@ -107,6 +107,37 @@ int main(int argc, char** argv) {
       BeatPos bp = beatPosAt(bc, seed2 + d);
       row({ bpm, 0, 4, 0, seed, ph2, beat2, seed2, (uint32_t)(seed2 + d), bp.beatIndex, bp.barPos, (long long)(bp.phase * 1000000.0f + 0.5f) });
     }
+  group("beatRateDivisor", "\"bpm\"", "\"k\"");
+  for (int bpm = 30; bpm <= 300; bpm++) row({ bpm, beatRateDivisor((uint16_t)bpm) });
+  group("barRateDivisor", "\"bpm\", \"bpb\"", "\"k\"");
+  for (int bpb = 1; bpb <= 16; bpb++) for (int bpm : { 30, 120, 176, 177, 240, 300 }) row({ bpm, bpb, barRateDivisor((uint16_t)bpm, (uint8_t)bpb) });
+  // The whole accent path from integers: seed a clock, read it at nowMs, then the fire predicate,
+  // the envelope amount for depth m (progress from the section bounds), and the level at b=200.
+  group("accentAt", "\"bpm\", \"ph\", \"bpb\", \"beat\", \"seedMs\", \"nowMs\", \"am\", \"m\", \"sectionStart\", \"sectionEnd\"",
+        "\"fires\", \"amt\", \"env200\"");
+  for (int bpm : { 97, 120, 176, 177, 240, 300 }) for (int bpb : { 3, 4 }) for (int am = 0; am <= 5; am++)
+    for (int m : { 0, 64, 200, 255 }) for (uint32_t d : { 0u, 30u, 130u, 260u, 510u, 1040u, 2011u, 4003u, 7990u }) {
+      const uint32_t seed = 4294965000u;                              // crosses the millis wrap
+      BeatClock bc; seedClock(bc, bpm, 0, bpb, 0, seed);
+      const BeatPos bp = beatPosAt(bc, seed + d);
+      const uint8_t amt = beatAccentAmount((uint8_t)am, bp, (uint8_t)m, beatSectionProgress(bp.beatIndex, 0, 16), bc);
+      row({ bpm, 0, bpb, 0, seed, (uint32_t)(seed + d), am, m, 0, 16,
+            beatAccentFires((uint8_t)am, bp, bc) ? 1 : 0, amt, envBright(200, (uint8_t)m, amt) });
+    }
+  // The same path for am=2 with an=/ap= (every-N accents).
+  group("accentAtEvery", "\"bpm\", \"ph\", \"bpb\", \"beat\", \"seedMs\", \"nowMs\", \"m\", \"an\", \"ap\"",
+        "\"fires\", \"amt\", \"env200\"");
+  for (int bpm : { 120, 177, 300 }) for (int an : { 1, 2, 3, 4, 8, 16 }) for (int ap : { 0, 1, 3, 15 })
+    for (long beat0 : { -5L, 0L }) for (uint32_t d = 0; d < 9000; d += 207) {
+      if (ap >= an && ap != 15) continue;                             // ap=15 with a small n: the out-of-range case
+      const uint32_t seed = 60000u;
+      BeatClock bc; seedClock(bc, bpm, 0, 4, beat0, seed);
+      const BeatPos bp = beatPosAt(bc, seed + d);
+      const uint8_t every = accentEveryPack((uint8_t)an, (uint8_t)ap);
+      const uint8_t amt = beatAccentAmount(2, bp, 200, 0.0f, bc, every);
+      row({ bpm, 0, 4, beat0, seed, (uint32_t)(seed + d), 200, an, ap,
+            beatAccentFires(2, bp, bc, every) ? 1 : 0, amt, envBright(200, 200, amt) });
+    }
   // GROUPS ADDED BY LATER TASKS GO HERE (keep the order: appended groups never renumber old ones)
   printf("\n    ]}\n  }\n}\n");
   return 0;
