@@ -8,6 +8,7 @@
 #   1b. wifi_connect_core.h FSM unit tests
 #   1c. wdp_announce_core.h WDP device announce unit tests (shared with the PSI and Flthy forks)
 #   1d. wdp_fork.h: this fork's real WDP identity builds its line, and the Serial1 adapter
+#   1e. the generated parity vectors (vectors/contract_vectors.json) match the core
 #   2. ContractLogics.h firmware-layer type-check against a mock of the engine API
 #   2b. the 2026-11-15 review findings as behaviour tests (known defects marked)
 #   3. Marcduino command-buffer width guard (the v1.2 accent keys push a scored line past 63)
@@ -72,6 +73,24 @@ stage 1c "wdp_announce_core WDP device announce unit tests" "$CXX" -std=c++11 -W
 # ("<sha>-dirty") and with any fw up to the WCB's 27-char limit, and drives wdpForkTick()
 # against a mock port. -std=c++11: the ESP32 core builds with gnu++11.
 stage 1d "wdp_fork RSeries WDP identity + Serial1 adapter" "$CXX" -std=c++11 -Wall -Wextra -Werror -O0 test_wdp_fork.cpp
+# The parity vectors: gen_contract_vectors.cpp runs the REAL contract_core.h and prints every fx /
+# beat-clock / envelope vector as JSON. The committed copy (vectors/contract_vectors.json) is what
+# the Studio preview's JS mirror is tested against, so a change to the math that does not
+# regenerate it fails here. UPDATE_VECTORS=1 rewrites the committed copy.
+if want 1e; then
+  echo "[1e] parity vectors are current"
+  "$CXX" -std=c++17 -Wall -Wextra gen_contract_vectors.cpp -o "$OUT/gen_vectors"
+  sha="$( (sha256sum ../../src/contract/contract_core.h 2>/dev/null || shasum -a 256 ../../src/contract/contract_core.h) | cut -d' ' -f1)"
+  "$OUT/gen_vectors" "$sha" > "$OUT/contract_vectors.json"
+  if [ "${UPDATE_VECTORS:-0}" = 1 ]; then mkdir -p vectors; cp "$OUT/contract_vectors.json" vectors/contract_vectors.json; fi
+  if ! cmp -s "$OUT/contract_vectors.json" vectors/contract_vectors.json; then
+    echo "FAIL: vectors/contract_vectors.json is stale. Run: UPDATE_VECTORS=1 bash test/host/run.sh"
+    echo "      then copy it to Studio: bash scripts/core-sync.sh --push"
+    exit 1
+  fi
+  echo "OK  vectors/contract_vectors.json matches the core (sha256 $sha)"
+  RAN="$RAN 1e"
+fi
 stage 2  "ContractLogics.h firmware type-check" "$CXX" -std=c++17 -Wall -Wextra compile_contract_logics.cpp
 # The 2026-11-15 review's findings as behaviour tests on mock_engine.h, which models sequence
 # selection, restoreSettings() and the engine's 25th-entry overrun. A finding that is not fixed
