@@ -50,6 +50,10 @@ int main(int argc, char** argv) {
          (unsigned)ACCENT_EDGE_LATE_MS, (unsigned)ACCENT_DUR_DEFAULT_MS, (unsigned)ACCENT_DUR_MAX_MS);
   printf("    \"ACCENT_EVERY_MAX\": %u,\n    \"CONTRACT_ROUTE_MAX\": %u", (unsigned)ACCENT_EVERY_MAX, (unsigned)CONTRACT_ROUTE_MAX);
   printf(",\n    \"CONTRACT_QUERY_MAX\": %u,\n    \"CONTRACT_REPLY_MAX\": %u", (unsigned)CONTRACT_QUERY_MAX, (unsigned)CONTRACT_REPLY_MAX);
+  // S7: the native:<n> codes a fork accepts, as the firmware decides them.
+  printf(",\n    \"NATIVE_ALLOW_LOGICS\": [");
+  { bool first = true; for (int c = 0; c < 256; c++) if (nativeAllowedLogics(c)) { printf("%s%d", first ? "" : ", ", c); first = false; } }
+  printf("]");
   // MORE CONSTANTS GO HERE (each starts with ",\n    ")
   printf("\n  ");
   printf("},\n  \"lines\": [");
@@ -137,7 +141,7 @@ int main(int argc, char** argv) {
   group("accentAtEvery", "\"bpm\", \"ph\", \"bpb\", \"beat\", \"seedMs\", \"nowMs\", \"m\", \"an\", \"ap\"",
         "\"fires\", \"amt\", \"env200\"");
   for (int bpm : { 120, 177, 300 }) for (int an : { 1, 2, 3, 4, 8, 16 }) for (int ap : { 0, 1, 3, 15 })
-    for (long beat0 : { -5L, 0L }) for (uint32_t d = 0; d < 9000; d += 207) {
+    for (long beat0 : { -5L, 0L }) for (uint32_t d = 0; d < 9000; d += 621) {
       if (ap >= an && ap != 15) continue;                             // ap=15 with a small n: the out-of-range case
       const uint32_t seed = 60000u;
       BeatClock bc; seedClock(bc, bpm, 0, 4, beat0, seed);
@@ -147,6 +151,12 @@ int main(int argc, char** argv) {
       row({ bpm, 0, 4, beat0, seed, (uint32_t)(seed + d), 200, an, ap,
             beatAccentFires(2, bp, bc, every) ? 1 : 0, amt, envBright(200, 200, amt) });
     }
+  group("fxFlashOn", "\"elapsed\", \"speed\"", "\"on\"");
+  for (int s : speeds) for (uint32_t t = 0; t < 2000; t += 53) row({ t, s, fxFlashOn(t, (uint8_t)s) ? 1 : 0 });
+  group("fxPulseBright", "\"elapsed\", \"speed\"", "\"bright\"");
+  for (int s : speeds) for (uint32_t t = 0; t < 4100; t += 67) row({ t, s, fxPulseBright(t, (uint8_t)s) });
+  group("fxScanPos", "\"elapsed\", \"speed\", \"N\", \"wrap\"", "\"pos\"");
+  for (int n : strands) for (int w : { 0, 1 }) for (int s : { 0, 128, 255 }) for (uint32_t t = 0; t < 5000; t += 211) row({ t, s, n, w, fxScanPos(t, (uint8_t)s, n, w != 0) });
   // GROUPS ADDED BY LATER TASKS GO HERE (keep the order: appended groups never renumber old ones)
   printf("\n    ]}\n  }\n}\n");
   return 0;

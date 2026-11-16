@@ -381,6 +381,44 @@ static void test_query_reply() {
   CHECK(!contractParse("LFq:ver=1.3,rel=1,cap=32,n=5,ok=1,bpm=120", p));       // a reply is never a command
 }
 
+// ---- S8 and section 12: one timing definition for flash / pulse / scan ----
+static void test_v1_effect_timing() {
+  CHECK(fxFlashHalfMs(255) == 170 && fxFlashHalfMs(0) == 425 && fxFlashHalfMs(128) == 297);
+  CHECK(fxFlashOn(0, 255) && fxFlashOn(169, 255) && !fxFlashOn(170, 255) && !fxFlashOn(339, 255) && fxFlashOn(340, 255));
+  for (int sp = 0; sp <= 255; sp++) CHECK(fxFlashHalfMs((uint8_t)sp) >= STROBE_MIN_STATE_MS);
+  // S8: the pulse cycle is never shorter than 2 * STROBE_MIN_STATE_MS, at any speed
+  CHECK(fxPulsePeriodMs(0) == 2000 && fxPulsePeriodMs(255) == 340);
+  for (int sp = 0; sp <= 255; sp++) CHECK(fxPulsePeriodMs((uint8_t)sp) >= 2u * STROBE_MIN_STATE_MS);
+  CHECK(fxPulseBright(0, 0) == 0 && fxPulseBright(1000, 0) == 255 && fxPulseBright(500, 0) == 127);
+  CHECK(fxPulseBright(2000, 0) == 0 && fxPulseBright(1500, 0) == 127);
+  CHECK(fxPulseBright(170, 255) == 255 && fxPulseBright(340, 255) == 0 && fxPulseBright(85, 255) == 127);
+  for (int sp = 0; sp <= 255; sp += 5)              // every period, odd ones included: never past 255
+    for (uint32_t t = 0; t < 2100; t++) CHECK(fxPulseBright(t, (uint8_t)sp) <= 255);
+  const int want[] = { 0, 1, 2, 3, 2, 1, 0, 1 };     // ping-pong on N=4, one step per 30 ms
+  for (int i = 0; i < 8; i++) CHECK(fxScanPos(30u * (uint32_t)i, 255, 4, false) == want[i]);
+  CHECK(fxScanPos(29, 255, 4, false) == 0 && fxScanPos(30, 255, 4, false) == 1);
+  CHECK(fxScanPos(30u * 7u, 255, 6, true) == 1 && fxScanPos(30u * 5u, 255, 6, true) == 5);   // a ring wraps
+  CHECK(fxScanPos(157u * 3u, 0, 8, false) == 3);     // s=0: 157 ms a step
+  CHECK(fxScanPos(999, 255, 1, false) == 0 && fxScanPos(999, 255, 0, true) == 0 && fxScanPos(999, 255, 2, false) <= 1);
+  for (uint32_t t = 0; t < 4000; t += 7) {
+    CHECK(fxScanPos(t, 200, 28, false) >= 0 && fxScanPos(t, 200, 28, false) < 28);
+    CHECK(fxScanPos(t, 200, 6, true) >= 0 && fxScanPos(t, 200, 6, true) < 6);
+  }
+}
+
+// ---- S7: the logics' native allow-list ----
+static void test_native_allow_logics() {
+  int allowed = 0;
+  for (int c = -5; c <= 300; c++) if (nativeAllowedLogics(c)) allowed++;
+  CHECK(allowed == 15 + 6 + 5);
+  CHECK(nativeAllowedLogics(0) && nativeAllowedLogics(14) && nativeAllowedLogics(19) && nativeAllowedLogics(24));
+  CHECK(nativeAllowedLogics(101) && nativeAllowedLogics(105));
+  CHECK(!nativeAllowedLogics(15) && !nativeAllowedLogics(18));       // text effects need a message
+  CHECK(!nativeAllowedLogics(25));                                   // one past the engine's effect table
+  CHECK(!nativeAllowedLogics(99) && !nativeAllowedLogics(100));      // RANDOM; the SD-card bitmap
+  CHECK(!nativeAllowedLogics(106) && !nativeAllowedLogics(-1) && !nativeAllowedLogics(32767));
+}
+
 int main() {
   test_saturating_params();
   test_bpm_range_and_hold();
@@ -390,6 +428,8 @@ int main() {
   test_live_hold();
   test_score_verify();
   test_query_reply();
+  test_v1_effect_timing();
+  test_native_allow_logics();
   printf("%s  %d/%d checks passed\n", g_fail ? "FAILURES" : "OK", g_total - g_fail, g_total);
   return g_fail ? 1 : 0;
 }

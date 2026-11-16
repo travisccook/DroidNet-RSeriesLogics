@@ -967,3 +967,48 @@ inline uint8_t contractFormatQuery(char* out, uint8_t outLen, uint8_t route, cha
   out[i++] = '\r';
   return i;
 }
+
+// ===== v1.3: ONE TIMING DEFINITION FOR flash / pulse / scan (spec S8 and section 12) =====
+// Up to v1.2 each fork had its own formula for these three, so the same s= flashed, breathed
+// and swept at different rates on the three boards. These are the shared definitions.
+// R1 adopts ONLY the pulse floor (S8: a pulse cycle is never shorter than 340 ms); the forks
+// switch flash and scan to these in R2, because that changes how those looks appear.
+inline uint32_t fxFlashHalfMs(uint8_t speed) { return STROBE_MIN_STATE_MS + (uint32_t)(255 - speed); }   // 170..425 ms a state
+inline bool fxFlashOn(uint32_t elapsed, uint8_t speed) {
+  const uint32_t h = fxFlashHalfMs(speed);
+  return (elapsed % (2u * h)) < h;
+}
+// pulse: a triangle breathe 0..255..0. The full cycle is 2000 ms at s=0 down to
+// 2 * STROBE_MIN_STATE_MS (340 ms) at s=255: S8, never faster than the photosensitivity cap.
+inline uint32_t fxPulsePeriodMs(uint8_t speed) {
+  return 2000u - ((uint32_t)speed * (2000u - 2u * STROBE_MIN_STATE_MS)) / 255u;
+}
+inline uint8_t fxPulseBright(uint32_t elapsed, uint8_t speed) {
+  const uint32_t period = fxPulsePeriodMs(speed);
+  const uint32_t ph = elapsed % period;
+  const uint32_t tri = (ph < period / 2u) ? (ph * 510u / period) : ((period - ph) * 510u / period);
+  return (uint8_t)(tri > 255u ? 255u : tri);         // an odd period's midpoint computes 256
+}
+// scan: ONE lit position on a strand of N, one step per fxStepMs(speed). wrap=false ping-pongs
+// 0..N-1..0 (a panel); wrap=true goes round (a ring).
+inline int fxScanPos(uint32_t elapsed, uint8_t speed, int N, bool wrap) {
+  if (N <= 1) return 0;
+  const uint32_t step = elapsed / fxStepMs(speed);
+  if (wrap) return (int)(step % (uint32_t)N);
+  const uint32_t span = ((uint32_t)N - 1u) * 2u;     // widened: 2*N wraps a 16-bit int past 16383
+  const uint32_t k = step % span;
+  return (k < (uint32_t)N) ? (int)k : (int)(span - k);
+}
+
+// ===== v1.3 S7: NATIVE ALLOW-LISTS, AS DATA =====
+// Each fork lists the native:<n> codes it can run safely with complete state; a line naming any
+// other code is dropped whole. The lists live here, not in the forks' render layers, so the
+// generated vector file can carry them and Studio's vocabulary is tested against the firmware's
+// own list.
+// RSeries logics (LogicEngine sequence ids): 0..24 without the text effects 15..18 (they need a
+// message), plus the fork's custom effects 101..105. Not 25 (one past the engine's effect table,
+// an out-of-bounds call), not 99 (RANDOM can pick anything), not 100 (the bitmap needs an SD card),
+// not 106 (the contract's own renderer).
+inline bool nativeAllowedLogics(int code) {
+  return (code >= 0 && code <= 14) || (code >= 19 && code <= 24) || (code >= 101 && code <= 105);
+}
