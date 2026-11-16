@@ -465,6 +465,20 @@ LogicEffect CustomLogicEffectSelector(unsigned selectSequence)
     }
     return LogicEffectDefaultSelector(selectSequence);
 }
+// DroidNet: the engine calls its effect selector at the frame it STARTS a newly selected
+// sequence (LogicEngine.h:804-813), and at no other time. One selector per display, so the
+// contract layer learns which display started what: that is how it knows a native look is on the
+// LEDs (contract S9) and how it notices a sequence it did not select, i.e. someone's button (L6).
+LogicEffect ContractSelectorFLD(unsigned selectSequence)
+{
+    contractEngineLatched(0, selectSequence);
+    return CustomLogicEffectSelector(selectSequence);
+}
+LogicEffect ContractSelectorRLD(unsigned selectSequence)
+{
+    contractEngineLatched(1, selectSequence);
+    return CustomLogicEffectSelector(selectSequence);
+}
 
 /////////////////////////////////////////////////////////////////////////
 
@@ -1107,9 +1121,9 @@ void setup()
     });
 #endif
 
-    RLD_setLogicEffectSelector(CustomLogicEffectSelector);
-    FLD_setLogicEffectSelector(CustomLogicEffectSelector);
-    contractSetup();   // DroidNet contract: wire level provider etc. (Plan 2)
+    RLD_setLogicEffectSelector(ContractSelectorRLD);
+    FLD_setLogicEffectSelector(ContractSelectorFLD);
+    contractSetup();   // DroidNet contract: both displays start on the engine's own look
 
 #ifdef LIVE_STREAM
     if (udp.listen(1234)) {

@@ -14,6 +14,9 @@
 //   * restoreSettings() on every effect change: the live fBri goes back to the RAM default
 //     object's fBri (LE:807, :1830);
 //   * a custom effect that returns false hands the display to the default effect (LE:818-830);
+//   * the effect selector is called exactly when the engine starts a newly selected sequence
+//     (LE:804-813). The fork's selectors in main.cpp report that to contractEngineLatched(), and
+//     so does this mock;
 //   * LogicEffectDefaultSelector() indexes one past its 25-entry table for 25 (LE:2733).
 // It is still a mock. A native look is not drawn pixel by pixel: every native sequence but
 // LIGHTSOUT fills the display with its live brightness (a stand-in for "lit": the worst case for
@@ -60,6 +63,7 @@ struct LogicEngineRenderer {
   CRGB px(int x, int y) const { return _px[y][x]; }
   void selectSequence(byte s, int = 0, int = 0, int = 0) { _seq = s; _selects++; }
   void resetEffect() { _prevSeq = -1; }
+  bool hasEffectChanged() const { return _seq != _prevSeq; }    // LE:842: a selection is waiting for the next frame
   void setBrightness(byte b) { _liveBri = b; }
   byte getBrightness() const { return _liveBri; }
   void calculateAllColors() { _calcCalls++; }
@@ -72,6 +76,7 @@ inline void FLD_selectSequence(byte s, int = 0, int = 0, int = 0) { FLD->selectS
 inline void RLD_selectSequence(byte s, int = 0, int = 0, int = 0) { RLD->selectSequence(s); }
 
 inline bool ContractRender(LogicEngineRenderer& r);   // the fork effect, id 106
+inline void contractEngineLatched(uint8_t u, unsigned seq);   // main.cpp's effect selectors call this
 
 // One engine frame for one display: LogicEngineRenderer::animate() (LE:789-831), reduced, in the
 // engine's own order.
@@ -80,6 +85,7 @@ inline void mockEngineFrame(LogicEngineRenderer& r) {
     r._liveBri = (r._id == 1 ? LogicEngineFLDDefault : LogicEngineRLDDefault).fBri;   // restoreSettings() LE:807
     r._restarts[r._seq & 255]++;
     r._fx = r._seq;                                             // fLogicEffect = fEffectSelector() LE:813
+    contractEngineLatched(r._id == 1 ? 0 : 1, (unsigned)r._seq);   // ...which is the fork's selector (main.cpp): it reports the start
   }
   bool keep = true;
   if (r._fx == 106) keep = ContractRender(r);                   // the effect runs                  LE:818

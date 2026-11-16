@@ -20,12 +20,14 @@ static int gFails = 0, gKnown = 0;   // gKnown: defects still marked KNOWN_BUG
 static void send(const char* afterBang) { contractHandleLine(afterBang); }
 // Power-on state for every fork-owned global and for the mock engine.
 static void resetAll() {
-  for (uint8_t u = 0; u < 2; u++) { gContract[u] = ContractUnitState(); gBriTouched[u] = false; }
+  for (uint8_t u = 0; u < 2; u++) { gContract[u] = ContractUnitState(); gBriTouched[u] = false; gShown[u] = SH_ENGINE; gShownCode[u] = 0; gLatched[u] = true; gEngineSeq[u] = 0;
+                                    gQueryLen[u] = 0; gBriGoing[u] = false; gRise[u] = false; gRestart[u] = false; }
   gBeat = BeatClock();
   gLevel = 0;
-  gLastLineMs = 0; gQueryLen = 0;
+  gLastLineMs = 0;
   mockEngineReset();
   _mock_millis = 100000;
+  contractSetup();                                 // as setup() does: the engine's own look is on both displays
 }
 // The full-field level of a display, 0..255: the mean over its pixels of each pixel's brightest
 // channel (so a red field counts like a white one). This is what the eye gets from the whole

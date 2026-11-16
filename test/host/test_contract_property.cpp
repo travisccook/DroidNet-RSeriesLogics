@@ -8,7 +8,9 @@
 //     (a) goes from dark to lit across its whole field at most three times in any second;
 //     (b) is never brighter than its owner's ceiling while the contract draws it;
 //     (c) is back on a native sequence, and stays there, after M:v=idle or a watchdog expiry;
-//     (d) is dark at once after X, and stays dark until a line that may relight it.
+//     (d) is dark at once after X, and stays dark until a line that may relight it;
+//     (e) L6: runs the sequence a button started on it, and keeps running it, when the contract
+//         held the display at that moment. The show does not come back for it by itself.
 //
 // Lines go in through contractHandleLine(), a frame is rendered through the mock engine every
 // 10 ms (now and then later), and what is measured is the PIXELS: the full-field level of each
@@ -26,7 +28,13 @@
 //
 // What the test knows about the layer's inside is deliberately little: when a unit's show mode
 // ended without a line saying so (the watchdog, or a failed V), read from gContract[].inShow, so
-// that (c) can start its clock. Everything it ASSERTS is on the pixels and the latched effect.
+// that (c) can start its clock; and whether the contract held a display when a button was
+// pressed, for (e). Everything it ASSERTS is on the pixels and the latched effect.
+//
+// THE BUTTON. The random streams also press buttons: a native sequence started on a display
+// from outside the contract (FLD->selectSequence(), as @nT... ends up doing). A button may light
+// a dark display whenever its owner likes; that is not the contract's onset, so the observers
+// start counting afresh at each press. What the contract does AFTER it is counted as ever.
 #include "logics_harness.h"
 #include <cstring>
 #include <initializer_list>
@@ -63,16 +71,26 @@ struct Watch {
   int notDark = 0;               // (d) frames lit when the display should be dark
   uint32_t nativeFrom = 0; bool expectNative = false;
   uint32_t darkFrom = 0;   bool expectDark = false;
-  long litMs = 0, darkChecked = 0, nativeChecked = 0, contractFrames = 0;
+  long litMs = 0, darkChecked = 0, nativeChecked = 0, contractFrames = 0, buttonChecked = 0;
+  int notButton = 0;             // (e) frames on something else when a button's sequence should be running
+  uint32_t buttonFrom = 0; int expectButton = -1;
+  bool ownerDark = false;        // the owner chose lights-out, by button: a display the contract gives back, or leaves alone, is then dark
   void reset(LogicEngineRenderer* rr, int u) {
     *this = Watch(); r = rr; ceil = (u == 0 ? LogicEngineFLDDefault : LogicEngineRLDDefault).fBri;
     obs[1].darkPct = 19; obs[1].litPct = 75; obs[2].darkPct = 4; obs[2].litPct = 31;
   }
   void native(uint32_t now) { if (!expectNative) nativeFrom = now; expectNative = true; expectDark = false; }
-  void dark(uint32_t now)   { darkFrom = now; expectDark = true; expectNative = false; }
-  void unknown()            { expectNative = expectDark = false; }
+  void dark(uint32_t now)   { darkFrom = now; expectDark = true; expectNative = false; expectButton = -1; }
+  void unknown()            { expectNative = expectDark = false; expectButton = -1; }
+  void button(uint32_t now, int seq, bool held) {
+    for (Onsets& o : obs) o.n = 0;                 // the owner's light: not the contract's onset
+    expectDark = false;
+    ownerDark = seq == 14;
+    expectButton = held ? seq : -1; buttonFrom = now;
+  }
   void frame(uint32_t now, uint32_t dt) {
     const int level = fieldLevel(r);
+    if (r->_fx != 14) ownerDark = false;
     if (level * 2 >= ceil) litMs += dt;
     for (Onsets& o : obs) o.see(level, ceil, now);
     if (r->_fx == 106) contractFrames++;
@@ -82,14 +100,16 @@ struct Watch {
         if (c.r > ceil || c.g > ceil || c.b > ceil) { overCeiling++; y = 10; break; }
       }
     // (c): giving the display back may wait for the onset window (340 ms) and an engine frame
-    if (expectNative && now - nativeFrom > 400) { nativeChecked++; if (r->_fx == 106 || r->_fx == 14) notNative++; }
+    if (expectNative && now - nativeFrom > 400) { nativeChecked++; if (r->_fx == 106 || (r->_fx == 14 && !ownerDark)) notNative++; }
     // (d): one frame for the engine to notice, then dark
     if (expectDark && now - darkFrom > 30) { darkChecked++; if (level * 10 > ceil) notDark++; }
+    // (e): the frame after the press, and from then on
+    if (expectButton >= 0 && now - buttonFrom > 30) { buttonChecked++; if (r->_fx != expectButton) notButton++; }
   }
 };
 static Watch gW[2];
 static int gWatchdogLate = 0;    // (c) the watchdog did not fire when the test's own count said it must
-static long gLines = 0;
+static long gLines = 0, gPresses = 0;
 
 // ---- PROPERTY_TRACE=1: when a property first breaks, print what led up to it ----
 #include <cstdlib>
@@ -133,6 +153,22 @@ static void tx(const std::string& line) {
     // Q, L, B, and an M that is neither show nor idle: nothing a display may light up for
   }
 }
+// A button: someone starts native sequence `seq` on display u.
+static void press(int u, int seq) {
+  // Held: the contract has the display (effect 106, or a native look it chose). NORMAL chosen
+  // over a native section looks exactly like that section running out, and the section's own
+  // sequence chosen again changes nothing at all: neither is a take-over.
+  // And a press for the sequence the engine is ALREADY on starts nothing, so nothing tells the
+  // layer; it works that out 50 ms later, and a line inside those 50 ms is handled as if there
+  // had been no press. (e) is not asserted for such a press.
+  const bool held = gShown[u] != SH_ENGINE && !(gShown[u] == SH_NATIVE && (seq == 0 || seq == gShownCode[u]))
+                    && seq != (int)gEngineSeq[u];
+  (u == 0 ? FLD : RLD)->selectSequence((byte)seq);
+  { char b[48]; snprintf(b, sizeof b, "BUTTON %c sequence %d%s", u ? 'R' : 'F', seq, held ? " (held)" : ""); trace(b); }
+  gW[u].button(_mock_millis, seq, held);
+  if (seq == 0 && !held) gW[u].unknown();          // (the show may well take the display back by itself)
+  gPresses++;
+}
 static void step(uint32_t ms = 10) {
   bool was[2] = { gContract[0].inShow, gContract[1].inShow };
   _mock_millis += ms; frame();
@@ -150,6 +186,7 @@ static void step(uint32_t ms = 10) {
       if (getenv("PROPERTY_TRACE_GAP")) for (const Onsets& o : gW[u].obs) if (o.minGap < 340) traceDump("two onsets under 340 ms apart", u);
       if (gW[u].notNative > nn) traceDump("not native after idle", u);
       if (gW[u].notDark > nd) traceDump("lit after X", u);
+      if (gW[u].notButton) traceDump("not on the sequence a button started", u);
       (void)before;
     }
   }
@@ -255,12 +292,15 @@ static const int kProfileCount = (int)(sizeof kProfiles / sizeof kProfiles[0]);
 struct Result {
   int worst = 0; uint32_t minGap = 0xFFFFFFFFu; int overCeiling = 0, notNative = 0, notDark = 0, wdLate = 0;
   long onsets = 0, darkChecked = 0, nativeChecked = 0, contractFrames = 0, lines = 0;   // how much was looked at
+  long presses = 0, buttonChecked = 0; int notButton = 0;
   void take() {
     for (int u = 0; u < 2; u++) {
       for (const Onsets& o : gW[u].obs) { if (o.worst > worst) worst = o.worst; if (o.minGap < minGap) minGap = o.minGap; }
       overCeiling += gW[u].overCeiling; notNative += gW[u].notNative; notDark += gW[u].notDark;
       onsets += gW[u].obs[0].total; darkChecked += gW[u].darkChecked; nativeChecked += gW[u].nativeChecked; contractFrames += gW[u].contractFrames;
+      notButton += gW[u].notButton; buttonChecked += gW[u].buttonChecked;
     }
+    presses += gPresses; gPresses = 0;
     wdLate += gWatchdogLate; gWatchdogLate = 0;
     lines += gLines; gLines = 0;
   }
@@ -269,10 +309,11 @@ struct Result {
     if (o.minGap < minGap) minGap = o.minGap;
     overCeiling += o.overCeiling; notNative += o.notNative; notDark += o.notDark; wdLate += o.wdLate;
     onsets += o.onsets; darkChecked += o.darkChecked; nativeChecked += o.nativeChecked; contractFrames += o.contractFrames; lines += o.lines;
+    notButton += o.notButton; presses += o.presses; buttonChecked += o.buttonChecked;
   }
   // (a) is the spec's "at most three in any second". The gate promises more, and that is held to
   // as well: no two onsets less than 340 ms apart, for every observer.
-  bool holds() const { return worst <= 3 && minGap >= 2 * STROBE_MIN_STATE_MS && overCeiling == 0 && notNative == 0 && notDark == 0 && wdLate == 0; }
+  bool holds() const { return worst <= 3 && minGap >= 2 * STROBE_MIN_STATE_MS && overCeiling == 0 && notNative == 0 && notDark == 0 && wdLate == 0 && notButton == 0; }
   void print(const char* verdict, const char* name) const {
     printf("%s S9 %s: %d onsets in one second", verdict, name, worst);
     if (minGap != 0xFFFFFFFFu) printf(" (closest two %u ms apart)", minGap);
@@ -280,6 +321,7 @@ struct Result {
     if (notNative)   printf(", %d frames not native after idle", notNative);
     if (overCeiling) printf(", %d frames over the ceiling", overCeiling);
     if (wdLate)      printf(", the watchdog was late %d times", wdLate);
+    if (notButton)   printf(", %d frames not on the sequence a button started", notButton);
     printf("\n");
   }
 };
@@ -306,8 +348,13 @@ static Result runRandom(int streams) {
     if (rnd(3) == 0) { LogicEngineFLDDefault.fBri = (byte)(40 + rnd(216)); FLD->_liveBri = LogicEngineFLDDefault.fBri;   // the owner's own setting
                        gW[0].ceil = LogicEngineFLDDefault.fBri; }
     const uint32_t busy = 2 + rnd(30);            // one line every `busy` frames on average
+    const bool buttons = rnd(2) == 0;             // half the streams have an owner at the controller
     for (uint32_t t = 0; t < 12000; t += 10) {
       if (rnd(busy) == 0) { const bool burst = rnd(8) == 0; for (uint32_t n = 1 + (burst ? rnd(12) : 0); n > 0; n--) tx(randomLine()); }
+      if (buttons && rnd(350) == 0) {              // about three presses a stream
+        static const int kSeq[] = { 0, 1, 2, 4, 5, 5, 14, 20, 3 };
+        const int u = (int)rnd(2); press(u, kSeq[rnd(9)]);
+      }
       const uint32_t slow = rnd(20) == 0 ? rnd(4) * 10 : 0;
       step(10 + slow);                             // now and then a slow pass
     }
@@ -338,19 +385,21 @@ int main() {
   step(); gW[1].litMs = 0;                                 // (the native look before the show was lit, of course)
   for (uint32_t t = 0; t < 10000; t += 10) { if (t % 2000 == 0) tx("L*P:c=ffffff,d=170"); if (t % 4000 == 0) tx("**Q"); step(); }
   if (gW[1].litMs > 1000) printf("      (the rear display was lit %ld ms of 10000)\n", gW[1].litMs);
-  KNOWN_BUG("R1 review 1: an overlay that ends on a dark display leaves it lit", gW[1].litMs >= 700 && gW[1].litMs <= 1000);
+  CHECK(gW[1].litMs >= 700 && gW[1].litMs <= 1000);
 
   // On the layer of 4dbb04b every stream below fails. Clear a flag in the task that fixes it.
-  static const bool kStill[] = { true, true, true, true, true, true, true, true, true, true, true, true };
+  static const bool kStill[] = { false, false, false, false, false, false, false, false, false, false, false, false };
   static_assert(sizeof kStill / sizeof kStill[0] == sizeof kProfiles / sizeof kProfiles[0], "one flag a profile");
   Result all;
   for (int i = 0; i < kProfileCount; i++) { const Result r = runProfile(kProfiles[i], 8); verdict(kProfiles[i].name, r, kStill[i]); all.add(r); }
   const Result rr = runRandom(streams);
-  verdict("random streams", rr, true); all.add(rr);
+  verdict("random streams", rr, false); all.add(rr);
 
   if (gFails) { printf("%d CHECK(s) FAILED\n", gFails); return 1; }
   printf("S9 property OK (%d known defect(s) still open): %ld lines, %ld frames drawn by the contract, %ld onsets, the closest two %u ms apart;\n"
-         "   %ld frames checked dark after X, %ld checked native after idle or the watchdog (seed 0x%08X, %d random streams)\n",
-         gKnown, all.lines, all.contractFrames, all.onsets, all.minGap, all.darkChecked, all.nativeChecked, (unsigned)seedUsed, streams);
+         "   %ld frames checked dark after X, %ld checked native after idle or the watchdog, %ld button presses and %ld frames\n"
+         "   checked on the button's sequence (seed 0x%08X, %d random streams)\n",
+         gKnown, all.lines, all.contractFrames, all.onsets, all.minGap, all.darkChecked, all.nativeChecked, all.presses, all.buttonChecked,
+         (unsigned)seedUsed, streams);
   return 0;
 }

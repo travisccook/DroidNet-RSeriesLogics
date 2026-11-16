@@ -17,13 +17,25 @@
 // the adapter between that state and the engine:
 //   * A unit's BASE says what its display falls back to (CB_NONE: the engine's own look;
 //     CB_DARK; CB_LOOK: a contract look; CB_NATIVE: a native sequence the contract chose).
-//     _showBase() maps it onto an engine sequence.
-//   * ONE fork effect, ContractRender (id 106), draws the contract looks and the accent
-//     overlay every ~10 ms frame (LogicEngine.h:789-831). It returns false only to hand the
-//     display back: the engine then selects its own default effect (LogicEngine.h:818-830).
-//     setPixelRGB (:1383) bypasses fBri, so brightness and the beat pump are applied here.
+//   * ONE fork effect, ContractRender (id 106), draws the contract looks, the dark baseline and
+//     the accent overlay every ~10 ms frame (LogicEngine.h:789-831). setPixelRGB (:1383)
+//     bypasses fBri, so brightness and the beat pump are applied here.
+//   * _present() puts a unit's state on its display: effect 106, or a native sequence. It is
+//     the ONLY place a sequence is selected, and it never runs inside the effect. The engine
+//     runs the effect and only THEN records the selection as seen (LogicEngine.h:818-819), so
+//     a selectSequence() made from inside an effect is never noticed: effect 106 would go on
+//     running. (That was the 2026-11-16 review's finding 1: an overlay ending on a dark display
+//     left its last frame lit.)
+//   * S9: every frame effect 106 draws is measured and passed through the core's field gate
+//     (contractFieldGate) before it leaves, and so is every hand-over to a native look and
+//     every brightness the contract gives one. No line, and no order of lines, lights a display
+//     from dark more often than every 340 ms.
+//   * contractEngineLatched() is the engine telling the layer which sequence it has just
+//     started on a display (through main.cpp's effect selectors). It is how the layer knows a
+//     native look is really on the LEDs, and how it notices a native take-over (L6).
 //   * contractHandleLine() is the single entry point for a contract line.
-//   * contractTick() runs from mainLoop() every pass: the score and its accents.
+//   * contractTick() runs from mainLoop() every pass: the score and its accents, the watchdog,
+//     held live looks, and _present().
 #pragma once
 #include "contract_core.h"
 
@@ -38,12 +50,39 @@ static BeatClock  gBeat;                // ONE beat clock for both displays (ver
 static uint8_t    gLevel = 0;           // verb L energy 0..255 (drives CE_METER)
 static ScoreEntry gScore[2][SCORE_MAX];
 static uint32_t   gLastLineMs = 0;      // L2: the last well-formed contract line addressed to this board
-// Section 10: one pending reply to a Q, written to Serial1 by mainLoop() between WDP announces.
-static char       gQueryLine[CONTRACT_REPLY_MAX];
-static uint8_t    gQueryLen = 0;
+// Section 10: the pending reply to a Q, one per display (a host may query both in one burst),
+// written to Serial1 by mainLoop() between WDP announces. A second Q to the same display before
+// its reply has left replaces it.
+static char       gQueryLine[2][CONTRACT_REPLY_MAX];
+static uint8_t    gQueryLen[2] = { 0, 0 };
+// What _present() last SELECTED for each display: nothing of the contract's (the engine's own
+// look), effect 106, or a native sequence the contract chose; and whether the engine has started
+// drawing it. The engine says so itself: it calls the fork's effect selector at the frame it
+// starts a newly selected sequence (LogicEngine.h:804-813), and main.cpp's two selectors pass
+// that on as contractEngineLatched(). That one signal is what makes three things exact:
+//   * S9 for native looks: the gate is told a native look lit at the frame it did, and never
+//     about one that was selected and then replaced before a frame;
+//   * L6: a sequence the contract did not select, starting on a display the contract holds, is
+//     someone's button. The show ends on that display, there and then;
+//   * a timed native section that finishes (the engine falls back to its default look).
+enum : uint8_t { SH_ENGINE = 0, SH_CONTRACT = 1, SH_NATIVE = 2 };
+static uint8_t    gShown[2]     = { SH_ENGINE, SH_ENGINE };
+static byte       gShownCode[2] = { 0, 0 };
+static bool       gLatched[2]   = { true, true };
+static uint16_t   gEngineSeq[2] = { 0, 0 };         // the sequence the engine last started (NORMAL at power-on)
+static bool       gRestart[2]   = { false, false }; // resetEffect() was called: the engine WILL start a sequence next frame
+
+// The brightness the contract is taking a native look to (B, b=, or back to the owner's), and a
+// RISE it has written that the engine has not drawn yet. See _nativeBright().
+static const uint32_t ENGINE_FRAME_MS = 10;         // LogicEngineRenderer::animate() draws at most this often (LogicEngine.h:792)
+static uint8_t    gBriGoal[2]   = { 0, 0 };
+static bool       gBriGoing[2]  = { false, false };
+static bool       gRise[2]      = { false, false };
+static uint8_t    gRiseLevel[2] = { 0, 0 };
+static uint32_t   gRiseMs[2]    = { 0, 0 };
 // S6 / verb B on native looks. The engine copies its RAM default object back over the live
 // settings on every effect change (LogicEngine.h:807, :1830), so a brightness that has to last
-// is written THERE, and the owner's value is put back at every show boundary.
+// is written THERE, and the owner's value is put back when the show no longer needs it.
 static bool       gBriTouched[2] = { false, false };
 static uint8_t    gBriSaved[2]   = { 0, 0 };
 static uint8_t    gBriWritten[2] = { 0, 0 };
@@ -78,10 +117,25 @@ static inline uint8_t _level(const ContractUnitState& g) { return contractLevel(
 static inline CRGB _scaled(const ContractRGB& c, uint8_t bri) {   // apply brightness (setPixelRGB bypasses fBri)
   return CRGB((uint16_t)c.r * bri / 255, (uint16_t)c.g * bri / 255, (uint16_t)c.b * bri / 255);
 }
+// Every pixel ContractRender draws goes through _px(): it applies the field gate's scale (S9) and
+// adds the pixel to the frame's field level (the mean of each pixel's brightest channel).
+static uint32_t gPxSum = 0;
+static uint16_t gPxCount = 0;
+static uint8_t  gPxScale = 255;
+static inline void _px(LogicEngineRenderer& r, int x, int y, CRGB c) {
+  if (gPxScale != 255) {
+    c.r = (uint8_t)(((uint16_t)c.r * gPxScale) / 255u);
+    c.g = (uint8_t)(((uint16_t)c.g * gPxScale) / 255u);
+    c.b = (uint8_t)(((uint16_t)c.b * gPxScale) / 255u);
+  }
+  gPxSum += (c.r > c.g) ? (c.r > c.b ? c.r : c.b) : (c.g > c.b ? c.g : c.b);
+  gPxCount++;
+  r.setPixelRGB(x, y, c);
+}
 static inline void _fill(LogicEngineRenderer& r, const CRGB& c) {
   for (int y = 0; y < r.height(); y++)
     for (int x = 0; x < r.width(); x++)
-      r.setPixelRGB(x, y, c);
+      _px(r, x, y, c);
 }
 static inline uint32_t _hash3(int x, int y, uint32_t t) {
   uint32_t h = (uint32_t)x * 73856093u ^ (uint32_t)y * 19349663u ^ t * 83492791u;
@@ -90,15 +144,171 @@ static inline uint32_t _hash3(int x, int y, uint32_t t) {
 // verb-dispatch context (outside an effect fn): act on one engine by unit index.
 static inline void _select(uint8_t u, byte seq) { if (u == 0) FLD_selectSequence(seq); else RLD_selectSequence(seq); }
 static inline void _reset(uint8_t u)            { if (_engine(u)) _engine(u)->resetEffect(); }
-// Does the contract hold this unit's display right now?
-static inline bool _holds(const ContractUnitState& g) { return g.base != CB_NONE || g.pulseActive; }
-// Put the unit's base on its display (dispatch context; no overlay up).
-static inline void _showBase(uint8_t u) {
-  const ContractUnitState& g = gContract[u];
-  if (g.base == CB_LOOK)        _select(u, FX_CONTRACT);
-  else if (g.base == CB_NATIVE) _select(u, (byte)g.nativeCode);
-  else if (g.base == CB_DARK)   _select(u, NATIVE_LIGHTSOUT);
-  else                        { _select(u, NATIVE_NORMAL); _reset(u); }   // give it back: the native idle look
+// The brightness the engine has now, as far as the contract set it.
+static inline uint8_t _engineBriNow(uint8_t u) { return gBriTouched[u] ? gBriWritten[u] : _ownerBri(u); }
+// Does the contract set this native look's brightness (verb B in a show, b= on a native look)?
+static inline bool _dimsNative(const ContractUnitState& g) { return g.inShow || g.base == CB_NATIVE; }
+
+// A native look is on the LEDs: take its brightness to what the contract asks (b= on a native
+// look, verb B; after the show, the owner's own again). A native look is light the layer cannot
+// see, so for S9 its field level IS that brightness:
+//   * dimmer: written at once, and the gate is told at once. (Darker is never delayed.)
+//   * brighter: only when the gate allows it now (contractFieldAllowed); otherwise asked again
+//     next pass. The gate is TOLD when the engine has drawn it: a brightness reaches the LEDs at
+//     the engine's next frame, at most ENGINE_FRAME_MS and a loop pass later, and nothing reports
+//     that frame. Until then (gRise) no other brightness is written. If a contract look takes the
+//     display inside that one frame, nobody can say whether the brighter native look was ever
+//     drawn; contractEngineLatched() then takes the safe side (it counts as an onset, now).
+// The engine's brightness is only moved when what the contract WANTS changes (gBriGoal): a
+// brightness someone else sets during the show (#LEBRI, the web UI, the trimpot) stands until
+// the host's next B.
+static inline void _nativeBright(uint8_t u, uint32_t now) {
+  ContractUnitState& g = gContract[u];
+  const bool ours = _dimsNative(g);
+  if (!ours && !gBriTouched[u]) return;                 // nothing of the contract's in the engine's brightness
+  const uint8_t want = _level(g);                       // (no show: the ceiling, which is the owner's own value)
+  if (want != gBriGoal[u]) { gBriGoal[u] = want; gBriGoing[u] = true; }
+  if (!gBriGoing[u]) return;
+  if (gBriTouched[u] && _defaults(u).fBri != gBriWritten[u]) {      // someone else set it since: theirs stands
+    gBriGoing[u] = false;
+    if (!ours) gBriTouched[u] = false;
+    return;
+  }
+  if (gRise[u]) return;                                 // one at a time: the last rise has not been drawn yet
+  const uint8_t cur = _engineBriNow(u);
+  if (gEngineSeq[u] == NATIVE_LIGHTSOUT) {
+    // The engine is on lights-out (the owner's own, by button): dark at any brightness
+    // (LogicEngine.h, LogicLightsOutEffect draws level 0). Nothing here is light.
+  } else if (want > cur) {
+    if (contractFieldAllowed(g, want, now) < want) return;          // S9: held. Asked again next pass.
+    gRise[u] = true; gRiseLevel[u] = want; gRiseMs[u] = now;
+  } else if (want < cur) {
+    contractFieldGate(g, want, now);
+  }
+  gBriGoing[u] = false;
+  if (!ours && want == gBriSaved[u]) _engineBriRestore(u);          // back at the owner's value: the engine's again
+  else if (want != cur) _engineBri(u, want);
+}
+// Select a sequence. THE one place a sequence is selected, and never inside the effect (file header).
+static inline void _choose(uint8_t u, uint8_t kind, byte seq) {
+  _select(u, seq);
+  if (kind == SH_ENGINE) { _reset(u); gRestart[u] = true; }   // give it back: the native idle look, started afresh
+  gShown[u] = kind; gShownCode[u] = seq;
+  // The engine starts it at its next frame and says so (contractEngineLatched), unless it is on
+  // that very sequence already: then nothing changes and nothing is said.
+  gLatched[u] = gEngineSeq[u] == seq && !gRestart[u];
+}
+// A selection the engine has not started yet can be undone from outside, without a trace: someone
+// selects, before the next frame, the sequence the engine is ALREADY on (a button for the look
+// that is up). Then nothing is pending in the engine, nothing will start, and nothing will be
+// reported. hasEffectChanged() is the engine's own "a selection is waiting", so that case is
+// visible at once: the layer selects again. A button for the look that is already up changes
+// nothing; it does not cancel a line. (A button for any OTHER sequence is still waiting in the
+// engine, starts at the next frame, and is the take-over of L6.)
+static inline void _reassert(uint8_t u) {
+  if (gLatched[u] || gShown[u] == SH_ENGINE || _engine(u) == nullptr) return;
+  if (!_engine(u)->hasEffectChanged()) _select(u, gShown[u] == SH_CONTRACT ? FX_CONTRACT : gShownCode[u]);
+}
+// Put the unit's state on its display. Runs after every line that changes a unit, and every pass
+// from contractTick(), which is what ends an overlay and makes a hand-over the gate held.
+static inline void _present(uint8_t u, uint32_t now) {
+  ContractUnitState& g = gContract[u];
+  _reassert(u);
+  if (contractOverlayUp(g, now) || g.base == CB_LOOK || g.base == CB_DARK) {   // effect 106 draws all of these
+    if (gShown[u] != SH_CONTRACT) _choose(u, SH_CONTRACT, FX_CONTRACT);
+    // Effect 106 does not go through the engine's brightness. Once it is drawing, whatever the
+    // contract wrote there for a native look goes back to the owner's value: no one sees it change.
+    else if (gLatched[u]) _engineBriRestore(u);
+    return;
+  }
+  // A native look: the sequence the contract chose (CB_NATIVE), or the engine's own again (CB_NONE).
+  const bool own  = g.base != CB_NATIVE;
+  const byte seq  = own ? NATIVE_NORMAL : (byte)g.nativeCode;
+  const bool dark = !own && seq == NATIVE_LIGHTSOUT;
+  if (own ? gShown[u] != SH_ENGINE : (gShown[u] != SH_NATIVE || gShownCode[u] != seq)) {
+    if (!own && gEngineSeq[u] == seq && !gRestart[u]) {
+      // The engine is on that very sequence already (the idle look taken as a native:0 look; a
+      // native section the contract was about to leave and now keeps). It carries on: nothing
+      // starts, so nothing will be reported, and a different brightness is a brightness change
+      // on a look that is up (_nativeBright below), not part of a hand-over.
+      if (!gLatched[u]) _select(u, seq);                // withdraws a selection the engine has not started
+      gShown[u] = SH_NATIVE; gShownCode[u] = seq; gLatched[u] = true;
+    } else {
+      // S9: handing the LEDs to a native look lights them, at the brightness it will run at.
+      // From a dark display, inside the window, that waits: what is up stays up, and the next
+      // pass asks again. Lights-out is level 0 and is never held. This only ASKS the gate. The
+      // look gets its brightness, and the gate is TOLD, at the frame the engine starts the
+      // sequence (contractEngineLatched): a selection can still be replaced before that frame,
+      // and nothing may be said, or written, about light that never reached the LEDs.
+      const uint8_t level = dark ? 0 : _level(g);
+      if (contractFieldAllowed(g, level, now) < level) return;
+      _choose(u, own ? SH_ENGINE : SH_NATIVE, seq);
+      return;
+    }
+  }
+  if (gLatched[u]) _nativeBright(u, now);
+}
+
+// L6, native take-over. Something other than the contract started a sequence on a display the
+// contract holds: a button on the controller (@nT...), the web page, a command through the
+// engine's own handler. The show ends on this display, as M:v=idle would end it, and the sequence
+// runs: nothing here touches the display. The owner's brightness goes back through _nativeBright().
+static inline void _stopClockIfUnused();
+static inline void _takenOver(uint8_t u) {
+  ContractUnitState& g = gContract[u];
+  contractOnIdle(g, _ownerBri(u));
+  _stopClockIfUnused();
+  gShown[u] = SH_ENGINE;
+  gBriGoal[u] = _level(g); gBriGoing[u] = gBriTouched[u];
+}
+// The engine has started sequence `seq` on display u, at this frame. Called by main.cpp's effect
+// selectors from INSIDE the engine's animate(), after it has restored its settings and before the
+// effect draws (LogicEngine.h:804-818). It records, and it may set the brightness the sequence
+// starts with; it selects nothing (a selection made here would be lost exactly as one made inside
+// an effect is).
+inline void contractEngineLatched(uint8_t u, unsigned seq) {
+  ContractUnitState& g = gContract[u];
+  const uint32_t now = millis();
+  gEngineSeq[u] = (uint16_t)seq; gRestart[u] = false;
+  if (gRise[u]) {
+    // A brighter native look was written less than a frame ago, and something else starts now.
+    // Another native sequence starts AT that brightness, so it is on the LEDs: tell the gate.
+    // Effect 106 starting leaves it unknown whether the brighter look was ever drawn. Telling
+    // the gate of a peak that never was is the one thing it must not be told (contract_core.h),
+    // so it is told only the safe half: the field may have lit just now. The contract look that
+    // follows then waits out the window if it would light the display; a blackout does not wait.
+    if (seq == FX_CONTRACT) g.fieldOnsetMs = now;
+    else contractFieldGate(g, gRiseLevel[u], now);
+    gRise[u] = false;
+  }
+  if (seq == FX_CONTRACT) {                             // its frames go through the gate one by one (ContractRender)
+    if (gShown[u] == SH_CONTRACT) gLatched[u] = true;
+    return;                                             // (selected by number, by someone else: ContractRender hands it straight back)
+  }
+  // A NATIVE sequence starts on the LEDs now.
+  const bool mine = gShown[u] == SH_NATIVE && seq == gShownCode[u];
+  const bool back = gShown[u] == SH_ENGINE && !gLatched[u] && seq == NATIVE_NORMAL;   // the display the contract gave back
+  // A timed native section that ran out: the engine fell back to its default look. Not a
+  // take-over; the show goes on and its next section takes the display. (The owner choosing
+  // NORMAL by hand looks the same from here, and does no harm either. An engine whose default
+  // effect has been set to something other than NORMAL falls back to THAT, which reads as a
+  // take-over: the show ends on the display when a timed native section runs out.)
+  const bool ranOut = gShown[u] == SH_NATIVE && gLatched[u] && seq == NATIVE_NORMAL;
+  if (gShown[u] != SH_ENGINE && !mine && !ranOut) _takenOver(u);     // L6: a display the contract held
+  gLatched[u] = true;
+  if (seq == NATIVE_LIGHTSOUT) { contractFieldGate(g, 0, now); return; }
+  if (mine || back) {
+    // S9: the look the contract selected lights the display at this frame, at the brightness it
+    // gives it: what the contract asks (b=, B; the owner's own on a display given back), as far
+    // as the gate allows right now. _nativeBright() takes it the rest of the way when it may.
+    const uint8_t want = _level(g);
+    const uint8_t allowed = contractFieldGate(g, want, now);
+    gBriGoal[u] = want; gBriGoing[u] = allowed != want;
+    if (!_dimsNative(g) && allowed == _ownerBri(u)) _engineBriRestore(u);
+    else if (allowed != _engineBriNow(u)) _engineBri(u, allowed);
+    return;
+  }
+  contractFieldForced(g, _engineBriNow(u), now);        // someone else's sequence: on the LEDs, lit, whatever the gate thinks of it
 }
 
 // beat-modulated brightness for sustained looks. Level math lives in contract_core's
@@ -120,61 +330,29 @@ static inline uint8_t _beatBright(const ContractUnitState& g, const BeatPos& bp)
 // lasts at least STROBE_MIN_STATE_MS and at most ACCENT_DUR_MAX_MS (accentDurClamp). The gate
 // anchors on pulseLastMs UNCONDITIONALLY: an overlay that is still on screen is not an
 // exemption, and the core's show reset keeps pulseLastMs, so a reset is not one either.
-static inline void _fireAccent(uint8_t u, ContractEffect fx, const ContractRGB& c, uint32_t durMs) {
+//
+// `bright` is the overlay's own brightness fraction (P's b=; the look's for a scored accent). It
+// is taken only by an accent that ARMS, and it never touches the base look (S9).
+static inline void _fireAccent(uint8_t u, ContractEffect fx, const ContractRGB& c, uint32_t durMs, uint8_t bright) {
   ContractUnitState& g = gContract[u];
   uint32_t now = millis();
   if (g.base == CB_NATIVE) return;      // R1: no overlay on a native look — an accent never restarts a native sequence
   if (!strobeCoolDownExpired(g.pulseLastMs, now, 2 * STROBE_MIN_STATE_MS)) return;
   g.pulseFx     = fx;
   g.pulseColor  = c;
+  g.pulseBright = bright;
   g.pulseDurMs  = accentDurClamp(durMs);
   g.pulseStartMs = now;                 // ALWAYS retrigger (defeats a re-send no-op)
   g.pulseLastMs  = now;                 // the cool-down anchor: set on every accent that ARMS
   g.pulseActive  = true;
-  _select(u, FX_CONTRACT);              // ContractRender draws it (it needs no engine reset)
+  _present(u, now);                     // ContractRender draws it (it needs no engine reset)
 }
 
-// ---- the single fork effect fn: renders unit u's contract state each frame ----
-inline bool ContractRender(LogicEngineRenderer& r) {
-  uint8_t u = (r.getID() == 1) ? 0 : 1;
-  ContractUnitState& g = gContract[u];
-  uint32_t now = millis();
-  BeatPos bp = beatPosAt(gBeat, now);
-  // NB: the score is advanced in contractTick() from mainLoop (not here), so section
-  // switching keeps running even while a NATIVE section look (which is not rendered by
-  // ContractRender) is active.
-
-  // THE OVERLAY: the accent is an EFFECT SWAP, not a solid fill. The switch below runs
-  // on a chosen SOURCE (eff/col/bri/t0) — the base look normally, the overlay while one is
-  // active — so the accent reuses every existing renderer at zero flash cost. Its timeline
-  // starts at pulseStartMs (the overlay owns its own t0; the base look's startMs is NEVER
-  // touched, so an am=2 accent cannot restart the base look every beat), and it rides the
-  // look's LEVEL rather than the pumped dip.
-  uint8_t bb = _beatBright(g, bp);
-  ContractEffect eff = g.effect;
-  ContractRGB      col = g.color;
-  uint8_t  bri = bb;
-  uint32_t t0  = g.startMs;
-  if (g.pulseActive) {
-    if (now - g.pulseStartMs < g.pulseDurMs) {
-      eff = (g.pulseFx == CE_NONE) ? CE_SOLID : g.pulseFx;   // CE_NONE == the legacy solid fill
-      col = g.pulseColor;
-      bri = _level(g);                                       // the accent rides the level, not the dip
-      t0  = g.pulseStartMs;                                  // the overlay owns its own timeline
-    } else {
-      g.pulseActive = false;
-    }
-  }
-  if (!g.pulseActive && g.base != CB_LOOK) {
-    // Nothing of the contract's left to draw on this display: hand it to the unit's base.
-    // CB_NONE (a pulse outside a show, L3): returning false makes the engine select its own
-    // default effect (LogicEngine.h:818-830). The engine cannot tell us which timed native
-    // sequence a pulse interrupted, so the return is to the default look, not to that sequence.
-    if (g.base == CB_NONE) return false;
-    r.selectSequence(g.base == CB_NATIVE ? (byte)g.nativeCode : NATIVE_LIGHTSOUT);
-    return true;
-  }
-
+// ---- one frame of one look: the pixels of `eff` at `now`, in colour `col` at level `bri`, on a
+// timeline that began at t0. A pure function of its arguments and the clock, so the same frame
+// can be drawn twice (S9: once to measure it, and again scaled when the gate holds it down).
+static inline void _draw(LogicEngineRenderer& r, const ContractUnitState& g, ContractEffect eff, const ContractRGB& col,
+                         uint8_t bri, uint32_t t0, uint32_t now, bool overlay) {
   int W = r.width(), H = r.height();
 
   switch (eff) {
@@ -186,7 +364,7 @@ inline bool ContractRender(LogicEngineRenderer& r) {
       // v1.2 FIX: the lit state renders at the BEAT-PUMPED level (bri), not the raw ceiling.
       // It was the only sustained look on this board that ignored the envelope, so an
       // i=flash section pumped on the HPs/PSIs and sat flat on the Logics. During an
-      // overlay bri is the ceiling by design (an accent must not dip).
+      // overlay bri is the overlay's own level by design (an accent must not dip).
       _fill(r, on ? _scaled(col, bri) : CRGB(0, 0, 0));
       break;
     }
@@ -196,7 +374,7 @@ inline bool ContractRender(LogicEngineRenderer& r) {
       int step = (W > 0) ? (255 / W) : 8;
       for (int y = 0; y < H; y++)
         for (int x = 0; x < W; x++)
-          r.setPixelRGB(x, y, CRGB(CHSV((uint8_t)(hbase + x * step), 255, bri)));
+          _px(r, x, y, CRGB(CHSV((uint8_t)(hbase + x * step), 255, bri)));
       break;
     }
     case CE_SCAN: {
@@ -204,7 +382,7 @@ inline bool ContractRender(LogicEngineRenderer& r) {
       CRGB c = _scaled(col, bri);
       for (int y = 0; y < H; y++)
         for (int x = 0; x < W; x++)
-          r.setPixelRGB(x, y, (x == pos) ? c : CRGB(0, 0, 0));
+          _px(r, x, y, (x == pos) ? c : CRGB(0, 0, 0));
       break;
     }
     case CE_SPARKLE: {
@@ -213,7 +391,7 @@ inline bool ContractRender(LogicEngineRenderer& r) {
       CRGB c = _scaled(col, bri);
       for (int y = 0; y < H; y++)
         for (int x = 0; x < W; x++)
-          r.setPixelRGB(x, y, (_hash3(x, y, blk) % 100u) < density ? c : CRGB(0, 0, 0));
+          _px(r, x, y, (_hash3(x, y, blk) % 100u) < density ? c : CRGB(0, 0, 0));
       break;
     }
     case CE_METER: {
@@ -221,7 +399,7 @@ inline bool ContractRender(LogicEngineRenderer& r) {
       CRGB c = _scaled(col.r || col.g || col.b ? col : ContractRGB{0, 255, 0}, bri);
       for (int y = 0; y < H; y++)
         for (int x = 0; x < W; x++)
-          r.setPixelRGB(x, y, ((H - 1 - y) < lit) ? c : CRGB(0, 0, 0));
+          _px(r, x, y, ((H - 1 - y) < lit) ? c : CRGB(0, 0, 0));
       break;
     }
     case CE_COMET: {
@@ -230,7 +408,7 @@ inline bool ContractRender(LogicEngineRenderer& r) {
         uint8_t cb = fxCometBright(x, head, W);
         uint8_t v = (uint8_t)(((uint16_t)bri * cb) / 255);
         CRGB c = _scaled(col, v);
-        for (int y = 0; y < H; y++) r.setPixelRGB(x, y, c);
+        for (int y = 0; y < H; y++) _px(r, x, y, c);
       }
       break;
     }
@@ -239,7 +417,7 @@ inline bool ContractRender(LogicEngineRenderer& r) {
       CRGB on = _scaled(col, bri), off(0, 0, 0);
       for (int x = 0; x < W; x++) {
         CRGB c = fxChaseLit(x, el, g.speed) ? on : off;
-        for (int y = 0; y < H; y++) r.setPixelRGB(x, y, c);
+        for (int y = 0; y < H; y++) _px(r, x, y, c);
       }
       break;
     }
@@ -248,7 +426,7 @@ inline bool ContractRender(LogicEngineRenderer& r) {
       CRGB on = _scaled(col, bri), off(0, 0, 0);
       for (int x = 0; x < W; x++) {
         CRGB c = fxWipeLit(x, el, g.speed, W) ? on : off;
-        for (int y = 0; y < H; y++) r.setPixelRGB(x, y, c);
+        for (int y = 0; y < H; y++) _px(r, x, y, c);
       }
       break;
     }
@@ -257,7 +435,7 @@ inline bool ContractRender(LogicEngineRenderer& r) {
       for (int x = 0; x < W; x++) {
         uint8_t hue = fxGradientHue(x, W, 0, el, g.speed);   // base hue 0, color-independent (like rainbow)
         ContractRGB c = fxHsv2rgb(hue, 255, bri);
-        for (int y = 0; y < H; y++) r.setPixelRGB(x, y, CRGB(c.r, c.g, c.b));
+        for (int y = 0; y < H; y++) _px(r, x, y, CRGB(c.r, c.g, c.b));
       }
       break;
     }
@@ -271,7 +449,7 @@ inline bool ContractRender(LogicEngineRenderer& r) {
         for (int x = 0; x < W; x++) {
           uint8_t tb = fxTwinkleBright(y * W + x, now, g.speed);
           uint8_t v = (uint8_t)(((uint16_t)bri * tb) / 255);
-          r.setPixelRGB(x, y, _scaled(col, v));
+          _px(r, x, y, _scaled(col, v));
         }
       break;
     }
@@ -279,7 +457,7 @@ inline bool ContractRender(LogicEngineRenderer& r) {
       // The shared breathe (fxPulseBright: a 2000..340 ms cycle, never faster, S8) when nothing
       // pumps the look. Under the beat pump the envelope IS the breathe, so the fill is steady
       // and the pump moves it; two modulations at once would beat against each other.
-      const bool pumped = !g.pulseActive && g.accentMode != 0 && g.beatMod != 0 && gBeat.running;
+      const bool pumped = !overlay && g.accentMode != 0 && g.beatMod != 0 && gBeat.running;
       const uint8_t v = pumped ? bri : (uint8_t)(((uint16_t)bri * fxPulseBright(now - t0, g.speed)) / 255u);
       _fill(r, _scaled(col, v));
       break;
@@ -288,6 +466,59 @@ inline bool ContractRender(LogicEngineRenderer& r) {
     default:
       _fill(r, _scaled(col, bri));
       break;
+  }
+}
+
+// ---- the single fork effect fn: renders unit u's contract state each frame ----
+inline bool ContractRender(LogicEngineRenderer& r) {
+  uint8_t u = (r.getID() == 1) ? 0 : 1;
+  ContractUnitState& g = gContract[u];
+  uint32_t now = millis();
+  // NB: the score is advanced in contractTick() from mainLoop (not here), so section
+  // switching keeps running even while a NATIVE section look (which is not rendered by
+  // ContractRender) is active.
+  const bool overlay = contractOverlayUp(g, now);
+  if (!overlay && g.base != CB_LOOK && g.base != CB_DARK) {
+    // Nothing of the contract's left to draw: the display is on its way to a native look. That
+    // selection is _present()'s, made from contractTick() — NEVER from in here, where the engine
+    // would not notice it (see the file header). Until it is made the LEDs keep their last frame;
+    // the tick runs every pass, so that is one frame, or the S9 window when the gate holds the
+    // hand-over (and then the last frame is a dark one).
+    // If the contract did not put effect 106 here at all (someone selected it by number), there
+    // is nothing to wait for: false sends the engine to its default effect (LogicEngine.h:820-830).
+    return gShown[u] == SH_CONTRACT;
+  }
+
+  // WHAT to draw. The base look, pumped by the beat; or the show's dark baseline; or THE OVERLAY:
+  // the accent is an EFFECT SWAP, not a solid fill, so it reuses every renderer below. Its
+  // timeline starts at pulseStartMs (the base look's startMs is NEVER touched, so an am=2 accent
+  // cannot restart the base look every beat), and it has its own level: the accent rides a
+  // level, not the pumped dip, and a P's b= is the overlay's alone.
+  ContractEffect eff = CE_OFF;
+  ContractRGB    col = g.color;
+  uint8_t  bri = 0;
+  uint32_t t0  = g.startMs;
+  if (overlay) {
+    eff = (g.pulseFx == CE_NONE) ? CE_SOLID : g.pulseFx;     // CE_NONE == the legacy solid fill
+    col = g.pulseColor;
+    bri = contractLevel(g.ceil, g.pulseBright);
+    t0  = g.pulseStartMs;
+  } else if (g.base == CB_LOOK) {
+    eff = g.effect;
+    bri = _beatBright(g, beatPosAt(gBeat, now));
+  }
+
+  // S9: draw, measure, and pass the frame's field level through the gate. A frame the gate holds
+  // down is drawn again, scaled (the scale rounds down, so the second frame is at or under what
+  // the gate allowed).
+  gPxSum = 0; gPxCount = 0; gPxScale = 255;
+  _draw(r, g, eff, col, bri, t0, now, overlay);
+  const uint8_t level = gPxCount ? (uint8_t)(gPxSum / gPxCount) : 0;
+  const uint8_t allowed = contractFieldGate(g, level, now);
+  if (allowed < level) {
+    gPxScale = (uint8_t)(((uint16_t)allowed * 255u) / level);
+    _draw(r, g, eff, col, bri, t0, now, overlay);
+    gPxScale = 255;
   }
   return true;   // MUST return true (LogicEngine.h:820 reverts to NORMAL on false)
 }
@@ -302,18 +533,19 @@ static inline void _stopClockIfUnused() {
 // reset and then puts the unit's new base on its display:
 //   show  arms. The display keeps the native idle look until the show's first C, live A or P
 //         (contractShowBegin), so the dome is not dark between Send and Play.
-//   x     blacks out; the unit stays in its mode, with its watchdog.
+//   x     blacks out, at once; the unit stays in its mode, with its watchdog.
 //   idle  gives the display back: NORMAL runs again with nothing of the show left selected.
 // A display the contract never took is left alone, whatever the engine is running on it.
+// Giving a DARK display back lights it, so that waits for the S9 window when it has to (at most
+// 340 ms); the owner's brightness goes back with it (_nativeBright).
 static inline void _boundary(uint8_t u, char kind, uint8_t wdSec) {
   ContractUnitState& g = gContract[u];
-  const bool held = _holds(g);
-  _engineBriRestore(u);
   if (kind == 's')      contractOnShow(g, _ownerBri(u), wdSec);
   else if (kind == 'x') contractOnStop(g, _ownerBri(u));
   else                  contractOnIdle(g, _ownerBri(u));
   _stopClockIfUnused();
-  if (held || g.base != CB_NONE) _showBase(u);
+  gBriGoal[u] = _level(g); gBriGoing[u] = gBriTouched[u];    // the engine's brightness: back to the owner's, if the show moved it
+  _present(u, millis());
 }
 
 // A live look: now, or when its S4 hold ends.
@@ -333,8 +565,7 @@ static inline void _applyLook(uint8_t u, ContractLookPatch lp, uint32_t now) {
     g.effect = lp.effect; g.nativeCode = lp.nativeCode;
     g.base = (lp.effect == CE_NATIVE && lp.nativeCode >= 0) ? CB_NATIVE : CB_LOOK;
   }
-  _showBase(u);
-  if (g.base == CB_NATIVE) _engineBri(u, _level(g));
+  _present(u, now);
 }
 
 inline void applyContractToUnit(uint8_t u, const ParsedContract& p, uint16_t lineCrc) {
@@ -346,10 +577,14 @@ inline void applyContractToUnit(uint8_t u, const ParsedContract& p, uint16_t lin
       // S7: a line naming a native code that is not on the allow-list is dropped whole.
       if (pr.hasEffect && pr.effect == CE_NATIVE && !nativeAllowedLogics(pr.nativeCode)) break;
       if (pr.hasAt) {                             // a scored look: store it, do not apply it now
+        // A scored A carries its look. Without i= (or with one this firmware does not know) the
+        // line is dropped: an entry is a whole section, not a patch, and "no look" used to be
+        // stored as solid black.
+        if (!pr.hasEffect) break;
         ScoreEntry e;
         e.atBeat = pr.atBeat;
-        e.effect = pr.hasEffect ? pr.effect : CE_SOLID;
-        e.nativeCode = pr.hasEffect ? pr.nativeCode : -1;
+        e.effect = pr.effect;
+        e.nativeCode = pr.nativeCode;
         e.color  = pr.hasColor ? pr.color : ContractRGB{0, 0, 0};
         e.speed  = pr.hasSpeed ? pr.speed : 128;
         e.bright = pr.hasBright ? pr.bright : 255;                      // absent: the ceiling
@@ -377,11 +612,11 @@ inline void applyContractToUnit(uint8_t u, const ParsedContract& p, uint16_t lin
       // The accent overlay, live. It honours i= (an effect-swap accent, not just a solid fill).
       if (g.base == CB_NATIVE) break;             // R1: no overlay on a native look
       _arm(u);
-      if (contractShowBegin(g)) _showBase(u);     // L1: the show's first P: the baseline goes dark first
-      if (pr.hasBright) g.bright = pr.bright;
+      if (contractShowBegin(g)) _present(u, now); // L1: the show's first P: the baseline goes dark first
       _fireAccent(u, (pr.hasEffect && accentEffectAllowed(pr.effect)) ? pr.effect : CE_SOLID,
                   pr.hasColor ? pr.color : ContractRGB{255, 255, 255},
-                  pr.hasDur ? pr.durMs : 120);
+                  pr.hasDur ? pr.durMs : 120,
+                  pr.hasBright ? pr.bright : g.bright);       // S9: b= is the overlay's, never the base look's
       break;
     }
     case CV_LEVEL:
@@ -391,8 +626,8 @@ inline void applyContractToUnit(uint8_t u, const ParsedContract& p, uint16_t lin
       if (!contractBrightHonoured(g)) break;      // S6: only in show mode (a host sends B after M:v=show);
                                                   // every reset clears it, so a B never outlives its show
       g.bright = pr.hasBright ? pr.bright : (pr.hasLevel ? pr.level : g.bright);   // a fraction of the ceiling
-      _engineBri(u, _level(g));                   // native looks too, and it survives restoreSettings()
-      break;
+      _present(u, now);                           // a contract look takes it at its next frame; a native look through
+      break;                                      // _nativeBright() (it survives restoreSettings()). Both through the S9 gate.
     case CV_STOP:
       _boundary(u, 'x', 0);
       break;
@@ -421,8 +656,8 @@ inline void contractHandleLine(const char* afterBang) {
   if (p.verb == CV_QUERY) {                       // section 10 (an unanswered Q is still a keepalive)
     if (!contractQueryAnswerable(p)) return;      // no r=, or a wildcard: no reply
     const uint8_t u = f ? 0 : 1;
-    gQueryLen = contractFormatQuery(gQueryLine, sizeof gQueryLine, p.params.route, 'L', p.unit, SCORE_MAX,
-                                    gContract[u].scoreLen, gContract[u].loadOk, gBeat.running ? gBeat.bpm : 0);
+    gQueryLen[u] = contractFormatQuery(gQueryLine[u], sizeof gQueryLine[u], p.params.route, 'L', p.unit, SCORE_MAX,
+                                       gContract[u].scoreLen, gContract[u].loadOk, gBeat.running ? gBeat.bpm : 0);
     return;
   }
   if (p.verb == CV_CLOCK) {                       // ONE shared clock: seed it once, then both displays follow
@@ -432,7 +667,7 @@ inline void contractHandleLine(const char* afterBang) {
       ContractUnitState& g = gContract[u];
       g.lastAccentBeat = accentEdgeAfterSeed(gBeat, now);     // C1: mid-beat, that beat counts as accented
       g.pinForward = (k == CS_NUDGE);                         // C2: a nudge never moves a section cursor back
-      if (k == CS_SEEK && (u == 0 ? f : r) && contractShowBegin(g)) _showBase(u);   // L1: the show's first C
+      if (k == CS_SEEK && (u == 0 ? f : r) && contractShowBegin(g)) _present(u, now);   // L1: the show's first C
     }
     return;
   }
@@ -440,12 +675,18 @@ inline void contractHandleLine(const char* afterBang) {
   if (f) applyContractToUnit(0, p, crc);
   if (r) applyContractToUnit(1, p, crc);
 }
-// The pending Q reply (section 10). mainLoop() writes it when Serial1 can take it whole.
-inline bool contractReplyPending(const char*& line, uint8_t& n) { line = gQueryLine; n = gQueryLen; return n != 0; }
-inline void contractReplyDone() { gQueryLen = 0; }
+// The pending Q reply (section 10): the front display's first, then the rear's. mainLoop() writes
+// one a pass, when Serial1 can take it whole, and then calls contractReplyDone() for that one.
+inline bool contractReplyPending(const char*& line, uint8_t& n) {
+  const uint8_t u = gQueryLen[0] ? 0 : 1;
+  line = gQueryLine[u]; n = gQueryLen[u];
+  return n != 0;
+}
+inline void contractReplyDone() { gQueryLen[gQueryLen[0] ? 0 : 1] = 0; }
 
 // Runs from mainLoop() every pass (NOT from an effect fn), so it keeps working while a native
-// look, which ContractRender does not draw, is on a display.
+// look, which ContractRender does not draw, is on a display, and so that every sequence
+// selection is made outside the effect.
 inline void contractTick() {
   const uint32_t now = millis();
   for (uint8_t u = 0; u < 2; u++) {
@@ -453,6 +694,10 @@ inline void contractTick() {
     if (contractWatchdogExpired(g, gLastLineMs, now)) _boundary(u, 'i', 0);   // L2: the host went away
     ContractLookPatch lp;
     if (liveLookDue(g, now, lp)) _applyLook(u, lp, now);                      // S4: a held live look's window ended
+    if (gRise[u] && (uint32_t)(now - gRiseMs[u]) >= ENGINE_FRAME_MS) {        // S9: the engine has drawn the brighter native
+      contractFieldGate(g, gRiseLevel[u], now); gRise[u] = false;             // look by now: tell the gate it lit
+    }
+    _present(u, now);                             // an overlay that ended; a hand-over or a brightness the S9 gate held
   }
   if (!gBeat.running) return;                     // no clock (or held, C6): the score does not move
   const BeatPos bp = beatPosAt(gBeat, now);
@@ -471,8 +716,7 @@ inline void contractTick() {
     g.sectionEnd = (idx + 1 < g.scoreLen) ? gScore[u][idx + 1].atBeat : (s.atBeat + 9999);
     g.pulseActive = false;
     g.base = (s.effect == CE_NATIVE && s.nativeCode >= 0) ? CB_NATIVE : CB_LOOK;
-    _showBase(u);
-    if (g.base == CB_NATIVE) _engineBri(u, _level(g));
+    _present(u, now);
   }
 
   // The board fires its OWN effect-swap accent, once per accent beat. This is what makes a
@@ -489,7 +733,7 @@ inline void contractTick() {
     const ScoreEntry& e = gScore[u][g.curSection];
     if (e.accentFx == CE_NONE) continue;                         // no ae=: never accents
     if (!beatAccentFires(e.accentMode, bp, gBeat, e.accentEvery)) continue;   // SAME predicate as the pump (S2)
-    _fireAccent(u, e.accentFx, e.accentColor, (uint32_t)e.accentDur10 * 10u);
+    _fireAccent(u, e.accentFx, e.accentColor, (uint32_t)e.accentDur10 * 10u, g.bright);   // it rides the look's level
   }
 }
 
@@ -499,4 +743,13 @@ MARCDUINO_ACTION(Contract, !, ({
   contractHandleLine(Marcduino::getCommand());
 }))
 
-inline void contractSetup() { }   // (native mic-effect PeakValueProvider wiring is R2: the level feed)
+// Called once from setup(). At power-on the engine's own look is on both displays, and the S9
+// gate has to know a display it has never drawn is lit: otherwise the first thing the contract
+// does to it would be counted as lighting it. (The native mic-effect PeakValueProvider wiring is
+// R2: the level feed.)
+inline void contractSetup() {
+  for (uint8_t u = 0; u < 2; u++) {
+    gContract[u].fieldLit = true; gContract[u].fieldRef = _ownerBri(u);
+    gBriGoal[u] = _ownerBri(u);
+  }
+}

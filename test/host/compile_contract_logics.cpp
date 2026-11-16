@@ -25,11 +25,13 @@ static void send(const char* afterBang) {
 }
 // Wipe every fork-owned global so each scenario starts from power-on state.
 static void resetAll() {
-  for (uint8_t u = 0; u < 2; u++) { gContract[u] = ContractUnitState(); gBriTouched[u] = false; }
-  gLastLineMs = 0; gQueryLen = 0;
+  for (uint8_t u = 0; u < 2; u++) { gContract[u] = ContractUnitState(); gBriTouched[u] = false; gShown[u] = SH_ENGINE; gShownCode[u] = 0; gLatched[u] = true; gEngineSeq[u] = 0;
+                                    gQueryLen[u] = 0; gBriGoing[u] = false; gRise[u] = false; gRestart[u] = false; }
+  gLastLineMs = 0;
   mockEngineReset();
   gBeat = BeatClock{};
   gLevel = 0;
+  contractSetup();
 }
 // Advance the board one tick and report whether an accent was armed ON THIS TICK.
 // (pulseStartMs == now is only true for an overlay armed at this instant; a still-running

@@ -176,6 +176,23 @@ if ! printf '%s\n' "$CODE" | grep -q 'setRxBufferSize'; then
   echo "FAIL: $MAIN does not size Serial1's receive buffer (Serial1.setRxBufferSize before begin)"; exit 1
 fi
 echo "reader: ContractSerial; line buffer $WIDTH >= $need (worst v1.3 scored line ${#worst} chars), serial and WiFi OK"
+# The contract layer is told when the engine starts a sequence on a display (contract S9 for
+# native looks, and L6): each display must have its OWN selector, and each must report. A display
+# left on CustomLogicEffectSelector would never report, and the layer would wait for ever for a
+# sequence it selected.
+for want in 'FLD_setLogicEffectSelector[[:space:]]*\([[:space:]]*ContractSelectorFLD[[:space:]]*\)' \
+            'RLD_setLogicEffectSelector[[:space:]]*\([[:space:]]*ContractSelectorRLD[[:space:]]*\)' \
+            'contractEngineLatched[[:space:]]*\([[:space:]]*0[[:space:]]*,' \
+            'contractEngineLatched[[:space:]]*\([[:space:]]*1[[:space:]]*,'; do
+  if ! printf '%s\n' "$CODE" | grep -Eq "$want"; then
+    echo "FAIL: $MAIN: no match for /$want/ (each display's effect selector must report to contractEngineLatched)"; exit 1
+  fi
+done
+# (six mentions: the two wrapper functions, the engine call inside each, and the two registrations)
+if [ "$(printf '%s\n' "$CODE" | grep -c 'setLogicEffectSelector[[:space:]]*(')" != 6 ]; then
+  echo "FAIL: $MAIN registers an effect selector somewhere this stage does not know about"; exit 1
+fi
+echo "effect selectors: one per display, both report sequence starts to the contract layer OK"
 # The contract version the board announces to the WCB is the one the core speaks.
 VER=$(sed -n 's/^#define CONTRACT_VERSION "\([^"]*\)".*/\1/p' "$COREH" | head -1)
 if [ -z "$VER" ] || ! grep -q "^#define WDP_CAPS \".*contract\.$VER[ \"]" "$WDPH"; then

@@ -18,7 +18,7 @@ static void test_lifecycle() {
   send("LFA:i=solid,c=ff0000,at=0"); run(200);             // a scored A is the load, not the start
   CHECK(gContract[0].base == CB_NONE && FLD->_seq == 0);
   send("**C:bpm=120,ph=1000,bpb=4,beat=0"); run(50);       // the show's first C, a second before beat 0
-  CHECK(gContract[0].base == CB_DARK && FLD->_seq == 14 && RLD->_seq == 14);
+  CHECK(gContract[0].base == CB_DARK && FLD->_fx == 106 && RLD->_fx == 106);   // effect 106 draws the dark baseline
   CHECK(fieldLevel(FLD) == 0 && fieldLevel(RLD) == 0);     // dark on the LEDs, which is what counts
   run(1100); CHECK(FLD->_seq == 106 && FLD->px(0, 0).r > 0);   // ...and the first section on its beat
 
@@ -28,9 +28,15 @@ static void test_lifecycle() {
 
   resetAll(); send("**M:v=show"); send("LFP:c=ffffff"); run(50);            // the show's first P
   CHECK(FLD->_seq == 106 && FLD->px(0, 0).r > 0);
-  run(1000); CHECK(FLD->_seq == 14);                       // back to the show's dark baseline
-  // (the 2026-11-16 review's finding 1: the sequence number says so; the pixels do not)
-  KNOWN_BUG("R1 review 1: the show's first P ends on the dark baseline, on the pixels", fieldLevel(FLD) == 0);
+  run(1000);
+  // Back to the show's dark baseline, ON THE PIXELS. (The 2026-11-16 review's finding 1: the
+  // sequence number said lights-out while the overlay's last frame stayed lit.)
+  CHECK(fieldLevel(FLD) == 0 && FLD->_fx == 106 && !gContract[0].pulseActive);
+  // the same in a show where one display has no look and the accents are wildcards
+  resetAll(); send("**M:v=show"); send("LFA:i=solid,c=0000ff"); send("**C:bpm=120,ph=0,bpb=4,beat=0"); run(500);
+  CHECK(fieldLevel(RLD) == 0);
+  send("L*P:c=ffffff,d=170"); run(100); CHECK(fieldLevel(RLD) > 100 && FLD->px(0, 0).r > 100);
+  run(200); CHECK(fieldLevel(RLD) == 0 && FLD->px(0, 0).b > 0 && FLD->px(0, 0).r == 0);    // each back to its own base
 
   // every boundary leaves nothing of the last look behind
   resetAll(); send("L*A:i=solid,c=ff0000,m=200,am=2,an=2,ap=1"); send("**C:bpm=120,ph=0,bpb=4,beat=0"); run(200);
@@ -41,7 +47,7 @@ static void test_lifecycle() {
   CHECK(!gBeat.running);                                   // no display needs the clock any more
   run(50); CHECK(FLD->_seq == 0 && RLD->_seq == 0);        // the displays it held are given back to NORMAL
   send("L*A:i=solid,c=00ff00"); run(200); send("**X"); run(50);
-  CHECK(gContract[0].inShow && gContract[0].base == CB_DARK && FLD->_seq == 14);   // X: dark, still in its mode
+  CHECK(gContract[0].inShow && gContract[0].base == CB_DARK && FLD->_fx == 106);   // X: dark, still in its mode
   CHECK(fieldLevel(FLD) == 0 && fieldLevel(RLD) == 0);
   send("**M:v=idle"); run(50);
   CHECK(!gContract[0].inShow && gContract[0].base == CB_NONE && FLD->_seq == 0 && RLD->_seq == 0);
@@ -141,11 +147,17 @@ static void test_brightness_and_native() {
   CHECK(FLD->_liveBri == 160);                                            // b= on a native look does the same
   send("LFB:b=64"); CHECK(FLD->_liveBri == 40);
   // every boundary puts the owner's brightness back
+  // (S9: the native look was dimmed to a quarter a moment ago, so its way back up is an onset and
+  // waits for the window: 340 ms from the b=255 above. It is back well inside half a second.)
   send("**M:v=idle"); run(50);
-  CHECK(LogicEngineFLDDefault.fBri == 160 && FLD->_liveBri == 160 && FLD->_seq == 0);
+  CHECK(FLD->_seq == 0 && FLD->_liveBri < 160);
+  run(350);
+  CHECK(LogicEngineFLDDefault.fBri == 160 && FLD->_liveBri == 160 && FLD->_seq == 0 && !gBriTouched[0]);
   resetAll(); send("**M:v=show"); send("LFB:b=64"); CHECK(LogicEngineFLDDefault.fBri == 40);
-  send("LFX");                                      CHECK(LogicEngineFLDDefault.fBri == 160 && gContract[0].bright == 255);
-  send("LFB:b=64");                                 CHECK(LogicEngineFLDDefault.fBri == 40);    // X stays in show mode
+  send("LFX"); run(20);                             CHECK(LogicEngineFLDDefault.fBri == 160 && gContract[0].bright == 255);
+  // (the engine's brightness goes back once effect 106 is drawing the dark display: nobody sees it move)
+  send("LFB:b=64"); run(20);                        CHECK(gContract[0].bright == 64);           // X stays in show mode: B is still taken
+  CHECK(LogicEngineFLDDefault.fBri == 160);         // (effect 106 holds the dark display: nothing to dim in the engine)
   send("**M:v=show");                               CHECK(LogicEngineFLDDefault.fBri == 160 && gContract[0].bright == 255);
   // S6: B is honoured only in show mode. Outside a show it changes nothing, on any look.
   resetAll(); send("LFB:b=64"); send("L*B:v=10");
@@ -159,8 +171,10 @@ static void test_brightness_and_native() {
   resetAll(); send("**M:v=show"); send("LFB:b=64"); LogicEngineFLDDefault.fBri = 255; send("**M:v=idle");
   CHECK(LogicEngineFLDDefault.fBri == 255);
   // the ceiling is re-read at each boundary, from the owner's value, not from what B wrote
-  resetAll(); send("**M:v=show"); send("LFB:b=64"); send("**M:v=show"); send("LFA:i=solid,c=ffffff"); run(50);
-  CHECK(gContract[0].ceil == 160 && FLD->px(0, 0).r == 160);
+  resetAll(); send("**M:v=show"); send("LFB:b=64"); run(50); send("**M:v=show"); run(400);
+  CHECK(gContract[0].ceil == 160 && FLD->_liveBri == 160);
+  send("LFA:i=solid,c=ffffff"); run(50);
+  CHECK(FLD->px(0, 0).r == 160);
 
   // S7: a line naming a native code off the allow-list is dropped whole, live or scored
   const int off[] = { 25, 15, 18, 99, 100, 106, 300, -1, 3 };   // 3: Leia sets its own brightness, past the ceiling
@@ -201,15 +215,19 @@ static void test_live_hold() {
   run(200); send("LFA:c=00ff00"); send("LFA:s=7"); run(200);                    // two held patches merge
   CHECK(FLD->px(0, 0).g > 0 && gContract[0].speed == 7);
   send("LFA:i=solid,c=ff0000"); send("**X"); run(400);
-  CHECK(FLD->_seq == 14 && !gContract[0].holdPending);     // a reset drops the held look
-  CHECK(fieldLevel(FLD) == 0);
-  // an X and a new look cannot be used to flash faster than the hold allows
-  resetAll(); send("LFA:i=solid,c=ffffff"); run(20); send("LFX"); send("LFA:i=solid,c=ffffff"); run(100);
-  CHECK(FLD->_seq == 14);                                  // still held: 120 ms after the first look
-  run(60); CHECK(FLD->_seq == 106);
-  // S9: the hold alone lets the display light again 170 ms after it first lit. A dark-to-lit onset
-  // needs 340 ms from the one before, whichever lines caused the two.
-  KNOWN_BUG("S9: A, X, A relights 170 ms after the first onset", fieldLevel(FLD) * 2 < 160);
+  CHECK(fieldLevel(FLD) == 0 && !gContract[0].holdPending); // a reset drops the held look
+  // S9: an X and a new look cannot be used to flash a display. The second look is held by S4
+  // until 170 ms after the first, and it would then light the display 170 ms after it last lit:
+  // a dark-to-lit onset needs 340 ms from the one before, whichever lines caused the two. So the
+  // field gate holds it down to under a quarter of the ceiling until then. (This test used to
+  // assert the relight at 170 ms as correct.)
+  resetAll(); send("LFX"); run(500);
+  send("LFA:i=solid,c=ffffff"); run(20); CHECK(fieldLevel(FLD) == 160);    // the first onset, 10 ms in
+  send("LFX"); send("LFA:i=solid,c=ffffff"); run(100);
+  CHECK(fieldLevel(FLD) == 0 && gContract[0].holdPending);                 // S4: still held, 120 ms after the first look
+  run(60);  CHECK(gContract[0].base == CB_LOOK && fieldLevel(FLD) <= 40);  // 180 ms: applied, and held down by the gate
+  run(150); CHECK(fieldLevel(FLD) <= 40);                                  // 330 ms
+  run(30);  CHECK(fieldLevel(FLD) == 160);                                 // 360 ms: 340 after the first onset
   // the two displays hold separately
   resetAll(); send("LFA:i=solid,c=ff0000"); run(50); send("LRA:i=solid,c=00ff00"); run(20);
   CHECK(RLD->_seq == 106 && RLD->px(0, 0).g > 0);
@@ -357,31 +375,6 @@ static void test_review_r1_core() {
   }
 }
 
-// ---- L2: the host-silence watchdog ----
-static void test_watchdog() {
-  resetAll(); send("**M:v=show,wd=2"); send("LFA:i=solid,c=ff0000"); run(1900);
-  CHECK(FLD->_seq == 106);
-  send("**C:bpm=120,ph=0,beat=0"); run(1900); CHECK(FLD->_seq == 106);     // any addressed line keeps it alive
-  send("**Q"); run(1900);           CHECK(FLD->_seq == 106);               // a wildcard Q too, though it gets no reply
-  send("LRL:v=10"); run(1900);      CHECK(FLD->_seq == 106);               // a line for the other display: same board
-  send("P*A:i=solid"); send("HTX"); send("LFA:i=sol"); run(1900);          // another board's lines are not...
-  CHECK(FLD->_seq == 106);                                                 // ...but LFA:i=sol is well-formed and ours
-  send("xx"); send("L"); send("LFz"); run(2100);                           // malformed lines are not
-  CHECK(FLD->_seq == 0 && !gContract[0].inShow && !gContract[1].inShow && !gBeat.running);
-  // X leaves the watchdog armed
-  resetAll(); send("**M:v=show,wd=2"); send("LFA:i=solid,c=ff0000"); run(200); send("**X"); run(500);
-  CHECK(FLD->_seq == 14 && gContract[0].wdSec == 2);
-  CHECK(fieldLevel(FLD) == 0);
-  run(1600); CHECK(FLD->_seq == 0 && !gContract[0].inShow);                // dark, then given back
-  // no wd=: no watchdog, so a show stored in a WCB macro still plays
-  resetAll(); send("**M:v=show"); send("LFA:i=solid,c=ff0000"); run(60000, 100);
-  CHECK(FLD->_seq == 106 && gContract[0].inShow);
-  // idle disarms it
-  resetAll(); send("**M:v=show,wd=2"); send("**M:v=idle"); FLD->selectSequence(3); run(5000);
-  CHECK(FLD->_seq == 3);
-}
-
-// ---- flash, pulse and scan on the core's shared timing (S8 for pulse) ----
 // Full-field swings on the front display over `ms`: the level falls to <= lo and then rises to
 // >= hi. Returns how many, and in minGapMs the shortest time between two of them (sampled every
 // 10 ms, so a 340 ms cycle reads as 330 to 350). The gap is the safety number: a count over a
@@ -398,6 +391,175 @@ static int levelSwings(int lo, int hi, uint32_t ms, uint32_t& minGapMs) {
   }
   return rises;
 }
+// ---- S9 on this board, path by path (stage 2e tests it as a property; these are the plain cases) ----
+static void test_s9_paths() {
+  // B on a contract look: dimming is at once, and the way back up is an onset like any other
+  resetAll(); send("**M:v=show"); send("LFX"); run(500); send("LFA:i=solid,c=ffffff"); run(500);
+  send("LFB:b=0"); run(20);   CHECK(fieldLevel(FLD) == 0);
+  send("LFB:b=255"); run(20); CHECK(fieldLevel(FLD) == 160);               // 510 ms after the display last lit: at once
+  send("LFB:b=0"); run(20);   CHECK(fieldLevel(FLD) == 0);
+  send("LFB:b=255"); run(20); CHECK(fieldLevel(FLD) <= 40);                // 40 ms after it last lit: held down
+  run(280); CHECK(fieldLevel(FLD) <= 40);
+  run(40);  CHECK(fieldLevel(FLD) == 160);                                 // 340 ms after it last lit
+  // a look that only dims a little is not a blackout, and its way back is not an onset
+  send("LFB:b=220"); run(20); send("LFB:b=255"); run(20); CHECK(fieldLevel(FLD) == 160);
+
+  // P's b= is the overlay's own: it never reaches the base look, and a P the cool-down refuses changes nothing
+  resetAll(); send("**M:v=show"); send("LFA:i=solid,c=ffffff"); run(500);
+  send("LFP:c=ff0000,b=30,d=200"); run(60);
+  CHECK(FLD->px(0, 0).r == 160 * 30 / 255 && FLD->px(0, 0).g == 0 && gContract[0].bright == 255);
+  send("LFP:c=ff0000,b=255,d=200"); run(60);                               // 60 ms after the last accent: refused whole
+  CHECK(FLD->px(0, 0).r == 160 * 30 / 255 && gContract[0].pulseBright == 30);
+  run(200); CHECK(fieldLevel(FLD) == 160 && FLD->px(0, 0).g == 160);       // the white base look, as it was
+  // a P with no b= rides the look's level
+  resetAll(); send("**M:v=show"); send("LFA:i=solid,c=ffffff,b=128"); run(500); send("LFP:c=ff0000"); run(60);
+  CHECK(FLD->px(0, 0).r == 80 && FLD->px(0, 0).g == 0);
+
+  // giving a dark display back to the engine lights it: that waits for the window too
+  resetAll(); send("LFX"); run(500); send("LFA:i=solid,c=ffffff"); run(20); CHECK(fieldLevel(FLD) == 160);
+  send("LFX"); run(20); CHECK(fieldLevel(FLD) == 0);
+  send("LFM:v=idle"); run(50);
+  CHECK(fieldLevel(FLD) == 0 && FLD->_fx == 106 && gContract[0].base == CB_NONE);    // still dark, 80 ms after it last lit
+  run(230); CHECK(fieldLevel(FLD) == 0);
+  run(60);  CHECK(FLD->_fx == 0 && fieldLevel(FLD) == 160);                // NORMAL again, 340 ms after
+  // (X and idle in ONE pass never show a dark frame, so there is nothing to wait for)
+  resetAll(); send("LFX"); run(500); send("LFA:i=solid,c=ffffff"); run(20); send("LFX"); send("LFM:v=idle"); run(20);
+  CHECK(FLD->_fx == 0 && fieldLevel(FLD) == 160);
+  // ...and at once when there was no onset to wait out
+  resetAll(); send("LFA:i=solid,c=ffffff"); run(500); send("LFX"); run(500); send("LFM:v=idle"); run(20);
+  CHECK(FLD->_fx == 0 && fieldLevel(FLD) == 160);
+  // X is never the one that waits
+  resetAll(); send("LFX"); run(500); send("LFA:i=solid,c=ffffff"); run(20); send("LFX"); run(10);
+  CHECK(fieldLevel(FLD) == 0);
+
+  // B on a native look (the idle look of an armed show): the same rule, on the engine's brightness
+  resetAll(); send("**M:v=show"); run(500);
+  send("LFB:b=0"); run(20);   CHECK(FLD->_fx == 0 && FLD->_liveBri == 0);  // dimmer: at once
+  send("LFB:b=255"); run(20); CHECK(FLD->_liveBri == 160);                 // nothing lit lately: at once
+  send("LFB:b=0"); run(20);   CHECK(FLD->_liveBri == 0);
+  send("LFB:b=255"); run(100); CHECK(FLD->_liveBri == 0);                  // an onset 40 ms after the last: held
+  run(240); CHECK(FLD->_liveBri == 160);                                   // by 340 ms it is back
+  // a native section takes its brightness at the frame it starts, through the gate
+  resetAll(); send("LFX"); run(500); send("LFA:i=solid,c=ffffff"); run(20); send("LFX"); run(200);
+  send("LFA:i=native:4"); run(50);
+  CHECK(FLD->_fx == 106 && fieldLevel(FLD) == 0);                          // 220 ms after the display last lit: it waits, dark
+  run(120); CHECK(FLD->_fx == 4 && FLD->_liveBri == 160);                  // and starts when the window ends
+  // native lights-out is dark, never held, and what follows it is an onset
+  resetAll(); send("LFX"); run(500); send("LFA:i=solid,c=ffffff"); run(20); send("LFX"); run(180);
+  send("LFA:i=native:14"); run(20); CHECK(FLD->_fx == 14 && fieldLevel(FLD) == 0);
+  send("LFM:v=idle"); run(50);      CHECK(FLD->_fx == 14);                 // 250 ms after the last onset
+  run(100);                         CHECK(FLD->_fx == 0 && fieldLevel(FLD) == 160);
+  // A selection that is replaced before the engine draws it never happened: it is not on the
+  // LEDs, and the gate is not told it was. (Idle and then X, in one pass: the display stays
+  // dark, and the next look is not held back for an onset that never lit anything.)
+  resetAll(); send("LFX"); run(500); send("LFM:v=idle"); send("LFX"); run(20);
+  CHECK(FLD->_fx == 106 && fieldLevel(FLD) == 0 && FLD->_restarts[0] == 0);
+  send("LFA:i=solid,c=ffffff"); run(20); CHECK(fieldLevel(FLD) == 160);
+
+  // the pump across a seam: two scored sections a beat apart at 300 BPM, each accenting "its" beat
+  resetAll(); send("**M:v=show");
+  for (int b = 0; b < 16; b++) { char l[96]; snprintf(l, sizeof l, "LFA:i=solid,c=ffffff,at=%d,am=2,m=255,an=2,ap=%d", b, b % 2); send(l); }
+  send("**C:bpm=300,ph=0,bpb=4,beat=0");
+  uint32_t gap = 0; const int swings = levelSwings(16, 120, 3200, gap);
+  CHECK(swings >= 6 && swings <= 9 && gap >= 340);                         // it was 5 a second, 200 ms apart
+
+  // a scored A carries its look: without i= it is dropped, not stored as solid black
+  resetAll(); send("**M:v=show"); send("LFA:i=wipe,c=ff0000,at=0"); send("LFA:b=128,at=4"); send("LFA:i=bogus,c=00ff00,at=8");
+  CHECK(gContract[0].scoreLen == 1 && gScore[0][0].effect == CE_WIPE);
+
+  // section 10: one reply per display can wait; the front's goes first
+  { const char* q; uint8_t qn;
+    resetAll(); send("LFQ:r=0"); send("LRQ:r=2"); send("LFQ:r=0");
+    CHECK(contractReplyPending(q, qn) && memcmp(q, ";S0!LFq:", 8) == 0); contractReplyDone();
+    CHECK(contractReplyPending(q, qn) && memcmp(q, ";W2,;S0!LRq:", 12) == 0); contractReplyDone();
+    CHECK(!contractReplyPending(q, qn)); }
+}
+
+// ---- L6: a native command during a show ends the show on that display ----
+// "A native command" on this board is anything that starts a sequence the contract did not
+// select: @nT... through the Marcduino actions, the engine's own command handler, the web page.
+// They all end in the engine starting that sequence, which is what the layer is told
+// (contractEngineLatched). The tests stand in for the button with a direct selectSequence().
+static void test_native_takeover() {
+  // a live look: the button takes the display, and the show is over on it (not on the other one)
+  resetAll(); send("**M:v=show,wd=2"); send("L*A:i=solid,c=ff0000"); send("**C:bpm=120,ph=0,bpb=4,beat=0"); run(1000);
+  FLD->selectSequence(3); run(20);
+  CHECK(FLD->_fx == 3 && !gContract[0].inShow && gContract[0].base == CB_NONE);
+  CHECK(gContract[1].inShow && RLD->_fx == 106 && gBeat.running);          // the rear plays on, from the same clock
+  const int restarts0 = FLD->_restarts[0];
+  send("**Q"); run(1500); send("**Q"); run(1500); send("**L:v=1"); run(1500);
+  CHECK(FLD->_fx == 3 && FLD->_restarts[0] == restarts0);                  // nothing of the show comes back to it
+  run(2500);                                                               // the host goes away: the watchdog ends the REST
+  CHECK(!gContract[1].inShow && RLD->_fx == 0 && FLD->_fx == 3 && FLD->_restarts[0] == restarts0);   // ...and leaves the button's sequence alone
+
+  // a scored show with accents: the next accent, and the next section, do not take it back
+  resetAll(); send("**M:v=show"); send("LFA:i=solid,c=ff0000,at=0,am=2,m=200,ae=flash"); send("LFA:i=solid,c=00ff00,at=4");
+  send("**C:bpm=120,ph=0,bpb=4,beat=0"); run(1100);
+  FLD->selectSequence(3); run(20); CHECK(FLD->_fx == 3);
+  run(4000); CHECK(FLD->_fx == 3 && gContract[0].scoreLen == 0 && !gContract[0].pulseActive);
+  // until the host starts it again
+  send("LFM:v=show"); send("LFA:i=solid,c=0000ff"); run(50); CHECK(FLD->_fx == 106 && FLD->px(0, 0).b > 0);
+
+  // a dark display (X), a native section, an overlay outside a show: all of them are "held"
+  resetAll(); send("**M:v=show"); send("LFA:i=solid,c=ff0000"); run(300); send("LFX"); run(300);
+  FLD->selectSequence(5); run(20); CHECK(FLD->_fx == 5 && !gContract[0].inShow && gContract[0].base == CB_NONE);
+  resetAll(); send("**M:v=show"); send("LFA:i=native:4,b=128"); run(300); CHECK(FLD->_fx == 4 && FLD->_liveBri == 80);
+  FLD->selectSequence(5); run(20);
+  CHECK(FLD->_fx == 5 && !gContract[0].inShow && gContract[0].base == CB_NONE);
+  CHECK(FLD->_liveBri == 160 && LogicEngineFLDDefault.fBri == 160 && !gBriTouched[0]);   // and the owner's brightness is back
+  resetAll(); send("LFP:c=ffffff,d=2000"); run(100); CHECK(FLD->_fx == 106);
+  FLD->selectSequence(3); run(20); CHECK(FLD->_fx == 3 && !gContract[0].pulseActive);
+  const int normalStarts = FLD->_restarts[0];
+  run(3000); send("**M:v=show"); run(50);
+  CHECK(FLD->_fx == 3 && FLD->_restarts[0] == normalStarts);               // arming does not cut the button's sequence off
+
+  // the owner's brightness comes back through the gate when the show had dimmed a native look to dark
+  resetAll(); send("**M:v=show"); send("LFA:i=native:4,b=0"); run(500); CHECK(FLD->_liveBri == 0);
+  FLD->selectSequence(5); run(20); CHECK(FLD->_fx == 5 && FLD->_liveBri == 160);        // (nothing lit lately: at once)
+
+  // NOT a take-over: a timed native section that runs out (the engine falls back to NORMAL by itself)
+  resetAll(); send("**M:v=show"); send("LFA:i=native:4,at=0"); send("LFA:i=solid,c=00ff00,at=8");
+  send("**C:bpm=120,ph=0,bpb=4,beat=0"); run(500); CHECK(FLD->_fx == 4);
+  FLD->selectSequence(0); run(20);
+  CHECK(FLD->_fx == 0 && gContract[0].inShow && gContract[0].scoreLen == 2);
+  run(4000); CHECK(FLD->_fx == 106 && FLD->px(0, 0).g > 0);                // the next section takes the display
+  // NOT a take-over: the sequence the contract itself selected, and effect 106 coming back
+  resetAll(); send("**M:v=show"); send("LFA:i=native:4"); run(300); send("LFA:i=solid,c=ff0000"); run(300);
+  CHECK(gContract[0].inShow && FLD->_fx == 106);
+  // NOT covered: an armed show that has not begun. The display is the engine's own, and the
+  // engine starts sequences by itself there (RANDOM does it every few seconds), so a button
+  // cannot be told from that. The button plays; the show's first C, A or P then takes the display.
+  resetAll(); send("**M:v=show"); run(300); FLD->selectSequence(3); run(300);
+  CHECK(FLD->_fx == 3 && gContract[0].inShow);
+  send("LFA:i=solid,c=ff0000"); run(50); CHECK(FLD->_fx == 106);
+  // someone selecting effect 106 by its number gets the default look, not a frozen display
+  resetAll(); FLD->selectSequence(106); run(30); CHECK(FLD->_fx == 0 && FLD->_seq == 0);
+}
+
+// ---- L2: the host-silence watchdog ----
+static void test_watchdog() {
+  resetAll(); send("**M:v=show,wd=2"); send("LFA:i=solid,c=ff0000"); run(1900);
+  CHECK(FLD->_seq == 106);
+  send("**C:bpm=120,ph=0,beat=0"); run(1900); CHECK(FLD->_seq == 106);     // any addressed line keeps it alive
+  send("**Q"); run(1900);           CHECK(FLD->_seq == 106);               // a wildcard Q too, though it gets no reply
+  send("LRL:v=10"); run(1900);      CHECK(FLD->_seq == 106);               // a line for the other display: same board
+  send("P*A:i=solid"); send("HTX"); send("LFA:i=sol"); run(1900);          // another board's lines are not...
+  CHECK(FLD->_seq == 106);                                                 // ...but LFA:i=sol is well-formed and ours
+  send("xx"); send("L"); send("LFz"); run(2100);                           // malformed lines are not
+  CHECK(FLD->_seq == 0 && !gContract[0].inShow && !gContract[1].inShow && !gBeat.running);
+  // X leaves the watchdog armed
+  resetAll(); send("**M:v=show,wd=2"); send("LFA:i=solid,c=ff0000"); run(200); send("**X"); run(500);
+  CHECK(fieldLevel(FLD) == 0 && FLD->_fx == 106 && gContract[0].wdSec == 2);
+  run(1600); CHECK(FLD->_seq == 0 && !gContract[0].inShow);                // dark, then given back
+  // no wd=: no watchdog, so a show stored in a WCB macro still plays
+  resetAll(); send("**M:v=show"); send("LFA:i=solid,c=ff0000"); run(60000, 100);
+  CHECK(FLD->_seq == 106 && gContract[0].inShow);
+  // idle disarms it
+  resetAll(); send("**M:v=show,wd=2"); send("**M:v=idle"); FLD->selectSequence(3); run(5000);
+  CHECK(FLD->_seq == 3);
+}
+
+// ---- flash, pulse and scan on the core's shared timing (S8 for pulse) ----
 static void test_shared_effect_timing() {
   // pulse: the shared triangle breathe. 2 s a cycle at s=0, dark at its start, full at half way.
   resetAll(); send("LFA:i=pulse,c=ffffff,s=0"); run(10);
@@ -447,6 +609,8 @@ int main() {
   test_live_hold();
   test_score_verify_query();
   test_review_r1_core();
+  test_s9_paths();
+  test_native_takeover();
   test_watchdog();
   test_shared_effect_timing();
   if (gFails) { printf("%d CHECK(s) FAILED\n", gFails); return 1; }
