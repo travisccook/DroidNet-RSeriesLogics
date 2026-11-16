@@ -716,3 +716,163 @@ inline uint8_t fxTwinkleBright(int idx, uint32_t now, uint8_t speed) {
 }
 // ===== END FX HUE/TWINKLE HELPERS =====
 // ===== END BEAT-CLOCK + SCORE =====
+
+// ===== v1.3: PER-UNIT STATE AND LIFECYCLE (spec sections 3 S4/S6, 5 L1-L5) =====
+// One struct holds everything a show owns on one unit, and one function resets it, so a fork
+// cannot forget a field at a show boundary. A fork embeds ContractUnitState and adds only what
+// is specific to its board.
+
+// What the display falls back to when no overlay is up.
+//   CB_NONE    the contract holds nothing: the board's own native look runs. With inShow set this
+//              is "armed, nothing shown yet" (L1): M:v=show keeps the native idle look until the
+//              show's first C, live A or P, so the dome is not dark between Send and Play.
+//   CB_DARK    the show's dark baseline (after contractShowBegin(), or after X).
+//   CB_LOOK    a contract look.
+//   CB_NATIVE  a native:<code> look the contract selected.
+enum ContractBase : uint8_t { CB_NONE = 0, CB_DARK, CB_LOOK, CB_NATIVE };
+
+// One verb-A line as a patch: which keys it carried (has), and their values.
+enum : uint8_t { LP_EFFECT = 1, LP_COLOR = 2, LP_SPEED = 4, LP_BRIGHT = 8, LP_BEATMOD = 16, LP_AM = 32,
+                 LP_EVERY = 64 };
+struct ContractLookPatch {
+  uint8_t        has = 0;
+  ContractEffect effect = CE_NONE;
+  int            nativeCode = -1;
+  ContractRGB    color{0, 0, 0};
+  uint8_t        speed = 0, bright = 0, beatMod = 0, accentMode = 0;
+  uint8_t        every = 0;             // accentEveryPack(an, ap)
+};
+inline ContractLookPatch lookPatchFrom(const ContractParams& pr) {
+  ContractLookPatch lp;
+  if (pr.hasEffect)  { lp.has |= LP_EFFECT;  lp.effect = pr.effect; lp.nativeCode = pr.nativeCode; }
+  if (pr.hasColor)   { lp.has |= LP_COLOR;   lp.color = pr.color; }
+  if (pr.hasSpeed)   { lp.has |= LP_SPEED;   lp.speed = pr.speed; }
+  if (pr.hasBright)  { lp.has |= LP_BRIGHT;  lp.bright = pr.bright; }
+  if (pr.hasBeatMod) { lp.has |= LP_BEATMOD; lp.beatMod = pr.beatMod; }
+  if (pr.hasAm)      { lp.has |= LP_AM;      lp.accentMode = pr.accentMode; }
+  if (pr.hasAn || pr.hasAp) { lp.has |= LP_EVERY; lp.every = accentEveryFrom(pr); }
+  return lp;
+}
+// Merge a newer patch over an older one, key by key: the newest value of each key wins (S4).
+inline void lookPatchMerge(ContractLookPatch& into, const ContractLookPatch& newer) {
+  if (newer.has & LP_EFFECT)  { into.effect = newer.effect; into.nativeCode = newer.nativeCode; }
+  if (newer.has & LP_COLOR)   into.color = newer.color;
+  if (newer.has & LP_SPEED)   into.speed = newer.speed;
+  if (newer.has & LP_BRIGHT)  into.bright = newer.bright;
+  if (newer.has & LP_BEATMOD) into.beatMod = newer.beatMod;
+  if (newer.has & LP_AM)      into.accentMode = newer.accentMode;
+  if (newer.has & LP_EVERY)   into.every = newer.every;
+  into.has |= newer.has;
+}
+// L5: an A with no i= on a unit that has no look yet is i=solid.
+inline void lookPatchDefault(ContractLookPatch& lp, uint8_t base) {
+  if (!(lp.has & LP_EFFECT) && (base == CB_NONE || base == CB_DARK)) {
+    lp.has |= LP_EFFECT; lp.effect = CE_SOLID; lp.nativeCode = -1;
+  }
+}
+
+struct ContractUnitState {
+  bool           inShow = false;        // M:v=show armed (it stays set through X)
+  uint8_t        base = CB_NONE;        // ContractBase
+  // ---- the look
+  ContractEffect effect = CE_OFF;
+  int            nativeCode = -1;
+  ContractRGB    color{0, 0, 0};
+  uint8_t        speed = 128;
+  uint8_t        ceil = 255;            // S6: the board's OWN brightness when the unit was armed
+  uint8_t        bright = 255;          // b= / B: a FRACTION of ceil (255 = the ceiling). See contractLevel().
+  uint8_t        beatMod = 0, accentMode = 0;
+  uint8_t        accentEvery = 0;       // accentEveryPack(an, ap)
+  uint32_t       startMs = 0;
+  // ---- S4: the held live look
+  bool           holdPending = false;
+  ContractLookPatch held;
+  uint32_t       lastApplyMs = 0;       // SAFETY ANCHOR: survives a reset
+  // ---- the accent overlay
+  bool           pulseActive = false;
+  ContractEffect pulseFx = CE_NONE;
+  ContractRGB    pulseColor{255, 255, 255};
+  uint16_t       pulseDurMs = 0;
+  uint32_t       pulseStartMs = 0;
+  uint32_t       pulseLastMs = 0;       // SAFETY ANCHOR (the strobe cool-down): survives a reset
+  // ---- the score cursor, and the load check
+  uint8_t        scoreLen = 0;          // entries held (the table itself is the fork's, sized by its cap)
+  int8_t         curSection = -1;
+  bool           pinForward = false;    // C2: the last C was a nudge
+  int32_t        sectionStart = 0, sectionEnd = 0;
+  bool           overflow = false;      // an insert met a full table: the load is bad
+  uint8_t        loadOk = 0;            // 0 no V yet, 1 good, 2 bad. 2 survives until the next M:v=show.
+  int32_t        lastAccentBeat = BEAT_NONE;
+  // ---- L2
+  uint8_t        wdSec = 0;             // 0 = no watchdog
+};
+
+// S6: the level a brightness fraction gives under a ceiling. 255 is the ceiling itself, 128 half
+// of it, so a contract line can dim a board and can never make it brighter than its owner set it.
+inline uint8_t contractLevel(uint8_t ceil, uint8_t fraction) {
+  return (uint8_t)(((uint16_t)ceil * (uint16_t)fraction) / 255u);
+}
+
+// L1: THE show reset. `ceiling` is the board's own brightness right now (S6).
+// Two timers are kept on purpose: the strobe cool-down and the live-look hold. A reset that
+// cleared them would be a way straight through the photosensitivity cap (X, then P, repeated).
+// A failed load check (loadOk == 2) is kept too; contractOnShow() is what clears it.
+inline void contractShowReset(ContractUnitState& s, uint8_t ceiling) {
+  const uint32_t keepPulse = s.pulseLastMs, keepApply = s.lastApplyMs;
+  const uint8_t  keepOk = (s.loadOk == 2) ? 2 : 0;
+  s = ContractUnitState();
+  s.pulseLastMs = keepPulse; s.lastApplyMs = keepApply; s.loadOk = keepOk;
+  s.ceil = ceiling;
+}
+// M:v=show[,wd=<s>]: reset and arm. base stays CB_NONE: the native idle look keeps running until
+// contractShowBegin().
+inline void contractOnShow(ContractUnitState& s, uint8_t ceiling, uint8_t wdSec) {
+  contractShowReset(s, ceiling);
+  s.loadOk = 0; s.inShow = true; s.wdSec = wdSec;
+}
+// X: reset and black out. The unit stays in whichever mode it was in, with its watchdog armed.
+inline void contractOnStop(ContractUnitState& s, uint8_t ceiling) {
+  const bool was = s.inShow; const uint8_t wd = s.wdSec;
+  contractShowReset(s, ceiling);
+  s.inShow = was; s.wdSec = wd; s.base = CB_DARK;
+}
+// M:v=idle (and the watchdog, and a failed V): give the board back completely.
+inline void contractOnIdle(ContractUnitState& s, uint8_t ceiling) { contractShowReset(s, ceiling); }
+// The show's first C, live A or P on an armed unit: the baseline becomes dark. true: it changed
+// just now (the fork blacks the unit out before it applies the line). A scored A is NOT a start:
+// the load burst arrives between Send and Play.
+inline bool contractShowBegin(ContractUnitState& s) {
+  if (!s.inShow || s.base != CB_NONE) return false;
+  s.base = CB_DARK;
+  return true;
+}
+// L1: a board's beat clock stops at a reset only when NO unit on it needs it any more.
+inline bool contractUnitNeedsClock(const ContractUnitState& s) {
+  return s.scoreLen != 0 || s.base == CB_LOOK || s.base == CB_NATIVE;
+}
+
+// L2: has the host been silent for wd seconds? lastLineMs is the millis of the last well-formed
+// contract line addressed to the BOARD (any unit, any verb, an unanswered wildcard Q included).
+inline bool contractWatchdogExpired(const ContractUnitState& s, uint32_t lastLineMs, uint32_t nowMs) {
+  return s.inShow && s.wdSec != 0 && (uint32_t)(nowMs - lastLineMs) >= (uint32_t)s.wdSec * 1000UL;
+}
+
+// S4: live look changes. A live A that arrives less than STROBE_MIN_STATE_MS after the last
+// APPLIED one is held; lines held in the same window merge key by key.
+//   liveLookOffer()  true: apply `lp` now.  false: it was stored.
+//   liveLookDue()    poll every pass. true: `out` is the held look and its window has ended; apply it.
+inline bool liveLookOffer(ContractUnitState& s, const ContractLookPatch& lp, uint32_t nowMs) {
+  if (!s.holdPending && strobeCoolDownExpired(s.lastApplyMs, nowMs, STROBE_MIN_STATE_MS)) {
+    s.lastApplyMs = nowMs;
+    return true;
+  }
+  if (s.holdPending) lookPatchMerge(s.held, lp); else s.held = lp;
+  s.holdPending = true;
+  return false;
+}
+inline bool liveLookDue(ContractUnitState& s, uint32_t nowMs, ContractLookPatch& out) {
+  if (!s.holdPending || !strobeCoolDownExpired(s.lastApplyMs, nowMs, STROBE_MIN_STATE_MS)) return false;
+  out = s.held;
+  s.holdPending = false; s.lastApplyMs = nowMs;
+  return true;
+}

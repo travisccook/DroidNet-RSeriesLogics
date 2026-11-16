@@ -186,11 +186,111 @@ static void test_rate_floor_and_every_n() {
   CHECK(beatSectionProgress(4, 8, 4) == 0.0f);
 }
 
+// ---- L1 / L2 / L5: one reset, what survives it, armed-but-not-begun, the watchdog ----
+static void test_show_reset_and_watchdog() {
+  ContractUnitState s;
+  CHECK(!s.inShow && s.base == CB_NONE && s.effect == CE_OFF && s.bright == 255 && s.loadOk == 0);
+  s.effect = CE_SOLID; s.color = ContractRGB{9, 9, 9}; s.base = CB_LOOK; s.pulseActive = true;
+  s.holdPending = true; s.scoreLen = 5; s.curSection = 3; s.loadOk = 1; s.overflow = true;
+  s.lastAccentBeat = 42; s.wdSec = 15; s.pinForward = true; s.bright = 10; s.beatMod = 200;
+  s.accentMode = 2; s.accentEvery = 0x11; s.pulseLastMs = 7777; s.lastApplyMs = 8888;
+  contractOnShow(s, 160, 15);
+  CHECK(s.inShow && s.wdSec == 15 && s.ceil == 160 && s.bright == 255);
+  CHECK(s.base == CB_NONE);                                // L1: armed, and the native idle look keeps running
+  CHECK(s.effect == CE_OFF && s.color.r == 0 && !s.pulseActive && !s.holdPending);
+  CHECK(s.beatMod == 0 && s.accentMode == 0 && s.accentEvery == 0);
+  CHECK(s.scoreLen == 0 && s.curSection == -1 && s.loadOk == 0);
+  CHECK(!s.overflow && s.lastAccentBeat == BEAT_NONE && !s.pinForward);
+  CHECK(s.pulseLastMs == 7777 && s.lastApplyMs == 8888);   // the safety anchors are NOT reset
+  CHECK(contractShowBegin(s) && s.base == CB_DARK);        // the show's first C, live A or P
+  CHECK(!contractShowBegin(s));                            // once
+  s.scoreLen = 3;
+  contractOnStop(s, 140);                                  // X keeps the mode and the watchdog
+  CHECK(s.inShow && s.wdSec == 15 && s.base == CB_DARK && s.scoreLen == 0 && s.ceil == 140);
+  CHECK(!contractShowBegin(s));                            // already dark
+  CHECK(!contractWatchdogExpired(s, 1000, 15999));
+  CHECK(contractWatchdogExpired(s, 1000, 16000));
+  CHECK(contractWatchdogExpired(s, 0xFFFFF000u, 0xFFFFF000u + 15000u));   // across the millis wrap
+  contractOnIdle(s, 140);
+  CHECK(!s.inShow && s.wdSec == 0 && s.base == CB_NONE);
+  CHECK(!contractWatchdogExpired(s, 0, 4000000000UL));     // idle: never
+  CHECK(!contractShowBegin(s) && s.base == CB_NONE);       // a P outside a show overlays the native look (L3)
+  ContractUnitState noWd; contractOnShow(noWd, 200, 0);
+  CHECK(!contractWatchdogExpired(noWd, 0, 4000000000UL));  // no wd= on the wire: never
+
+  // a failed load check outlives the idle the unit ran on itself, and any X; M:v=show clears it
+  ContractUnitState f; contractOnShow(f, 200, 15); f.loadOk = 2;
+  contractOnIdle(f, 200);  CHECK(f.loadOk == 2 && !f.inShow);
+  contractOnStop(f, 200);  CHECK(f.loadOk == 2);
+  contractOnShow(f, 200, 0); CHECK(f.loadOk == 0);
+  ContractUnitState g; contractOnShow(g, 200, 0); g.loadOk = 1;
+  contractOnIdle(g, 200);  CHECK(g.loadOk == 0);           // a GOOD verdict does not outlive its show
+
+  // which units keep a board's clock alive at a reset
+  ContractUnitState c;
+  CHECK(!contractUnitNeedsClock(c));
+  c.base = CB_DARK;   CHECK(!contractUnitNeedsClock(c));
+  c.base = CB_LOOK;   CHECK(contractUnitNeedsClock(c));
+  c.base = CB_NATIVE; CHECK(contractUnitNeedsClock(c));
+  c.base = CB_NONE; c.scoreLen = 1; CHECK(contractUnitNeedsClock(c));
+
+  // S6: b= is a fraction of the ceiling
+  CHECK(contractLevel(160, 255) == 160 && contractLevel(160, 0) == 0 && contractLevel(160, 128) == 80);
+  CHECK(contractLevel(255, 200) == 200 && contractLevel(0, 255) == 0 && contractLevel(1, 254) == 0);
+  for (int c2 = 0; c2 <= 255; c2 += 5) for (int b = 0; b <= 255; b += 5) CHECK(contractLevel((uint8_t)c2, (uint8_t)b) <= c2);
+}
+
+// ---- S4: the live-look hold ----
+static void test_live_hold() {
+  ContractUnitState s; ContractLookPatch a, b, c, out;
+  a.has = LP_COLOR; a.color = ContractRGB{1, 0, 0};
+  b.has = LP_COLOR; b.color = ContractRGB{2, 0, 0};
+  c.has = LP_SPEED; c.speed = 77;
+  CHECK(liveLookOffer(s, a, 1000));                  // first look: now
+  CHECK(!liveLookOffer(s, a, 1100));                 // 100 ms later: held
+  CHECK(!liveLookOffer(s, b, 1150));                 // same key: the newest value wins
+  CHECK(!liveLookOffer(s, c, 1160));                 // another key: merged in, the colour is kept
+  CHECK(!liveLookDue(s, 1169, out));
+  CHECK(liveLookDue(s, 1170, out));
+  CHECK(out.has == (LP_COLOR | LP_SPEED) && out.color.r == 2 && out.speed == 77);
+  CHECK(!liveLookDue(s, 1171, out));                 // delivered once
+  CHECK(!liveLookOffer(s, a, 1200));                 // the window restarted at 1170
+  CHECK(!liveLookOffer(s, b, 1500));                 // a look is waiting: a later one joins it, it does not jump the queue
+  CHECK(liveLookDue(s, 1500, out) && out.color.r == 2);
+  CHECK(!liveLookOffer(s, a, 1600) && liveLookDue(s, 1670, out));
+  CHECK(liveLookOffer(s, a, 1840));                  // nothing waiting, window over: now
+  contractOnStop(s, 255);                            // a reset drops the held look but keeps the window
+  CHECK(!liveLookOffer(s, a, 1900));
+  contractOnIdle(s, 255);
+  CHECK(!liveLookDue(s, 5000, out));                 // ...and the look held across the reset is gone
+  ContractUnitState boot;                            // never applied anything: lastApplyMs == 0
+  CHECK(!liveLookOffer(boot, a, 100));               // the first 170 ms after power-on: held
+  ContractUnitState boot2;
+  CHECK(liveLookOffer(boot2, a, 170));
+
+  ContractLookPatch lp = lookPatchFrom(P("LFA:i=solid,c=0a0b0c,s=9,m=7"));
+  CHECK(lp.has == (LP_EFFECT | LP_COLOR | LP_SPEED | LP_BEATMOD) && lp.effect == CE_SOLID);
+  CHECK(lp.color.g == 0x0b && lp.speed == 9 && lp.beatMod == 7);
+  lp = lookPatchFrom(P("LFA:am=2,an=2,ap=1,b=40"));
+  CHECK(lp.has == (LP_AM | LP_EVERY | LP_BRIGHT) && lp.accentMode == 2 && lp.every == 0x11 && lp.bright == 40);
+  lp = lookPatchFrom(P("LFA:i=native:4"));
+  CHECK(lp.effect == CE_NATIVE && lp.nativeCode == 4);
+  // L5: an A with no i= on a unit with no look is i=solid; on a unit with a look it is a patch
+  ContractLookPatch np = lookPatchFrom(P("LFA:c=ff0000"));
+  ContractLookPatch n1 = np; lookPatchDefault(n1, CB_NONE);   CHECK((n1.has & LP_EFFECT) && n1.effect == CE_SOLID);
+  ContractLookPatch n2 = np; lookPatchDefault(n2, CB_DARK);   CHECK((n2.has & LP_EFFECT) && n2.effect == CE_SOLID);
+  ContractLookPatch n3 = np; lookPatchDefault(n3, CB_LOOK);   CHECK(!(n3.has & LP_EFFECT));
+  ContractLookPatch n4 = np; lookPatchDefault(n4, CB_NATIVE); CHECK(!(n4.has & LP_EFFECT));
+  ContractLookPatch n5 = lookPatchFrom(P("LFA:i=wipe")); lookPatchDefault(n5, CB_NONE); CHECK(n5.effect == CE_WIPE);
+}
+
 int main() {
   test_saturating_params();
   test_bpm_range_and_hold();
   test_seed_kinds_and_edge();
   test_rate_floor_and_every_n();
+  test_show_reset_and_watchdog();
+  test_live_hold();
   printf("%s  %d/%d checks passed\n", g_fail ? "FAILURES" : "OK", g_total - g_fail, g_total);
   return g_fail ? 1 : 0;
 }
