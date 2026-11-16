@@ -21,14 +21,13 @@ static int gFails = 0;
 #define CHECK(cond) do { if (!(cond)) { printf("FAIL :%d  %s\n", __LINE__, #cond); gFails++; } } while (0)
 
 static void send(const char* afterBang) {
-  ParsedContract p;
-  if (contractParse(afterBang, p)) applyContract(p);
+  contractHandleLine(afterBang);
 }
 // Wipe every fork-owned global so each scenario starts from power-on state.
 static void resetAll() {
-  for (uint8_t u = 0; u < 2; u++) { gContract[u] = ContractUnit{}; gScoreLen[u] = 0; }
+  for (uint8_t u = 0; u < 2; u++) gContract[u] = ContractUnitState();
+  mockEngineReset();
   gBeat = BeatClock{};
-  gShowMode = false;
   gLevel = 0;
 }
 // Advance the board one tick and report whether an accent was armed ON THIS TICK.
@@ -50,7 +49,7 @@ int main() {
     "L*A:i=chase,c=3B82F6,s=200", "L*A:i=wipe,c=3B82F6,s=200", "L*A:i=gradient,s=200",
     "L*A:i=colorcycle,s=200", "L*A:i=twinkle,c=3B82F6,s=200",
   };
-  for (const char* s : cmds) { ParsedContract p; if (contractParse(s, p)) applyContract(p); }
+  for (const char* s : cmds) contractHandleLine(s);
 
   LogicEngineRenderer r;
   for (unsigned id = 1; id <= 2; id++) {
@@ -60,13 +59,13 @@ int main() {
   contractSetup();
 
   // replicate the MARCDUINO_ACTION(Contract, !, ...) body verbatim to type-check it
-  { ParsedContract q; if (contractParse(Marcduino::getCommand(), q)) applyContract(q); }
+  contractHandleLine(Marcduino::getCommand());
 
   // behavioral guard: a scored NATIVE section must thread its native code into the
   // ScoreEntry (regression guard for the PSI/Flthy drift where nativeCode stayed -1).
-  { ParsedContract p; if (contractParse("LFA:i=native:104,at=64", p)) applyContract(p); }
-  if (gScoreLen[0] == 0 || gScore[0][gScoreLen[0] - 1].nativeCode != 104
-      || gScore[0][gScoreLen[0] - 1].effect != CE_NATIVE) {
+  contractHandleLine("LFA:i=native:104,at=64");
+  if (gContract[0].scoreLen == 0 || gScore[0][gContract[0].scoreLen - 1].nativeCode != 104
+      || gScore[0][gContract[0].scoreLen - 1].effect != CE_NATIVE) {
     printf("FAIL: RSeries scored native section did not thread nativeCode\n");
     return 1;
   }
@@ -83,7 +82,7 @@ int main() {
   _mock_millis = 100000;
   send("**C:bpm=120,ph=0,bpb=4,beat=0");
   send("LFA:i=solid,c=3b82f6,at=0,am=1,m=200,ae=flash,ac=ffffff,ad=200");
-  CHECK(gScoreLen[0] == 1);
+  CHECK(gContract[0].scoreLen == 1);
   CHECK(gScore[0][0].accentFx == CE_FLASH);
   CHECK(gScore[0][0].accentColor.r == 0xff && gScore[0][0].accentColor.g == 0xff
         && gScore[0][0].accentColor.b == 0xff);
@@ -406,11 +405,12 @@ int main() {
   _mock_millis = 700000;
   {
     uint32_t t0 = _mock_millis;                        // 120 BPM => 500 ms/beat
-    send("**C:bpm=120,ph=0,bpb=4,beat=0");
     send("**M:v=show");
     send("LFA:i=solid,c=FF0000,at=0");
     send("LFA:i=solid,c=800080,at=200");
-    CHECK(gScoreLen[0] == 2);                          // non-vacuous: show A really did load…
+    send("**C:bpm=120,ph=0,bpb=4,beat=0");             // v1.3 C3: the seed follows the load (a show
+                                                       // reset stops a clock no unit needs, L1)
+    CHECK(gContract[0].scoreLen == 2);                          // non-vacuous: show A really did load…
     _mock_millis = t0 + 210 * 500 + 10;
     contractTick();
     CHECK(gContract[0].curSection == 1);               // …and is genuinely PLAYING its 2nd
@@ -418,19 +418,21 @@ int main() {
           && gContract[0].color.b == 0x80);            //    section (purple) at beat 210
 
     send("**M:v=show");                                // ---- the Resend. No stop. ----
-    if (gScoreLen[0] != 0)
+    if (gContract[0].scoreLen != 0)
       printf("FAIL: M:v=show did not CLEAR the score (%d entries survived). Studio's Resend "
              "sends v=show and then the new sections, so show B is now merging into show A.\n",
-             gScoreLen[0]);
-    CHECK(gScoreLen[0] == 0);
+             gContract[0].scoreLen);
+    CHECK(gContract[0].scoreLen == 0);
     send("LFA:i=solid,c=00FF00,at=100");
     send("LFA:i=solid,c=0000FF,at=300");
-    CHECK(gScoreLen[0] == 2);                          // exactly show B's two sections…
-    CHECK(gScoreLen[0] == 2 && gScore[0][0].atBeat == 100 && gScore[0][0].color.g == 0xFF);
-    CHECK(gScoreLen[0] == 2 && gScore[0][1].atBeat == 300 && gScore[0][1].color.b == 0xFF);
+    CHECK(gContract[0].scoreLen == 2);                          // exactly show B's two sections…
+    CHECK(gContract[0].scoreLen == 2 && gScore[0][0].atBeat == 100 && gScore[0][0].color.g == 0xFF);
+    CHECK(gContract[0].scoreLen == 2 && gScore[0][1].atBeat == 300 && gScore[0][1].color.b == 0xFF);
     //                                                 // …so not ONE of show A's survived
 
-    _mock_millis = t0 + 250 * 500 + 10;                // beat 250
+    _mock_millis = t0 + 250 * 500;                     // beat 250
+    send("**C:bpm=120,ph=0,bpb=4,beat=250");           // v1.3: the resend's reset stopped the clock; Play re-seeds
+    _mock_millis += 10;
     contractTick();
     CHECK(gContract[0].curSection == 0);               // B's GREEN@100 is the active section
     CHECK(gContract[0].color.g == 0xFF && gContract[0].color.r == 0x00
@@ -450,24 +452,25 @@ int main() {
   _mock_millis = 800000;
   {
     uint32_t t0 = _mock_millis;
-    send("**C:bpm=120,ph=0,bpb=4,beat=0");
     send("**M:v=show");
     for (int i = 0; i < SCORE_MAX; i++) {
       char c[48]; snprintf(c, sizeof(c), "LFA:i=solid,c=FF0000,at=%d", i * 10);
       send(c);
     }
-    CHECK(gScoreLen[0] == SCORE_MAX);                  // non-vacuous: the table really IS full
+    CHECK(gContract[0].scoreLen == SCORE_MAX);                  // non-vacuous: the table really IS full
 
     send("**M:v=show");                                // ---- the Resend. No stop. ----
     send("LFA:i=solid,c=00FF00,at=5");
     send("LFA:i=solid,c=0000FF,at=15");
-    if (gScoreLen[0] != 2)
+    if (gContract[0].scoreLen != 2)
       printf("FAIL: after a resend onto a FULL score the table holds %d entries, not show B's "
              "2 — scoreInsert() silently dropped show B at the %d-entry cap.\n",
-             gScoreLen[0], SCORE_MAX);
-    CHECK(gScoreLen[0] == 2);
+             gContract[0].scoreLen, SCORE_MAX);
+    CHECK(gContract[0].scoreLen == 2);
 
-    _mock_millis = t0 + 6 * 500 + 10;                  // beat 6 => show B's GREEN@5
+    _mock_millis = t0 + 6 * 500;                       // beat 6 => show B's GREEN@5
+    send("**C:bpm=120,ph=0,bpb=4,beat=6");             // v1.3 C3: the seed follows the load
+    _mock_millis += 10;
     contractTick();
     CHECK(gContract[0].color.g == 0xFF && gContract[0].color.r == 0x00);
     if (gContract[0].color.r == 0xFF)

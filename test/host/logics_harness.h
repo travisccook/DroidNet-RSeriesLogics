@@ -17,15 +17,11 @@ static int gFails = 0, gKnown = 0;   // gKnown: defects still marked KNOWN_BUG
 #define KNOWN_BUG(tag, cond) do { if (cond) { printf("XPASS %s :%d  fixed: make it a CHECK\n", tag, __LINE__); gFails++; } \
                                   else { printf("XFAIL %s\n", tag); gKnown++; } } while (0)
 
-static void send(const char* afterBang) {
-  ParsedContract p;
-  if (contractParse(afterBang, p)) applyContract(p);
-}
+static void send(const char* afterBang) { contractHandleLine(afterBang); }
 // Power-on state for every fork-owned global and for the mock engine.
 static void resetAll() {
-  for (uint8_t u = 0; u < 2; u++) { gContract[u] = ContractUnit{}; gScoreLen[u] = 0; }
-  gBeat = BeatClock{};
-  gShowMode = false;
+  for (uint8_t u = 0; u < 2; u++) gContract[u] = ContractUnitState();
+  gBeat = BeatClock();
   gLevel = 0;
   mockEngineReset();
   _mock_millis = 100000;

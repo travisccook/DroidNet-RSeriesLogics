@@ -12,6 +12,7 @@
 #   1e. the generated parity vectors (vectors/contract_vectors.json) match the core
 #   2. ContractLogics.h firmware-layer type-check against a mock of the engine API
 #   2b. the 2026-11-15 review findings as behaviour tests (known defects marked)
+#   2c. contract v1.3 on the RSeries layer, on the mock engine
 #   3. Marcduino command-buffer width guard (the v1.2 accent keys push a scored line past 63)
 #   4. parser fuzz + differential (ASan/UBSan, deterministic)
 #   5. native #LEBRI brightness parser unit tests
@@ -100,6 +101,8 @@ stage 2  "ContractLogics.h firmware type-check" "$CXX" -std=c++17 -Wall -Wextra 
 # yet is a KNOWN_BUG line: it prints XFAIL and keeps the suite green, and FAILS the suite the
 # moment it starts passing, so the fix has to turn it into a CHECK.
 stage 2b "review regressions (known defects marked)" "$CXX" -std=c++17 -Wall -Wextra test_review_regressions.cpp
+# Contract v1.3 as it appears on the two logic displays (lifecycle, clock, brightness, score, query).
+stage 2c "contract v1.3 on the RSeries layer (mock engine)" "$CXX" -std=c++17 -Wall -Wextra test_contract_logics_v13.cpp
 
 if want 3; then
 echo "[3] Marcduino command-buffer width guard"

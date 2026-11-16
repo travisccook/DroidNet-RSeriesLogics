@@ -58,12 +58,12 @@ int main() {
   resetAll(); send("L*P:c=ffffff,d=120"); run(50);
   CHECK(FLD->_seq == 106 && FLD->px(0, 0).r > 0);          // the pulse shows
   run(1000);
-  KNOWN_BUG("F4a pulse on a booted board leaves effect 106 up", FLD->_seq == 0);
+  CHECK(FLD->_seq == 0);
   resetAll(); send("L*A:i=solid,c=ff0000"); run(200); send("**X"); run(200); send("L*P:c=ffffff"); run(1000);
-  KNOWN_BUG("F4b pulse after X brings the old look back", FLD->_seq == 14);
+  CHECK(FLD->_seq == 14);
   resetAll(); send("L*A:i=solid,c=00ff00"); run(200);
   send("**M:v=show"); send("L*A:i=solid,c=0000ff,at=8"); send("**C:bpm=120,ph=2000,bpb=4,beat=0"); run(500);
-  KNOWN_BUG("F4c score load shows the previous look before its first beat", FLD->_seq == 14);
+  CHECK(FLD->_seq == 14);
 
   // F5: an accent on a scored native section restarts the native sequence every beat.
   resetAll(); send("**M:v=show"); send("LFA:i=native:4,at=0,am=2,m=200,ae=flash");
@@ -105,7 +105,7 @@ int main() {
 
   // S5: P's d= is bounded.
   resetAll(); send("L*A:i=solid,c=ff0000"); run(200); send("L*P:c=ffffff,d=-1"); run(3000);
-  KNOWN_BUG("S5 P d=-1 holds the overlay for 49 days", !gContract[0].pulseActive);
+  CHECK(!gContract[0].pulseActive);
 
   if (gFails) { printf("%d CHECK(s) FAILED\n", gFails); return 1; }
   printf("review regressions OK (%d known defect(s) still open)\n", gKnown);
