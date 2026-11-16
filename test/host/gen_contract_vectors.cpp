@@ -74,6 +74,20 @@ static void gate(uint32_t nowMs, int level, bool reset = false, int newCeil = -1
         allowed, gGate.fieldLit ? 1 : 0, gGate.fieldRef, (long long)gGate.fieldOnsetMs });
 }
 
+// Verb L's hold (CA1.6) is a state machine too. One row is one pass of a fork's loop at nowMs:
+// reset = 1 runs the show reset first; v >= 0 is an L line with that level (contractLevelOffer),
+// v = -1 is a pass with no line; then contractLevelDue(). `changed`: what it returned (the unit's
+// level changed in this pass). `want`: the last L since the reset.
+static int gLevelSeq = 0;
+static ContractUnitState gLevelUnit;
+static void levelSeq() { gLevelSeq++; gLevelUnit = ContractUnitState(); }
+static void levelPass(uint32_t nowMs, int v, bool reset = false) {
+  if (reset) contractShowReset(gLevelUnit, 255);
+  if (v >= 0) contractLevelOffer(gLevelUnit, (uint8_t)v);
+  const bool changed = contractLevelDue(gLevelUnit, nowMs);
+  row({ gLevelSeq, reset ? 1 : 0, (long long)nowMs, v, changed ? 1 : 0, gLevelUnit.level, gLevelUnit.levelWant, (long long)gLevelUnit.levelMs });
+}
+
 // A C line with all four keys, received at seedMs.
 static void seedClock(BeatClock& bc, int bpm, uint32_t ph, int bpb, long beat, uint32_t seedMs) {
   ContractParams pr;
@@ -400,6 +414,32 @@ int main(int argc, char** argv) {
         lum = rgb == white ? level : (rgb == 0x00ff00u ? level * 183 / 256 : (rgb == red ? level * 54 / 256 : level * 19 / 256));
         frame(now, fx, rgb, fx == 0 ? 0 : level, fx == 0 ? 0 : lum, (r >> 22) % 23 == 0);
       }
+    }
+  }
+  // CA1.6: verb L. A higher level is taken at most once in 340 ms; a fall at once. STATEFUL.
+  group("contractLevelHold", "\"seq\", \"reset\", \"nowMs\", \"v\"", "\"changed\", \"level\", \"want\", \"levelMs\"");
+  // 1. 255 and 128 by turns every 50 ms (the PSI review's finding), a pass every 10 ms.
+  levelSeq();
+  for (uint32_t t = 1000; t < 3000; t += 10) levelPass(t, t % 50 == 0 ? ((t / 50) % 2 ? 255 : 128) : -1);
+  // 2. A raise that waits, a newer one that replaces it, a fall that cancels it, the edges of the window.
+  levelSeq();
+  levelPass(1000, 200); levelPass(1010, 100); levelPass(1020, 255); levelPass(1100, 180); levelPass(1339, -1); levelPass(1340, -1);
+  levelPass(1341, -1); levelPass(1400, 255); levelPass(1450, 90); levelPass(1679, 91); levelPass(1680, 91); levelPass(2019, 92);
+  levelPass(2020, -1); levelPass(2021, 92); levelPass(2100, 0); levelPass(2110, 1); levelPass(2360, -1); levelPass(2361, -1);
+  // 3. The show reset clears the level and a raise that waits, and keeps the time.
+  levelSeq();
+  levelPass(1000, 255); levelPass(1020, 0, true); levelPass(1030, 255); levelPass(1339, -1); levelPass(1340, -1);
+  levelPass(1400, 128); levelPass(1500, 255); levelPass(1510, -1, true); levelPass(1700, -1); levelPass(1710, 64);
+  // 4. A walk: levels and times from a fixed LCG, across the millis() wrap.
+  for (uint32_t start : { 5000u, 4294960000u }) {
+    levelSeq();
+    uint32_t x = 0x1234567u + start, now = start;
+    for (int i = 0; i < 400; i++) {
+      x = x * 1664525u + 1013904223u;
+      const uint32_t r = x >> 8;
+      now += (r % 7 == 0) ? 10 + (r >> 4) % 500 : 10 + (r >> 4) % 40;
+      const int v = (r >> 12) % 3 == 0 ? -1 : ((r >> 14) % 5 == 0 ? 255 : ((r >> 14) % 5 == 1 ? 0 : (int)((r >> 17) % 256)));
+      levelPass(now, v, (r >> 20) % 61 == 0);
     }
   }
   // CA1.3: the integer clock, piece by piece, so a mirror can be pinned on each step.

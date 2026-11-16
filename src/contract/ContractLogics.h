@@ -55,7 +55,6 @@ static const uint8_t  SCORE_MAX = 32;              // sections per unit (contrac
 // Per-unit contract state. Index 0 = FLD (engine id 1), 1 = RLD (engine id 2).
 static ContractUnitState gContract[2];
 static BeatClock  gBeat;                // ONE beat clock for both displays (verb C)
-static uint8_t    gLevel = 0;           // verb L energy 0..255 (drives CE_METER)
 static ScoreEntry gScore[2][SCORE_MAX];
 static uint32_t   gLastLineMs = 0;      // L2: the last well-formed contract line addressed to this board
 // Section 10: the pending reply to a Q, one per display (a host may query both in one burst),
@@ -521,7 +520,7 @@ static inline void _draw(LogicEngineRenderer& r, const ContractUnitState& g, Con
       break;
     }
     case CE_METER: {
-      int lit = (H * (int)gLevel) / 255;                                 // fill from bottom
+      int lit = (H * (int)g.level) / 255;                                // fill from bottom (the level: contractLevelOffer)
       CRGB c = _scaled(col.r || col.g || col.b ? col : ContractRGB{0, 255, 0}, bri);
       for (int y = 0; y < H; y++)
         for (int x = 0; x < W; x++)
@@ -769,7 +768,9 @@ inline void applyContractToUnit(uint8_t u, const ParsedContract& p, uint16_t lin
       break;
     }
     case CV_LEVEL:
-      if (pr.hasLevel) gLevel = pr.level;         // drives CE_METER (contract meter reads gLevel)
+      // Drives the meter look. A higher level is taken at most once in 340 ms (S9 for a part of
+      // the field: contractLevelDue); one that has to wait is taken by contractTick().
+      if (pr.hasLevel) { contractLevelOffer(g, pr.level); contractLevelDue(g, now); }
       break;
     case CV_BRIGHT:
       if (!contractBrightHonoured(g)) break;      // S6: only in show mode (a host sends B after M:v=show);
@@ -843,6 +844,7 @@ inline void contractTick() {
     if (contractWatchdogExpired(g, gLastLineMs, now)) _boundary(u, 'i', 0);   // L2: the host went away
     ContractLookPatch lp;
     if (liveLookDue(g, now, lp)) _applyLook(u, lp, now);                      // S4: a held live look's window ended
+    contractLevelDue(g, now);                                                 // S9: a held raise of the meter's level
     if (gRise[u] && (uint32_t)(now - gRiseMs[u]) >= ENGINE_FRAME_MS) {        // S9: the engine has drawn the brighter native
       contractNativeLevel(g, gRiseLevel[u], now); gRise[u] = false;           // look by now: tell the gate it lit
       if (gRiseLevel[u] != 0) contractLookForced(g, contractLookSigNative((int)gEngineSeq[u]), now);

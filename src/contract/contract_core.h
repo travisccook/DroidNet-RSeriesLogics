@@ -963,6 +963,8 @@ struct ContractAnchors {
   // ---- S4 for every path: the look gate (contractLookGate)
   uint32_t       lookSig = 0;           // the look the field last showed lit (contractLookSig); 0: none yet
   uint32_t       lookMs = 0;            // when it changed to that, or the field last lit or got brighter in it
+  // ---- S9 for a region: verb L (contractLevelOffer)
+  uint32_t       levelMs = 0;           // when the unit's level last went UP
 };
 // What a show reset clears: everything about a unit but its anchors (CA1.6: a struct of its own,
 // so that the reset assigns this part and never has to save the other).
@@ -999,6 +1001,9 @@ struct ContractShowState {
   int32_t        lastAccentBeat = BEAT_NONE;
   // ---- L2
   uint8_t        wdSec = 0;             // 0 = no watchdog
+  // ---- verb L: the level a meter look shows (contractLevelOffer)
+  uint8_t        level = 0;             // what the unit shows
+  uint8_t        levelWant = 0;         // the last L. Above `level`: a raise that waits for the window (contractLevelDue)
 };
 // A unit: its anchors, and its show state. Every field is reached as before (s.base, s.fieldLit).
 struct ContractUnitState : ContractAnchors, ContractShowState {};
@@ -1076,6 +1081,36 @@ inline bool liveLookDue(ContractUnitState& s, uint32_t nowMs, ContractLookPatch&
   return true;
 }
 
+// ===== S9 FOR A REGION: VERB L (core revision CA1.6) =====
+// The field gate measures a unit's whole field. A meter that follows verb L moves PART of it: on
+// a PSI, L:v=255 and L:v=128 by turns light and darken the top half of the panel, and the gate,
+// which dims whole frames and sees a mean that stays legal, let that through ten times a second.
+// The limit belongs on the level itself, and it is the same for every fork:
+//   * a level that is no higher than the one the unit shows is taken at once (a fall is never
+//     delayed, like a blackout);
+//   * a HIGHER level is taken at most once in 340 ms per unit. One that comes sooner is kept, the
+//     newest of them, and becomes the level when the window ends, unless a level that is no
+//     higher than the unit's has arrived by then.
+// So no part of a meter goes from dark to lit more than three times a second through L.
+// A fork wires two calls and reads one field:
+//     verb L:        contractLevelOffer(state, v);         (it only notes what the host wants)
+//     every pass:    contractLevelDue(state, now);         (its tick, or just before it draws)
+//     the meter:     state.level, in place of the fork's own copy of v.
+// contractLevelDue() returns true when state.level changed, for a fork that derives something
+// from it then. A fork that wants a fall on the LEDs before its next pass calls it right after
+// the offer as well. The level and what the host wants are cleared by the show reset; the time
+// is an anchor.
+inline void contractLevelOffer(ContractUnitState& s, uint8_t v) { s.levelWant = v; }
+inline bool contractLevelDue(ContractUnitState& s, uint32_t nowMs) {
+  if (s.levelWant == s.level) return false;
+  if (s.levelWant > s.level) {
+    if (!strobeCoolDownExpired(s.levelMs, nowMs, 2 * STROBE_MIN_STATE_MS)) return false;   // a raise inside the window: it waits
+    s.levelMs = nowMs;
+  }
+  s.level = s.levelWant;
+  return true;
+}
+
 // ===== v1.3 S9: ONE LIMIT FOR EVERY PATH — THE FIELD GATE =====
 // S2 bounds the beat-driven changes and S4 the live looks, each on its own path. A host can still
 // make a display flash by combining paths, or through one that has no limit of its own: a relight
@@ -1109,7 +1144,7 @@ inline bool liveLookDue(ContractUnitState& s, uint32_t nowMs, ContractLookPatch&
 // with texture (a sparkle, a chase) moves its field mean by less than a step from frame to frame;
 // docs/CHANGING_THE_CORE.md has the measured share of frames the gate holds back, look by look.
 //
-// Seventeen bytes of state a unit, with the look gate's. It survives every reset (contractShowReset).
+// Seventeen bytes of state a unit, with the look gate's (and four for verb L's time). It survives every reset (contractShowReset).
 inline uint8_t contractFieldStep(uint8_t ceil) { return ceil < 10 ? (uint8_t)2 : (uint8_t)(ceil / 10u + 1u); }
 
 // TWO MEASURES, ONE GATE (core revision CA1.4). The brightest channel cannot see colour: a field

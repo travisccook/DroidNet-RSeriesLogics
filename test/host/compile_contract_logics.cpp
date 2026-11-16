@@ -30,7 +30,6 @@ static void resetAll() {
   gLastLineMs = 0;
   mockEngineReset();
   gBeat = BeatClock{};
-  gLevel = 0;
   contractSetup();
 }
 // Advance the board one tick and report whether an accent was armed ON THIS TICK.

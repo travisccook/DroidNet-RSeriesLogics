@@ -1145,7 +1145,69 @@ static void test_ca14() {
   contractNativeStarted(n, 14, 0, 4000); CHECK(!n.fieldLit && n.fieldRef == 0 && n.lookSig == sigBefore);
 }
 
+// ---- CA1.6: verb L. A higher level at most once in 340 ms; a fall at once ----
+// One pass of a fork's loop with an L line in it: the offer, then the due.
+static bool levelLine(ContractUnitState& s, uint8_t v, uint32_t now) { contractLevelOffer(s, v); return contractLevelDue(s, now); }
+static void test_level_hold() {
+  ContractUnitState s;
+  CHECK(s.level == 0 && s.levelWant == 0 && !contractLevelDue(s, 1000));
+  // the first raise is taken (nothing went up in the last 340 ms), and so is every fall
+  CHECK(levelLine(s, 255, 1000) && s.level == 255 && s.levelMs == 1000);
+  CHECK(levelLine(s, 128, 1050) && s.level == 128 && s.levelMs == 1000);
+  CHECK(!levelLine(s, 128, 1060) && s.level == 128);                       // the same again: nothing changed
+  // a raise inside the window waits; the newest wins; a level no higher than the unit's cancels it
+  CHECK(!levelLine(s, 255, 1100) && s.level == 128 && s.levelWant == 255);
+  CHECK(!contractLevelDue(s, 1339) && s.level == 128);
+  CHECK(!levelLine(s, 200, 1200) && s.levelWant == 200);
+  CHECK(contractLevelDue(s, 1340) && s.level == 200 && s.levelMs == 1340);
+  CHECK(!contractLevelDue(s, 1341) && !contractLevelDue(s, 5000));         // once
+  CHECK(!levelLine(s, 255, 1400) && s.levelWant == 255);
+  CHECK(levelLine(s, 90, 1450) && s.level == 90);                          // a fall while a raise waits: the raise is gone
+  CHECK(!contractLevelDue(s, 1680) && !contractLevelDue(s, 5000) && s.level == 90);
+  CHECK(!levelLine(s, 91, 1679) && contractLevelDue(s, 1680) && s.level == 91 && s.levelMs == 1680);   // a raise is any rise
+  // the offer alone changes nothing a meter shows: the level moves in contractLevelDue()
+  contractLevelOffer(s, 0); CHECK(s.level == 91); CHECK(contractLevelDue(s, 1681) && s.level == 0 && s.levelMs == 1680);
+  // the PSI finding: 255 and 128 by turns every 50 ms. The level goes up at most once in 340 ms.
+  { ContractUnitState m; uint32_t lastUp = 0; int ups = 0; uint8_t was = 0;
+    for (uint32_t t = 1000; t < 11000; t += 10) {
+      if (t % 50 == 0) contractLevelOffer(m, (t / 50) % 2 ? 255 : 128);
+      contractLevelDue(m, t);
+      if (m.level > was) { if (ups) CHECK(t - lastUp >= 2 * STROBE_MIN_STATE_MS); lastUp = t; ups++; }
+      was = m.level;
+    }
+    CHECK(ups >= 20 && ups <= 30); }                                       // it does still move: 2 to 3 times a second
+  // any stream of levels at any times: two rises of the level are never under 340 ms apart,
+  // a level no higher than the unit's is always taken at once, and a raise waits only inside the window
+  { ContractUnitState m; uint32_t now = 500, lastUp = 0; bool any = false; uint8_t was = 0;
+    for (int i = 0; i < 200000; i++) {
+      now += gateRnd(4) ? 1u + gateRnd(30) : 1u + gateRnd(900);
+      if (gateRnd(3)) {
+        const uint8_t v = (uint8_t)(gateRnd(4) ? gateRnd(256) : (gateRnd(2) ? 255 : 0));
+        const uint8_t before = m.level;
+        const bool changed = levelLine(m, v, now);
+        if (v <= before) CHECK(m.level == v && changed == (v != before));
+        else CHECK((m.level == v && changed) || (m.level == before && !changed && m.levelWant == v));
+      } else contractLevelDue(m, now);
+      if (m.levelWant > m.level) CHECK(now - m.levelMs < 2 * STROBE_MIN_STATE_MS);
+      CHECK(m.levelWant >= m.level);
+      if (m.level > was) { if (any) CHECK(now - lastUp >= 2 * STROBE_MIN_STATE_MS); lastUp = now; any = true; }
+      was = m.level;
+      if (gateRnd(500) == 0) {                                             // a show boundary: the level goes, the time stays
+        const uint32_t ms = m.levelMs;
+        if (gateRnd(2)) contractOnStop(m, 255); else contractOnShow(m, 255, 0);
+        CHECK(m.level == 0 && m.levelWant == 0 && m.levelMs == ms);
+        was = 0;
+      }
+    } }
+  // the reset is not a way round it: X, then the same raise again
+  ContractUnitState x;
+  levelLine(x, 255, 1000); contractOnStop(x, 255);
+  CHECK(x.level == 0 && !levelLine(x, 255, 1020) && x.level == 0);
+  CHECK(!contractLevelDue(x, 1339) && contractLevelDue(x, 1340) && x.level == 255);
+}
+
 int main() {
+  test_level_hold();
   test_integer_clock();
   test_field_gate();
   test_ca14();

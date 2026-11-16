@@ -829,6 +829,40 @@ static void test_ca16() {
   }
   CHECK(!redEarly && redAt != 0 && redAt - whiteAt >= 170 && redAt - whiteAt <= 200);
   CHECK(fullAt != 0 && fullAt - whiteAt >= 340 && fullAt - whiteAt <= 370);   // and it lights 340 ms after the white did
+
+  // VERB L MOVES PART OF THE FIELD (the PSI review's finding, the same on this board): a meter
+  // with L:v=255 and L:v=128 by turns every 50 ms blinked its top half ten times a second, and
+  // the whole-field gate saw a mean that stayed legal. A higher level is now taken at most once
+  // in 340 ms per display (contractLevelOffer); a lower one at once.
+  resetAll(); run(500);
+  send("**M:v=show"); send("L*A:i=meter,c=ffffff"); send("L*L:v=128"); run(600);
+  CHECK(FLD->px(0, 9).r == 160 && FLD->px(0, 5).r == 160 && FLD->px(0, 4).r == 0 && FLD->px(0, 0).r == 0);   // half: the bottom five rows
+  { bool top = false; uint32_t lastOn = 0; int ons = 0; uint32_t closest = 0xFFFFFFFFu;
+    for (uint32_t t = 0; t < 5000; t += 10) {
+      if (t % 50 == 0) send((t / 50) % 2 ? "L*L:v=128" : "L*L:v=255");
+      _mock_millis += 10; frame();
+      const bool now = FLD->px(3, 0).r != 0;                // the top row
+      if (now && !top) { if (ons && _mock_millis - lastOn < closest) closest = _mock_millis - lastOn; lastOn = _mock_millis; ons++; }
+      top = now;
+      CHECK(FLD->px(3, 9).r == 160);                        // the bottom half never moves
+    }
+    CHECK(ons >= 10 && ons <= 15 && closest >= 340); }      // it still follows, 2 to 3 times a second (it was 10)
+  // a fall is at once, and a raise that had to wait lands when the window ends (the newest wins)
+  resetAll(); run(500);
+  send("**M:v=show"); send("LFA:i=meter,c=ffffff"); run(400);
+  send("LFL:v=255"); run(100);                                              // up, at T
+  CHECK(FLD->px(0, 0).r == 160 && gContract[0].level == 255 && gContract[1].level == 0);   // each display has its own level
+  send("LFL:v=0"); run(10); CHECK(fieldLevel(FLD) == 0);                    // down: at once
+  send("LFL:v=255"); run(10); send("LFL:v=128"); run(100);                  // up again 110 ms after T: it waits. Then a newer raise.
+  CHECK(FLD->px(0, 0).r == 0 && FLD->px(0, 9).r == 0 && gContract[0].level == 0);
+  run(100); CHECK(fieldLevel(FLD) == 0);                                    // T + 320
+  run(30); CHECK(FLD->px(0, 9).r == 160 && FLD->px(0, 0).r == 0 && gContract[0].level == 128);   // T + 350: the newest one, 128
+  // X clears the level, and is not a way round the window
+  send("LFL:v=255"); run(400); CHECK(gContract[0].level == 255);            // (up at T + 350 + 340)
+  send("LFL:v=0"); send("LFL:v=255"); run(350); CHECK(gContract[0].level == 255);   // up again: the last rise, at U
+  send("LFX"); send("LFA:i=meter,c=ffffff"); send("LFL:v=255"); run(100);
+  CHECK(gContract[0].level == 0 && fieldLevel(FLD) == 0);                   // U + 100: the reset cleared the level; the raise waits
+  run(300); CHECK(gContract[0].level == 255 && FLD->px(0, 0).r == 160);     // U + 400
 }
 
 int main() {
