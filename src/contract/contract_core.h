@@ -948,8 +948,8 @@ inline void lookPatchDefault(ContractLookPatch& lp, uint8_t base) {
 }
 
 // THE SAFETY ANCHORS of a unit: what no reset clears (contractShowReset). They are a struct of
-// their own so that the reset keeps them as one piece: a field added here is kept without
-// anyone having to remember it.
+// their own, and the reset assigns the other one (ContractShowState): a field added here is
+// kept without anyone having to remember it.
 struct ContractAnchors {
   uint32_t       lastApplyMs = 0;       // S4: when the unit's look last changed (a live A, a section)
   uint32_t       pulseLastMs = 0;       // the strobe cool-down
@@ -964,7 +964,9 @@ struct ContractAnchors {
   uint32_t       lookSig = 0;           // the look the field last showed lit (contractLookSig); 0: none yet
   uint32_t       lookMs = 0;            // when it changed to that, or the field last lit or got brighter in it
 };
-struct ContractUnitState : ContractAnchors {
+// What a show reset clears: everything about a unit but its anchors (CA1.6: a struct of its own,
+// so that the reset assigns this part and never has to save the other).
+struct ContractShowState {
   bool           inShow = false;        // M:v=show armed (it stays set through X)
   uint8_t        base = CB_NONE;        // ContractBase
   // ---- the look
@@ -998,6 +1000,8 @@ struct ContractUnitState : ContractAnchors {
   // ---- L2
   uint8_t        wdSec = 0;             // 0 = no watchdog
 };
+// A unit: its anchors, and its show state. Every field is reached as before (s.base, s.fieldLit).
+struct ContractUnitState : ContractAnchors, ContractShowState {};
 
 // S6: the level a brightness fraction gives under a ceiling. 255 is the ceiling itself, 128 half
 // of it, so a contract line can dim a board and can never make it brighter than its owner set it.
@@ -1011,10 +1015,8 @@ inline uint8_t contractLevel(uint8_t ceil, uint8_t fraction) {
 // (X, then P, repeated). A failed load check (loadOk == 2) is kept too; contractOnShow() is what
 // clears it.
 inline void contractShowReset(ContractUnitState& s, uint8_t ceiling) {
-  const ContractAnchors keep = s;
   const uint8_t keepOk = (s.loadOk == 2) ? 2 : 0;
-  s = ContractUnitState();
-  static_cast<ContractAnchors&>(s) = keep;
+  static_cast<ContractShowState&>(s) = ContractShowState();   // the anchors are not touched
   s.loadOk = keepOk;
   s.ceil = ceiling;
 }
