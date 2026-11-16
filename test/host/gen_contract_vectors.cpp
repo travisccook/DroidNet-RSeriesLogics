@@ -126,6 +126,12 @@ int main(int argc, char** argv) {
   printf(",\n    \"NATIVE_SPEED_LOGICS\": [");
   { bool first = true; for (int c = 0; c < 256; c++) if (nativeAllowedLogics(c)) { printf("%s%d", first ? "" : ", ", nativeSpeedLogics(c)); first = false; } }
   printf("]");
+  // CA1.6: the logics codes whose whole field stays within a tenth of the level the gate is told
+  // (nativeSteadyLogics). The rest of NATIVE_ALLOW_LOGICS moves its own light: after one of
+  // those the field is taken as dark and just lit, and a brighter B reaches it at its next start.
+  printf(",\n    \"NATIVE_STEADY_LOGICS\": [");
+  { bool first = true; for (int c = 0; c < 256; c++) if (nativeSteadyLogics(c)) { printf("%s%d", first ? "" : ", ", c); first = false; } }
+  printf("]");
   // CA1.5, the shared timing: the shortest cycle of pulse and of wipe, and flash's shortest state.
   printf(",\n    \"FX_CYCLE_MIN_MS\": %lu,\n    \"FX_FLASH_MIN_STATE_MS\": %lu", (unsigned long)FX_CYCLE_MIN_MS, (unsigned long)FX_FLASH_MIN_STATE_MS);
   // S9: the gate's step is more than a tenth of the ceiling and at least 2 levels: ceil / DIV + 1.
