@@ -959,6 +959,7 @@ struct ContractAnchors {
   bool           fieldLit = false;
   uint8_t        fieldRefY = 0;         // the same two for the field's LUMINANCE (a colour change moves it
   bool           fieldLitY = false;     // while the brightest channel stays where it was)
+  bool           fieldRise = false;     // a measure lit and none has fallen since: the other may light with it (CA1.6)
   // ---- S4 for every path: the look gate (contractLookGate)
   uint32_t       lookSig = 0;           // the look the field last showed lit (contractLookSig); 0: none yet
   uint32_t       lookMs = 0;            // when it changed to that, or the field last lit or got brighter in it
@@ -1106,7 +1107,7 @@ inline bool liveLookDue(ContractUnitState& s, uint32_t nowMs, ContractLookPatch&
 // with texture (a sparkle, a chase) moves its field mean by less than a step from frame to frame;
 // docs/CHANGING_THE_CORE.md has the measured share of frames the gate holds back, look by look.
 //
-// Sixteen bytes of state a unit, with the look gate's. It survives every reset (contractShowReset).
+// Seventeen bytes of state a unit, with the look gate's. It survives every reset (contractShowReset).
 inline uint8_t contractFieldStep(uint8_t ceil) { return ceil < 10 ? (uint8_t)2 : (uint8_t)(ceil / 10u + 1u); }
 
 // TWO MEASURES, ONE GATE (core revision CA1.4). The brightest channel cannot see colour: a field
@@ -1119,23 +1120,40 @@ inline uint8_t contractFieldStep(uint8_t ceil) { return ceil < 10 ? (uint8_t)2 :
 // from the last onset, or the last brightening, in either. The step is the same for both.
 // A fork with single-colour LEDs has one measure and uses contractFieldGate(): the same rule
 // with lum = level.
+//
+// ONE RISE IS ONE ONSET (core revision CA1.6). A coloured field that fades in crosses the step
+// in its brightest channel before it does in luminance (green at a tenth of the ceiling has a
+// luminance of seven hundredths). With the shared time alone the second crossing came inside the
+// first one's 340 ms, was held, and the fade stalled there and then jumped. It is the same rise.
+// So: a frame in which a measure lights (an onset the rule allowed) and no measure falls begins
+// a RISE (fieldRise), and the rise lasts until a measure falls: goes from lit to not lit. While
+// it lasts, the measure that is not lit yet may light without waiting. A second onset in any one
+// measure still needs a fall in that measure first; the fall ends the rise, and the onset that
+// follows waits its 340 ms from the shared time. So for an observer of either measure nothing
+// changed: two of its onsets are never less than 340 ms apart. (Why, for luminance: between two
+// of its onsets it fell, and that ended the rise. To light again inside the window it needs a
+// new rise, begun after the fall by an onset of the level that waited for the window itself:
+// 340 ms after the shared time, which is no earlier than luminance's last peak.)
+// A frame in which one measure lights and another falls begins no rise: two looks that trade
+// places could otherwise hand the rise to each other for ever.
 inline uint8_t contractLuminance(uint8_t r, uint8_t g, uint8_t b) {
   return (uint8_t)(((uint16_t)54u * r + (uint16_t)183u * g + (uint16_t)19u * b) >> 8);
 }
 // One measure's part of the rule, in two halves. `open`: the 340 ms had passed when this frame
-// began. ASK: what the measure allows for x (nothing changes).
+// began, or the unit is in a rise. ASK: what the measure allows for x (nothing changes).
 inline uint8_t _fieldAsk(bool lit, uint8_t ref, uint8_t x, uint8_t step, bool open) {
   if (lit || open || x < ref || (uint8_t)(x - ref) < step) return x;      // lit already; an onset in time; texture
   return (uint8_t)(ref + step - 1u);                                      // held
 }
 // TELL: x, which the rule allowed, is what the unit shows. Sets `brighter` when the field lit,
-// or got brighter while lit, in this measure.
-inline void _fieldTell(bool& lit, uint8_t& ref, uint8_t x, uint8_t step, bool& brighter) {
+// or got brighter while lit, in this measure. `rise` goes through both measures of a frame: it
+// starts as fieldRise (0 or 1), an onset sets bit 0, and a fall makes it 2, where it stays.
+inline void _fieldTell(bool& lit, uint8_t& ref, uint8_t x, uint8_t step, bool& brighter, uint8_t& rise) {
   if (lit) {
     if (x > ref) { ref = x; brighter = true; }                            // still rising
-    else if ((uint8_t)(ref - x) >= step) { lit = false; ref = x; }        // a fall: never delayed
+    else if ((uint8_t)(ref - x) >= step) { lit = false; ref = x; rise = 2; }      // a fall: never delayed
   } else if (x < ref) ref = x;                                            // the trough
-  else if ((uint8_t)(x - ref) >= step) { lit = true; ref = x; brighter = true; }   // an onset
+  else if ((uint8_t)(x - ref) >= step) { lit = true; ref = x; brighter = true; rise |= 1; }   // an onset
 }
 // The field lit, or got brighter while lit: both of the gate's times move. The second is the
 // look gate's (below). A field that lights changes its look, whatever look it lights in, and a
@@ -1145,12 +1163,12 @@ inline void _fieldBrighter(ContractUnitState& s, uint32_t nowMs) { s.fieldOnsetM
 // The gate for a frame with both measures, in its two halves.
 // ASK: the SCALE for a frame drawn at (level, lum). 255: as drawn. Otherwise every channel of
 // every LED is multiplied by scale / 255, rounding down. Nothing changes.
-//     open  = 340 ms have passed since fieldOnsetMs            (decided once, before either measure)
+//     open  = fieldRise, or 340 ms have passed since fieldOnsetMs   (decided once, before either measure)
 //     aL    = what the rule allows of level,  aY = what it allows of lum
 //     scale = min(255, floor(aL * 255 / level), floor(aY * 255 / lum))
 inline uint8_t contractFieldAsk(const ContractUnitState& s, uint8_t level, uint8_t lum, uint32_t nowMs) {
   const uint8_t step = contractFieldStep(s.ceil);
-  const bool open = strobeCoolDownExpired(s.fieldOnsetMs, nowMs, 2 * STROBE_MIN_STATE_MS);
+  const bool open = s.fieldRise || strobeCoolDownExpired(s.fieldOnsetMs, nowMs, 2 * STROBE_MIN_STATE_MS);
   const uint8_t aL = _fieldAsk(s.fieldLit, s.fieldRef, level, step, open);
   const uint8_t aY = _fieldAsk(s.fieldLitY, s.fieldRefY, lum, step, open);
   uint8_t scale = 255;
@@ -1162,12 +1180,14 @@ inline uint8_t contractFieldAsk(const ContractUnitState& s, uint8_t level, uint8
 // as drawn, or scaled as it said). Both measures record it. Not what was drawn: a frame one
 // measure held down is dimmer in the other one too, and a peak that never reached the LEDs must
 // not be remembered. fieldOnsetMs = lookMs = now when either measure lit or got brighter.
+// fieldRise after the frame: false when a measure fell in it; else true when one lit; else as it was.
 inline void contractFieldTell(ContractUnitState& s, uint8_t level, uint8_t lum, uint32_t nowMs) {
   const uint8_t step = contractFieldStep(s.ceil);
-  bool brighter = false;
-  _fieldTell(s.fieldLit, s.fieldRef, level, step, brighter);
-  _fieldTell(s.fieldLitY, s.fieldRefY, lum, step, brighter);
+  bool brighter = false; uint8_t rise = s.fieldRise;
+  _fieldTell(s.fieldLit, s.fieldRef, level, step, brighter, rise);
+  _fieldTell(s.fieldLitY, s.fieldRefY, lum, step, brighter, rise);
   if (brighter) _fieldBrighter(s, nowMs);
+  s.fieldRise = rise == 1;
 }
 // Both in one call, for a fork that does not measure its frame again after scaling it: the
 // scaled frame is recorded as floor(level * scale / 255) and floor(lum * scale / 255). (A fork
@@ -1183,7 +1203,8 @@ inline uint8_t contractFieldScale(ContractUnitState& s, uint8_t level, uint8_t l
   return scale;
 }
 // ASK WITHOUT TELLING: what contractFieldGate() would return for `level` now, with no change to
-// the state. For light a fork cannot scale after the fact, see below.
+// the state. For light a fork cannot scale after the fact, see below. (Such light always waits
+// for the window: a rise is for frames a fork draws and measures, contractFieldAsk().)
 inline uint8_t contractFieldAllowed(const ContractUnitState& s, uint8_t level, uint32_t nowMs) {
   const uint8_t step = contractFieldStep(s.ceil);
   const bool open = strobeCoolDownExpired(s.fieldOnsetMs, nowMs, 2 * STROBE_MIN_STATE_MS);
@@ -1325,7 +1346,7 @@ inline void contractNativeStarted(ContractUnitState& s, int code, uint8_t level,
 // A fork does not call this for its idle look, if that is steady light: a show starts from it.
 inline void contractNativeEnded(ContractUnitState& s, bool known, uint32_t nowMs) {
   s.fieldOnsetMs = nowMs;
-  if (!known) { s.fieldLit = s.fieldLitY = false; s.fieldRef = s.fieldRefY = 0; }
+  if (!known) { s.fieldLit = s.fieldLitY = s.fieldRise = false; s.fieldRef = s.fieldRefY = 0; }
 }
 
 // A scored section is due: may it be applied now? true: it may, and this is the unit's last look

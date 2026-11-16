@@ -780,7 +780,59 @@ static void test_shared_effect_timing() {
   CHECK(FLD->px(0, 0).r == 160); run(20); CHECK(FLD->px(0, 0).r == 0);
 }
 
+// ---- CA1.6: coloured looks through the gate, and what the property stage found on the way ----
+static void test_ca16() {
+  // A COLOURED LOOK THAT FADES IN IS NOT HELD (the defect: its brightest channel crossed the
+  // gate's step before its luminance did, the second crossing was taken for a second onset, and
+  // the fade stalled for 340 ms and then jumped). Green, as Studio's frame parity found it.
+  for (const char* line : { "LFA:i=pulse,c=22c55e,s=0", "LFA:i=pulse,c=116530,s=0", "LFA:i=pulse,c=ff0000,s=0", "LFA:i=wipe,c=a855f7,s=128" }) {
+    resetAll();
+    LogicEngineFLDDefault.fBri = 255; FLD->_liveBri = 255;
+    run(1000);                                              // the owner's brightness has been up for a while
+    send("**M:v=show"); send(line);
+    int last = -1, longest = 0, same = 0, jump = 0;
+    for (int i = 0; i < 100; i++) {                         // the first second: a rise from black
+      _mock_millis += 10; frame();
+      const int level = fieldLevel(FLD);
+      if (level == last && level != 0) { if (++same > longest) longest = same; } else same = 0;
+      if (last >= 0 && level - last > jump) jump = level - last;
+      last = level;
+    }
+    CHECK(longest < 12);                                    // no frame stands for 120 ms in a rise (it stood for 340)
+    CHECK(jump < 40);                                       // and nothing jumps (it jumped by half the look's level)
+  }
+  // THE HAND-OVER THAT MAY HAVE LIT (found by the property stage, in the code since CA1.4). The
+  // owner's brightness goes back on the idle look (a rise the layer writes), the engine draws
+  // it, and a contract look takes the display before the layer has told the gate. It is told the
+  // safe half: the field may have lit just now. That is a change of look too: the contract's
+  // colour does not follow the white frame 10 ms later. The frame that is up stays for 170 ms.
+  resetAll(); run(500);
+  send("LFM:v=show"); run(400);
+  send("LFB:b=0"); run(400);                                // the armed display's idle look, dimmed to nothing
+  CHECK(fieldLevel(FLD) == 0 && FLD->_fx == 0);
+  _mock_millis += 5;
+  send("LFM:v=idle");                                       // the owner's brightness goes back: written now
+  CHECK(gRise[0]);
+  _mock_millis += 5; frame();                               // the engine draws it. The gate is not told yet.
+  CHECK(fieldLevel(FLD) == 160 && gRise[0]);
+  const uint32_t whiteAt = _mock_millis;
+  send("LFA:i=solid,c=ff0000");
+  bool redEarly = false; uint32_t redAt = 0, fullAt = 0;
+  for (int i = 0; i < 60; i++) {
+    _mock_millis += 10; frame();
+    const CRGB c = FLD->px(3, 4);
+    const bool red = c.r != 0 && c.g == 0;
+    if (red && !redAt) redAt = _mock_millis;
+    if (red && _mock_millis - whiteAt < 170) redEarly = true;
+    if (red && c.r == 160 && !fullAt) fullAt = _mock_millis;
+    if (!redAt) CHECK(c.r == 160 && c.g == 160 && c.b == 160);          // the white frame stays up meanwhile
+  }
+  CHECK(!redEarly && redAt != 0 && redAt - whiteAt >= 170 && redAt - whiteAt <= 200);
+  CHECK(fullAt != 0 && fullAt - whiteAt >= 340 && fullAt - whiteAt <= 370);   // and it lights 340 ms after the white did
+}
+
 int main() {
+  test_ca16();
   test_lifecycle();
   test_clock();
   test_brightness_and_native();

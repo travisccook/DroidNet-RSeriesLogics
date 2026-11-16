@@ -51,7 +51,13 @@ static void frame(uint32_t nowMs, int effect, uint32_t rgb, int level, int lum, 
   const uint8_t scale = drawn ? contractFieldScale(gFrame, (uint8_t)level, (uint8_t)lum, nowMs) : 255;
   row({ gFrameSeq, gFrame.ceil, restart ? 1 : 0, (long long)nowMs, effect, (long long)rgb, level, lum,
         drawn ? 1 : 0, scale, gFrame.fieldLit ? 1 : 0, gFrame.fieldRef, gFrame.fieldLitY ? 1 : 0, gFrame.fieldRefY,
-        (long long)gFrame.fieldOnsetMs, (long long)gFrame.lookMs });
+        (long long)gFrame.fieldOnsetMs, (long long)gFrame.lookMs, gFrame.fieldRise ? 1 : 0 });
+}
+// A frame of one colour at k / 255 of its brightness, measured as a fork measures it.
+static void frameOf(uint32_t nowMs, int effect, uint32_t rgb, int k, bool restart = false) {
+  const uint8_t r = (uint8_t)(((rgb >> 16) & 255u) * (uint32_t)k / 255u), g = (uint8_t)(((rgb >> 8) & 255u) * (uint32_t)k / 255u),
+                b = (uint8_t)((rgb & 255u) * (uint32_t)k / 255u);
+  frame(nowMs, effect, rgb, r > g ? (r > b ? r : b) : (g > b ? g : b), contractLuminance(r, g, b), restart);
 }
 
 // The S9 field gate is a state machine, so its group is sequences, not independent rows.
@@ -296,7 +302,7 @@ int main(int argc, char** argv) {
   }
   // CA1.4: two measures and the look gate, a frame at a time. STATEFUL, like contractFieldGate.
   group("contractFrameGate", "\"seq\", \"ceil\", \"restart\", \"nowMs\", \"effect\", \"rgb\", \"level\", \"lum\"",
-        "\"drawn\", \"scale\", \"lit\", \"ref\", \"litY\", \"refY\", \"onsetMs\", \"lookMs\"");
+        "\"drawn\", \"scale\", \"lit\", \"ref\", \"litY\", \"refY\", \"onsetMs\", \"lookMs\", \"rise\"");
   {
     const int solid = (int)CE_SOLID, pulse = (int)CE_PULSE, wipe = (int)CE_WIPE;
     const uint32_t white = 0xffffffu, blue = 0x0000ffu, red = 0xff0000u;
@@ -332,6 +338,43 @@ int main(int argc, char** argv) {
     frameSeq(200);
     frame(1000, solid, white, 200, 200); frame(1050, solid, blue, 200, 14); frame(1230, solid, white, 200, 200);
     frame(1240, solid, white, 200, 200); frame(1339, solid, white, 200, 200); frame(1340, solid, white, 200, 200);
+    // CA1.6: ONE RISE IS ONE ONSET.
+    // 8. Coloured looks that fade in from black, 20 ms a frame, the window open: the brightest
+    //    channel crosses the step first, luminance some frames later, in the same rise. No frame
+    //    is held. Then down again (each measure falls in its own frame, and the first fall ends
+    //    the rise), and up a second time 340 ms and more after the peak.
+    for (uint32_t rgb : { 0x116530u, 0x22c55eu, 0xff0000u, 0x00ff00u, 0x0000ffu, 0xffffffu }) for (int c : { 255, 160 }) {
+      frameSeq(c);
+      uint32_t t = 1000;
+      for (int cycle = 0; cycle < 2; cycle++) {
+        for (int k = 0; k <= c; k += 5, t += 20) frameOf(t, pulse, rgb, k);
+        for (int k = c; k >= 0; k -= 5, t += 20) frameOf(t, pulse, rgb, k);
+      }
+    }
+    // 9. The same fade begun inside the window (a white frame, black, and the fade 60 ms later):
+    //    held under the step until 340 ms after the white, in whichever measure crosses first.
+    for (uint32_t rgb : { 0x116530u, 0xff0000u }) {
+      frameSeq(255);
+      frame(1000, solid, white, 255, 255); frame(1050, 0, 0, 0, 0);
+      for (int k = 0; k <= 255; k += 5) frameOf(1110u + (uint32_t)k * 2u, pulse, rgb, k);
+    }
+    // 10. What the shared time is for: white by a colour change, black, white again 20 ms later.
+    //     The second white is a second onset in luminance, and in level too. Held.
+    frameSeq(255);
+    frame(1000, solid, blue, 255, 18); frame(2000, solid, white, 255, 255); frame(2010, 0, 0, 0, 0);
+    for (uint32_t t = 2030; t <= 2350; t += 10) frame(t, solid, white, 255, 255);
+    // 11. A fall ends the rise. One look whose luminance alone moves (a gradient between blue
+    //     and white, say): up in the level's rise, down, and up again 100 ms after its peak.
+    //     The second time it waits.
+    frameSeq(200);
+    const int grad = (int)CE_GRADIENT;
+    frame(1000, grad, blue, 100, 7); frame(1200, grad, blue, 100, 100); frame(1250, grad, blue, 100, 7);
+    for (uint32_t t = 1300; t <= 1560; t += 10) frame(t, grad, blue, 100, 100);
+    // 12. One measure lights as the other falls, in one frame (3000): no rise begins, and the
+    //     measure that fell waits for the window.
+    frameSeq(255);
+    frame(1000, grad, 0xffe500u, 255, 217); frame(2000, grad, 0xffe500u, 229, 212); frame(3000, grad, 0xffe500u, 255, 182);
+    for (uint32_t t = 3200; t <= 3350; t += 10) frame(t, grad, 0xffe500u, 255, 217);
     // 7. A long deterministic walk at three ceilings: looks, levels and luminances from a fixed LCG.
     for (int c : { 37, 160, 255 }) {
       frameSeq(c);

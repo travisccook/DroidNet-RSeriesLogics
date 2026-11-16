@@ -758,6 +758,7 @@ static void test_native_allow_logics() {
 // dark-to-lit onsets and keeps the shortest time between two.
 struct FieldObserver {
   uint8_t dark, lit; bool isLit; uint32_t last; bool any; uint32_t minGap; uint32_t recent[4]; int worst;
+  FieldObserver() : FieldObserver(0, 0) {}
   FieldObserver(uint8_t d, uint8_t l) : dark(d), lit(l), isLit(false), last(0), any(false), minGap(0xFFFFFFFFu), worst(0) {
     for (int i = 0; i < 4; i++) recent[i] = 0;
   }
@@ -927,12 +928,66 @@ static void test_ca14() {
   CHECK(!s.fieldLit && s.fieldRef == (uint8_t)(200 * held / 255));
   CHECK(contractFieldScale(s, 200, 200, 1339) == held);
   CHECK(contractFieldScale(s, 200, 200, 1340) == 255 && s.fieldLit && s.fieldLitY && s.fieldOnsetMs == 1340);
-  // one shared time: an onset in luminance keeps 340 ms from a brightening in level, and the
-  // other way round
+  // ONE RISE IS ONE ONSET (CA1.6). The level lights first; luminance lighting later in the same
+  // rise is not a second onset, however long after.
   ContractUnitState t; t.ceil = 200;
   contractFieldScale(t, 100, 10, 1000);                              // blue, half bright: lit in level only
-  CHECK(t.fieldLit && !t.fieldLitY && t.fieldOnsetMs == 1000);
-  CHECK(contractFieldScale(t, 100, 100, 1200) < 255 && contractFieldScale(t, 100, 100, 1340) == 255);
+  CHECK(t.fieldLit && !t.fieldLitY && t.fieldOnsetMs == 1000 && t.fieldRise);
+  CHECK(contractFieldScale(t, 100, 100, 1200) == 255 && t.fieldLitY && t.fieldOnsetMs == 1200 && t.fieldRise);
+  // ...a fall in either measure ends the rise: blue again (luminance falls), and white after
+  // that is a second onset in luminance. It waits for the shared time.
+  CHECK(contractFieldScale(t, 100, 10, 1250) == 255 && !t.fieldLitY && !t.fieldRise);
+  CHECK(contractFieldScale(t, 100, 100, 1300) < 255 && !t.fieldLitY);
+  CHECK(contractFieldScale(t, 100, 100, 1539) < 255 && contractFieldScale(t, 100, 100, 1540) == 255 && t.fieldRise);
+  // A coloured look that fades in (the defect CA1.6 fixes): 116530 from black to full in 100
+  // frames. The brightest channel crosses the step at a quarter of the way, luminance at a third.
+  // No frame is held, and the look gate's time follows the rise to its last frame.
+  { ContractUnitState f; f.ceil = 255; f.fieldOnsetMs = 0;
+    int heldFrames = 0;
+    for (int i = 0; i <= 100; i++) {
+      const uint8_t r = (uint8_t)(0x11 * i / 100), g = (uint8_t)(0x65 * i / 100), b = (uint8_t)(0x30 * i / 100);
+      if (contractFieldScale(f, g, contractLuminance(r, g, b), 1000u + 10u * (uint32_t)i) != 255) heldFrames++;
+    }
+    CHECK(heldFrames == 0 && f.fieldLit && f.fieldLitY && f.fieldRise && f.fieldOnsetMs == 2000 && f.lookMs == 2000);
+    // the same fade begun inside the window is held as ever, in the measure that lights first
+    ContractUnitState h; h.ceil = 255;
+    contractFieldScale(h, 255, 255, 900); contractFieldScale(h, 0, 0, 950);
+    heldFrames = 0;
+    for (int i = 0; i <= 100; i++) {
+      const uint8_t r = (uint8_t)(0x11 * i / 100), g = (uint8_t)(0x65 * i / 100), b = (uint8_t)(0x30 * i / 100);
+      const uint32_t now = 1000u + 2u * (uint32_t)i;
+      if (contractFieldScale(h, g, contractLuminance(r, g, b), now) != 255) { heldFrames++; CHECK(now < 1240 && !h.fieldLit && !h.fieldLitY); }
+    }
+    CHECK(heldFrames > 0); }
+  // The case the shared time was made for still holds: white by a colour change, X, white again.
+  { ContractUnitState w; w.ceil = 255;
+    CHECK(contractFieldScale(w, 255, 18, 1000) == 255 && w.fieldRise);                     // blue: lit in level only
+    CHECK(contractFieldScale(w, 255, 255, 2000) == 255 && w.fieldLitY && w.fieldOnsetMs == 2000);   // white: luminance lights
+    CHECK(contractFieldScale(w, 0, 0, 2010) == 255 && !w.fieldLit && !w.fieldLitY && !w.fieldRise);  // X
+    CHECK(contractFieldScale(w, 255, 255, 2030) < 255 && !w.fieldLit && !w.fieldLitY);     // held
+    CHECK(contractFieldScale(w, 255, 255, 2339) < 255 && contractFieldScale(w, 255, 255, 2340) == 255); }
+  // A frame in which one measure lights and the other falls begins no rise, whichever of the two
+  // is which: two looks that trade places cannot pass the rise to each other.
+  { ContractUnitState p; p.ceil = 255;
+    contractFieldScale(p, 255, 217, 1000);                                                 // (255, 229, 0): both lit
+    contractFieldScale(p, 229, 212, 2000);                                                 // (229, 229, 0): the level falls a step
+    CHECK(!p.fieldLit && p.fieldLitY && !p.fieldRise);
+    CHECK(contractFieldScale(p, 255, 182, 3000) == 255 && p.fieldLit && !p.fieldLitY && !p.fieldRise);   // level lights, luminance falls
+    CHECK(contractFieldScale(p, 255, 217, 3010) < 255 && !p.fieldLitY);                    // luminance may not light on it
+    ContractUnitState q; q.ceil = 255;
+    contractFieldScale(q, 255, 217, 1000); contractFieldScale(q, 255, 182, 2000);          // luminance falls
+    CHECK(q.fieldLit && !q.fieldLitY);
+    CHECK(contractFieldScale(q, 229, 212, 3000) == 255 && !q.fieldLit && q.fieldLitY && !q.fieldRise);   // luminance lights, level falls
+    CHECK(contractFieldScale(q, 255, 212, 3010) < 255 && !q.fieldLit); }                   // the level may not light on it
+  // contractFieldAllowed() is for light a fork cannot scale: it waits for the window, rise or no rise
+  { ContractUnitState a; a.ceil = 255;
+    contractFieldScale(a, 255, 18, 1000);
+    CHECK(a.fieldRise && contractFieldAllowed(a, 255, 1100) < 255 && contractFieldAllowed(a, 255, 1340) == 255); }
+  // the rise is a safety anchor like the rest of the gate, and a look whose light is not known ends it
+  { ContractUnitState a; a.ceil = 255;
+    contractFieldScale(a, 255, 18, 1000);
+    contractOnStop(a, 255); contractOnShow(a, 255, 0); contractOnIdle(a, 255); CHECK(a.fieldRise && a.fieldLit);
+    contractNativeEnded(a, false, 1500); CHECK(!a.fieldRise && !a.fieldLit && !a.fieldLitY); }
   // a measure at 0 does not limit, and nothing is ever scaled up
   ContractUnitState z; z.ceil = 200;
   CHECK(contractFieldScale(z, 0, 0, 1000) == 255 && contractFieldScale(z, 150, 0, 1010) == 255 && z.fieldRefY == 0);
@@ -970,6 +1025,48 @@ static void test_ca14() {
     for (FieldObserver& o : oL) CHECK(o.minGap >= 2 * STROBE_MIN_STATE_MS && o.worst <= 3);
     for (FieldObserver& o : oY) CHECK(o.minGap >= 2 * STROBE_MIN_STATE_MS && o.worst <= 3);
   }
+
+  // THE SAME PROPERTY, ON COLOURS THAT FADE (CA1.6). Frames of real colours, where the level and
+  // the luminance move together but cross the step at different times: fades up and down at
+  // random rates, cuts to black and to full, changes of colour in the middle of a fade. Every
+  // narrow observer of each measure (dark below d, lit from d + step, for every d the step
+  // apart or half of it) sees no two onsets less than 340 ms apart.
+  { static const uint8_t kRgb[][3] = { { 255, 255, 255 }, { 255, 0, 0 }, { 0, 255, 0 }, { 0, 0, 255 }, { 0x11, 0x65, 0x30 },
+                                      { 0x22, 0xc5, 0x5e }, { 255, 229, 0 }, { 229, 229, 0 }, { 255, 180, 0 }, { 16, 16, 16 } };
+    const int nRgb = (int)(sizeof kRgb / sizeof kRgb[0]);
+    long heldFades = 0;                                    // clean fades tried
+    for (int run = 0; run < 400; run++) {
+      ContractUnitState g; g.ceil = (uint8_t)(run % 3 == 0 ? 255 : 30 + gateRnd(226));
+      const uint8_t c = g.ceil, step = contractFieldStep(c);
+      FieldObserver oL[24], oY[24];
+      int nObs = 0;
+      for (int d = 0; d + step <= c && nObs < 24; d += (step + 1) / 2, nObs++) { oL[nObs] = FieldObserver((uint8_t)d, (uint8_t)(d + step)); oY[nObs] = oL[nObs]; }
+      uint32_t now = 1000u + gateRnd(5000);
+      int k = 0, target = 0, rate = 4, col = (int)gateRnd((uint32_t)nRgb);       // brightness 0..255 of the colour, fading to target
+      bool fading = false, anyHeld = false;
+      for (int f = 0; f < 4000; f++) {
+        now += (gateRnd(20) == 0) ? 10u + gateRnd(60) : 10u;
+        if (!fading) {
+          if (gateRnd(40) == 0) { target = gateRnd(3) ? (int)gateRnd(256) : (gateRnd(2) ? 255 : 0); rate = 1 + (int)gateRnd(12); }
+          if (gateRnd(60) == 0) { k = target = gateRnd(2) ? 255 : 0; }                        // a cut
+          if (gateRnd(90) == 0) col = (int)gateRnd((uint32_t)nRgb);                           // another colour
+          // now and then: a fade from black that starts with the window open, left alone to its end
+          if (k == 0 && target == 0 && gateRnd(25) == 0 && (uint32_t)(now - g.fieldOnsetMs) >= 340u) { fading = true; anyHeld = false; target = 255; rate = 1 + (int)gateRnd(12); }
+        }
+        if (k < target) k = k + rate > target ? target : k + rate; else if (k > target) k = k - rate < target ? target : k - rate;
+        const uint8_t r = (uint8_t)(kRgb[col][0] * k * c / (255 * 255)), gg = (uint8_t)(kRgb[col][1] * k * c / (255 * 255)), b = (uint8_t)(kRgb[col][2] * k * c / (255 * 255));
+        const uint8_t level = r > gg ? (r > b ? r : b) : (gg > b ? gg : b), lum = contractLuminance(r, gg, b);
+        const ContractUnitState before = g;
+        const uint8_t scale = contractFieldScale(g, level, lum, now);
+        if (scale != 255) anyHeld = true;
+        CHECK(scale == 255 || level > before.fieldRef || lum > before.fieldRefY);         // a fall is never held
+        const uint8_t outL = (uint8_t)(((uint16_t)level * scale) / 255u), outY = (uint8_t)(((uint16_t)lum * scale) / 255u);
+        for (int i = 0; i < nObs; i++) { oL[i].see(outL, now); oY[i].see(outY, now); }
+        if (fading && k == 255) { CHECK(!anyHeld); heldFades++; fading = false; }         // the defect CA1.6 fixes: no frame of it was held
+      }
+      for (int i = 0; i < nObs; i++) CHECK(oL[i].minGap >= 2 * STROBE_MIN_STATE_MS && oY[i].minGap >= 2 * STROBE_MIN_STATE_MS);
+    }
+    CHECK(heldFades > 500); }                                                             // (clean fades were in fact tried)
 
   // THE LOOK GATE. A look is its effect and its colour; a native look is its code.
   const ContractRGB red = { 255, 0, 0 }, blue = { 0, 0, 255 };

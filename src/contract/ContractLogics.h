@@ -367,9 +367,17 @@ inline void contractEngineLatched(uint8_t u, unsigned seq) {
     // Another native sequence starts AT that brightness, so it is on the LEDs: tell the gate.
     // Effect 106 starting leaves it unknown whether the brighter look was ever drawn. Telling
     // the gate of a peak that never was is the one thing it must not be told (contract_core.h),
-    // so it is told only the safe half: the field may have lit just now. The contract look that
-    // follows then waits out the window if it would light the display; a blackout does not wait.
-    if (seq == FX_CONTRACT) g.fieldOnsetMs = now;
+    // so it is told only the safe half: the field may have lit just now. Where the look that
+    // was written is brighter than what the gate knows of the field, that is a change of look
+    // as well (CA1.6: the property stage found the brighter look up for one frame and a
+    // contract colour, held dim by the field gate, 11 ms after it). The contract look that
+    // follows then waits out both windows: 170 ms on the frame that is up, 340 ms before it
+    // lights the display. A blackout does not wait, and neither does a look that follows the
+    // owner turning the display DOWN.
+    if (seq == FX_CONTRACT) {
+      g.fieldOnsetMs = now;
+      if (gRiseLevel[u] != 0 && (!g.fieldLit || gRiseLevel[u] > g.fieldRef)) g.lookMs = now;
+    }
     else contractFieldForced(g, gRiseLevel[u], now);
     gRise[u] = false;
   }
