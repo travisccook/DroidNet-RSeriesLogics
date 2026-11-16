@@ -388,7 +388,8 @@ inline void applyContractToUnit(uint8_t u, const ParsedContract& p, uint16_t lin
       if (pr.hasLevel) gLevel = pr.level;         // drives CE_METER (contract meter reads gLevel)
       break;
     case CV_BRIGHT:
-      _arm(u);
+      if (!contractBrightHonoured(g)) break;      // S6: only in show mode (a host sends B after M:v=show);
+                                                  // every reset clears it, so a B never outlives its show
       g.bright = pr.hasBright ? pr.bright : (pr.hasLevel ? pr.level : g.bright);   // a fraction of the ceiling
       _engineBri(u, _level(g));                   // native looks too, and it survives restoreSettings()
       break;

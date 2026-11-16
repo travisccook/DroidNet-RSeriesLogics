@@ -65,7 +65,8 @@ is the DroidNet layer (`git log --oneline 6bba8b1..HEAD`).
   `A` or `P` starts it. `X` blacks out. `M:v=idle` gives the display back. With `wd=`, that many seconds without
   a contract line addressed to the board is an idle.
 - **Safety.** No accent, pump swing or live look change recurs faster than the photosensitivity limits in
-  `contract_core.h`. `b=` and `B` are fractions of the display's own brightness, as its owner set it.
+  `contract_core.h`. `b=` and `B` are fractions of the display's own brightness, as its owner set it. `B` is
+  honoured only in show mode, and a reset clears it.
 - **Query.** `Q:r=<route>` addressed to one display is answered on Serial1 with
   `;S0!L<u>q:ver=1.3,rel=1,cap=32,n=<held>,ok=<0|1|2>,bpm=<n>` (`;W<n>,;S0...` for a remote WCB).
 

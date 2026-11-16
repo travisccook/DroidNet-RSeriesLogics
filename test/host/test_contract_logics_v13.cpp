@@ -139,8 +139,18 @@ static void test_brightness_and_native() {
   // every boundary puts the owner's brightness back
   send("**M:v=idle"); run(50);
   CHECK(LogicEngineFLDDefault.fBri == 160 && FLD->_liveBri == 160 && FLD->_seq == 0);
-  resetAll(); send("LFB:b=64"); send("LFX");   CHECK(LogicEngineFLDDefault.fBri == 160);
-  resetAll(); send("LFB:b=64"); send("**M:v=show"); CHECK(LogicEngineFLDDefault.fBri == 160);
+  resetAll(); send("**M:v=show"); send("LFB:b=64"); CHECK(LogicEngineFLDDefault.fBri == 40);
+  send("LFX");                                      CHECK(LogicEngineFLDDefault.fBri == 160 && gContract[0].bright == 255);
+  send("LFB:b=64");                                 CHECK(LogicEngineFLDDefault.fBri == 40);    // X stays in show mode
+  send("**M:v=show");                               CHECK(LogicEngineFLDDefault.fBri == 160 && gContract[0].bright == 255);
+  // S6: B is honoured only in show mode. Outside a show it changes nothing, on any look.
+  resetAll(); send("LFB:b=64"); send("L*B:v=10");
+  CHECK(gContract[0].bright == 255 && LogicEngineFLDDefault.fBri == 160 && FLD->_liveBri == 160 && FLD->_calcCalls == 0);
+  send("LFA:i=solid,c=ffffff"); run(50); CHECK(FLD->px(0, 0).r == 160);
+  run(200); send("LFB:b=64"); run(50);   CHECK(FLD->px(0, 0).r == 160);
+  send("**M:v=show"); send("LFA:i=solid,c=ffffff"); send("LFB:b=64"); run(250);
+  CHECK(FLD->px(0, 0).r == 40);                            // ...and in one, it dims a contract look too
+  send("**M:v=idle"); send("LFB:b=64"); CHECK(gContract[0].bright == 255 && LogicEngineFLDDefault.fBri == 160);
   // ...but does not undo a change someone else made during the show (#LEBRI, the web UI, the trimpot)
   resetAll(); send("**M:v=show"); send("LFB:b=64"); LogicEngineFLDDefault.fBri = 255; send("**M:v=idle");
   CHECK(LogicEngineFLDDefault.fBri == 255);

@@ -72,7 +72,7 @@ int main() {
   CHECK(FLD->_restarts[4] == 1);
 
   // F7 (S6): brightness. B must survive restoreSettings(); the ceiling is the owner's fBri (160).
-  resetAll(); send("L*B:b=100"); send("LFA:i=native:0"); run(50); send("LFA:i=native:4"); run(300);
+  resetAll(); send("**M:v=show"); send("L*B:b=100"); send("LFA:i=native:0"); run(50); send("LFA:i=native:4"); run(300);
   // (S6 as amended: B is a FRACTION of the owner's ceiling, so b=100 under fBri 160 is level 62.)
   CHECK(FLD->_liveBri == contractLevel(160, 100) && FLD->_liveBri == 62);
   resetAll(); send("LFA:i=solid,c=ffffff,b=255"); run(200);

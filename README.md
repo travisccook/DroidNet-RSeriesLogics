@@ -65,7 +65,7 @@ build is not supported yet: it compiles, but its hardware config is unconfirmed 
 the shared core's unit tests and parser fuzz, the RSeries layer on a mock of the engine (every finding of the
 2026-11-15 review is a regression test there), the Serial1 reader, and, with PlatformIO installed, the real ESP32
 cross-compile. CI runs the same on every push. At this source state `pio run -e wlogicengine32` links at
-**1,134,545 B of flash (57.7%)** and 64,796 B of SRAM (19.8%). A link is not a run.
+**1,132,417 B of flash (57.6%)** and 64,796 B of SRAM (19.8%). A link is not a run.
 
 This used to say the code had never been compiled for the ESP32 at all, and that was the honest
 state. It is no longer. It is worth saying why it matters: the first real build immediately caught a
