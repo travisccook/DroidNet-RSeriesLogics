@@ -9,7 +9,9 @@
 //             constants: { NAME: int },
 //             lines: [ { line: "<bytes after '!'>", crc16: int } ],
 //             groups: { <function>: { args: [name...], out: [name...], rows: [[args..., outs...]] } } }
-// Every group value is an integer. A float is carried scaled (phase_e6 = round(phase * 1e6)).
+// Every group value is an integer, and since CA1.3 every one is EXACT: the core has no float, so
+// a mirror is compared with no tolerance. (phase16 and progress16 are Q16; until CA1.2 the phase
+// was a float, carried as phase_e6 and compared within 2.)
 // Groups are append-only: a later change adds a group, it never reshapes one.
 // A STATEFUL group (contractFieldGate) has "seq" as its first argument: the rows of one seq run in
 // order through one state, and a new seq starts from a fresh one (docs/CHANGING_THE_CORE.md).
@@ -122,17 +124,17 @@ int main(int argc, char** argv) {
     for (uint32_t gap : { 170u, 340u }) row({ last, (uint32_t)(last + d), gap, strobeCoolDownExpired(last, last + d, gap) ? 1 : 0 });
   // The clock, driven the way the wire drives it: a C line (bpm, ph, bpb, beat) received at seedMs, read
   // at nowMs. Times are uint32 millis and some rows cross the 2^32 wrap.
-  group("beatPosAt", "\"bpm\", \"ph\", \"bpb\", \"beat\", \"seedMs\", \"nowMs\"", "\"beatIndex\", \"barPos\", \"phase_e6\"");
+  group("beatPosAt", "\"bpm\", \"ph\", \"bpb\", \"beat\", \"seedMs\", \"nowMs\"", "\"beatIndex\", \"barPos\", \"phase16\"");
   for (int bpm : { 30, 97, 120, 137, 174, 300 }) for (int bpb : { 3, 4 }) for (uint32_t ph : { 0u, 40u, 499u })
     for (long beat : { -3L, 0L, 64L }) for (uint32_t seed : { 1000u, 4294960000u })
       for (uint32_t d : { 0u, 1u, 39u, 40u, 500u, 12345u, 600000u, 3600000u }) {
         BeatClock bc; seedClock(bc, bpm, ph, bpb, beat, seed);
         BeatPos bp = beatPosAt(bc, seed + d);
-        row({ bpm, ph, bpb, beat, seed, (uint32_t)(seed + d), bp.beatIndex, bp.barPos, (long long)(bp.phase * 1000000.0f + 0.5f) });
+        row({ bpm, ph, bpb, beat, seed, (uint32_t)(seed + d), bp.beatIndex, bp.barPos, bp.phase16 });
       }
   // A full seed, then the host's bare ph/beat re-anchor (no bpm=), then the read.
   group("beatPosAtReseed", "\"bpm\", \"ph\", \"bpb\", \"beat\", \"seedMs\", \"ph2\", \"beat2\", \"seedMs2\", \"nowMs\"",
-        "\"beatIndex\", \"barPos\", \"phase_e6\"");
+        "\"beatIndex\", \"barPos\", \"phase16\"");
   for (int bpm : { 97, 120, 135, 174 }) for (uint32_t seed : { 5000u, 4294900000u }) for (uint32_t gap : { 4000u, 4013u, 20000u })
     for (uint32_t ph2 : { 0u, 17u, 230u }) for (uint32_t d : { 0u, 16u, 17u, 250u, 3999u, 60000u }) {
       BeatClock bc; seedClock(bc, bpm, 0, 4, 0, seed);
@@ -141,7 +143,7 @@ int main(int argc, char** argv) {
       ContractParams pr; pr.hasPh = true; pr.phMs = ph2; pr.hasBeat = true; pr.beatAnchor = (int32_t)beat2;
       beatClockSeed(bc, pr, seed2);
       BeatPos bp = beatPosAt(bc, seed2 + d);
-      row({ bpm, 0, 4, 0, seed, ph2, beat2, seed2, (uint32_t)(seed2 + d), bp.beatIndex, bp.barPos, (long long)(bp.phase * 1000000.0f + 0.5f) });
+      row({ bpm, 0, 4, 0, seed, ph2, beat2, seed2, (uint32_t)(seed2 + d), bp.beatIndex, bp.barPos, bp.phase16 });
     }
   group("beatRateDivisor", "\"bpm\"", "\"k\"");
   for (int bpm = 30; bpm <= 300; bpm++) row({ bpm, beatRateDivisor((uint16_t)bpm) });
@@ -156,7 +158,7 @@ int main(int argc, char** argv) {
       const uint32_t seed = 4294965000u;                              // crosses the millis wrap
       BeatClock bc; seedClock(bc, bpm, 0, bpb, 0, seed);
       const BeatPos bp = beatPosAt(bc, seed + d);
-      const uint8_t amt = beatAccentAmount((uint8_t)am, bp, (uint8_t)m, beatSectionProgress(bp.beatIndex, 0, 16), bc);
+      const uint8_t amt = beatAccentAmount((uint8_t)am, bp, (uint8_t)m, beatSectionProgress16(bp.beatIndex, 0, 16), bc);
       row({ bpm, 0, bpb, 0, seed, (uint32_t)(seed + d), am, m, 0, 16,
             beatAccentFires((uint8_t)am, bp, bc) ? 1 : 0, amt, envBright(200, (uint8_t)m, amt) });
     }
@@ -170,7 +172,7 @@ int main(int argc, char** argv) {
       BeatClock bc; seedClock(bc, bpm, 0, 4, beat0, seed);
       const BeatPos bp = beatPosAt(bc, seed + d);
       const uint8_t every = accentEveryPack((uint8_t)an, (uint8_t)ap);
-      const uint8_t amt = beatAccentAmount(2, bp, 200, 0.0f, bc, every);
+      const uint8_t amt = beatAccentAmount(2, bp, 200, 0, bc, every);
       row({ bpm, 0, 4, beat0, seed, (uint32_t)(seed + d), 200, an, ap,
             beatAccentFires(2, bp, bc, every) ? 1 : 0, amt, envBright(200, 200, amt) });
     }
@@ -245,6 +247,59 @@ int main(int argc, char** argv) {
       gate(now, level, (r >> 20) % 97 == 0);
     }
   }
+  // CA1.3: the integer clock, piece by piece, so a mirror can be pinned on each step.
+  // The clock position long after the seed, where a float clock drifted: the same C line as
+  // beatPosAt, read up to 24 days later and across the millis() wrap. `units` is the exact
+  // position inside the beat, in 60000ths (ms * bpm mod 60000); phase16 = floor(units * 65536 / 60000).
+  group("beatPosAtLong", "\"bpm\", \"ph\", \"bpb\", \"beat\", \"seedMs\", \"nowMs\"", "\"beatIndex\", \"barPos\", \"phase16\", \"units\"");
+  for (int bpm : { 30, 59, 97, 120, 177, 299, 300 }) for (uint32_t seed : { 777u, 4294000000u }) for (long beat : { -3L, 0L })
+    for (uint32_t d : { 599999u, 600000u, 600001u, 3599999u, 3600000u, 3600001u, 7200000u, 14400000u, 86400000u, 86400001u,
+                        1000000000u, 2147483647u, 2147483648u, 4294967295u }) {
+      BeatClock bc; seedClock(bc, bpm, 0, 4, beat, seed);
+      const BeatPos bp = beatPosAt(bc, seed + d);
+      uint16_t units; _beatSplit(bc, seed + d, units);
+      row({ bpm, 0, 4, beat, seed, (uint32_t)(seed + d), bp.beatIndex, bp.barPos, bp.phase16, units });
+    }
+  // The build ramp's input: how far through its section a beat is, Q16, clamped to 0 .. 65536.
+  group("beatSectionProgress16", "\"beatIndex\", \"sectionStart\", \"sectionEnd\"", "\"progress16\"");
+  for (long start : { 0L, -8L, 64L }) for (long len : { 0L, 1L, 3L, 7L, 16L, 100L, 9999L, 65535L, 65536L, 100000L })
+    for (long off : { -2L, 0L, 1L, 2L, 5L, 15L, 99L, 5000L, 65534L, 99999L, 100000L }) row({ start + off, start, start + len, (long long)beatSectionProgress16((int32_t)(start + off), (int32_t)start, (int32_t)(start + len)) });
+  for (long b : { -1000000000L, -999999999L, -1L, 0L, 1L, 500000000L, 999999999L, 1000000000L })
+    row({ b, -1000000000L, 1000000000L, (long long)beatSectionProgress16((int32_t)b, -1000000000L, 1000000000L) });
+  row({ 4, 8, 4, (long long)beatSectionProgress16(4, 8, 4) });
+  // The envelope alone, from its integer inputs (no clock): am, barPos, phase16, m, progress16.
+  // `fires` is taken as true (120 BPM, 4 beats a bar: every beat may accent).
+  group("beatAccentAmount", "\"am\", \"barPos\", \"phase16\", \"m\", \"progress16\"", "\"amt\"");
+  { BeatClock bc; bc.running = true; bc.bpm = 120; bc.bpb = 4;
+    for (int am : { 1, 2, 3 }) for (int bar : { 0, 1 }) for (int m : { 1, 64, 200, 255 })
+      for (uint32_t prog : { 0u, 21845u, 32768u, 65535u, 65536u }) {
+        if (am != 3 && prog != 0u) continue;
+        for (uint32_t ph : { 0u, 1u, 255u, 256u, 4096u, 8191u, 8192u, 8193u, 16384u, 30000u, 32767u, 32768u, 32769u, 49152u, 60000u, 65279u, 65534u, 65535u }) {
+          BeatPos bp; bp.beatIndex = bar; bp.barPos = (uint8_t)bar; bp.phase16 = (uint16_t)ph;
+          row({ am, bar, ph, m, prog, beatAccentAmount((uint8_t)am, bp, (uint8_t)m, prog, bc) });
+        }
+      }
+  }
+  // What a bare re-anchor (C with ph= and beat=, no bpm=) does to a running clock: 2 = a nudge
+  // (the position moved by less than one beat either way), 1 = a seek. Seeded as beatPosAtReseed.
+  group("beatClockSeedKind", "\"bpm\", \"seedMs\", \"ph2\", \"beat2\", \"seedMs2\"", "\"kind\"");
+  for (int bpm : { 60, 97, 120, 300 }) for (uint32_t seed : { 5000u, 4294900000u }) for (uint32_t gap : { 4000u, 4013u, 20000u })
+    for (uint32_t ph2 : { 0u, 17u, 230u, 999u, 1001u }) for (long step : { -2L, -1L, 0L, 1L, 2L, 3L }) {
+      BeatClock bc; seedClock(bc, bpm, 0, 4, 0, seed);
+      const uint32_t seed2 = seed + gap;
+      const long beat2 = (long)beatPosAt(bc, seed2).beatIndex + step;
+      ContractParams pr; pr.hasPh = true; pr.phMs = ph2; pr.hasBeat = true; pr.beatAnchor = (int32_t)beat2;
+      row({ bpm, seed, ph2, beat2, seed2, (int)beatClockSeed(bc, pr, seed2) });
+    }
+  // C1's edge guard after a seed: counted = 1 when the current beat counts as already accented
+  // (more than 60 whole ms into it), and then `beat` is that beat's index; otherwise 0 and 0.
+  group("accentEdgeAfterSeed", "\"bpm\", \"ph\", \"beat\", \"seedMs\", \"nowMs\"", "\"counted\", \"beat\"");
+  for (int bpm : { 30, 97, 120, 177, 300 }) for (uint32_t seed : { 9000u, 4294967000u }) for (long beat : { -2L, 40L })
+    for (uint32_t d : { 0u, 1u, 59u, 60u, 61u, 62u, 199u, 200u, 260u, 261u, 262u, 618u, 619u, 620u, 679u, 680u, 681u, 2000u, 2060u, 2061u, 3600061u }) {
+      BeatClock bc; seedClock(bc, bpm, 0, 4, beat, seed);
+      const int32_t e = accentEdgeAfterSeed(bc, seed + d);
+      row({ bpm, 0, beat, seed, (uint32_t)(seed + d), e == BEAT_NONE ? 0 : 1, e == BEAT_NONE ? 0 : e });
+    }
   // GROUPS ADDED BY LATER TASKS GO HERE (keep the order: appended groups never renumber old ones)
   printf("\n    ]}\n  }\n}\n");
   return 0;

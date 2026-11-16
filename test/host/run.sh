@@ -7,6 +7,7 @@
 #   1. contract_core.h parser unit tests
 #   1f. contract_core.h v1.3 unit tests (safety limits, clock rules, lifecycle, score, query)
 #   1g. the same, built with stand-ins for an AVR fork's flash-string hooks
+#   1h. no floating point in the core or in the per-frame layer
 #   1b. wifi_connect_core.h FSM unit tests
 #   1c. wdp_announce_core.h WDP device announce unit tests (shared with the PSI and Flthy forks)
 #   1d. wdp_fork.h: this fork's real WDP identity builds its line, and the Serial1 adapter
@@ -100,6 +101,20 @@ if want 1e; then
   fi
   echo "OK  vectors/contract_vectors.json matches the core (sha256 $sha)"
   RAN="$RAN 1e"
+fi
+# CA1.3: no float in the shared core, nor in the layer that calls it every frame. On the 8-bit forks
+# one float expression links the compiler's soft-float library (about 1.3 KB), and a float in the
+# beat maths is a rounding the Studio mirror cannot reproduce to the bit. Comments are stripped
+# first; the word is fine in prose.
+if want 1h; then
+echo "[1h] no float in the core or the layer"
+for f in ../../src/contract/contract_core.h ../../src/contract/ContractLogics.h; do
+  if sed 's://.*::' "$f" | grep -nE '\b(float|double)\b|[0-9]\.[0-9]+f\b|<math\.h>|<cmath>|\b(floorf?|ceilf?|roundf?|fabsf?|sqrtf?|powf?)[[:space:]]*\('; then
+    echo "FAIL: $f uses floating point (the lines above). The core and the per-frame path are integer only."; exit 1
+  fi
+done
+echo "OK  contract_core.h and ContractLogics.h are integer only"
+RAN="$RAN 1h"
 fi
 stage 2  "ContractLogics.h firmware type-check" "$CXX" -std=c++17 -Wall -Wextra compile_contract_logics.cpp
 # The 2026-11-15 review's findings as behaviour tests on mock_engine.h, which models sequence

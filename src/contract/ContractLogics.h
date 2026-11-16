@@ -318,7 +318,7 @@ inline void contractEngineLatched(uint8_t u, unsigned seq) {
 static inline uint8_t _beatBright(const ContractUnitState& g, const BeatPos& bp) {
   const uint8_t level = _level(g);
   if (g.accentMode == 0 || g.beatMod == 0 || !gBeat.running) return level;
-  const float prog = beatSectionProgress(bp.beatIndex, g.sectionStart, g.sectionEnd);
+  const uint32_t prog = beatSectionProgress16(bp.beatIndex, g.sectionStart, g.sectionEnd);   // Q16 (no float in the frame path)
   return envBright(level, g.beatMod, beatAccentAmount(g.accentMode, bp, g.beatMod, prog, gBeat, g.accentEvery));
 }
 
