@@ -34,11 +34,11 @@ static void resetAll() {
 // selected sequence number says what was asked for, not what is on the LEDs.
 static int fieldLevel(const LogicEngineRenderer* r) {
   long sum = 0;
-  for (int y = 0; y < 10; y++) for (int x = 0; x < 8; x++) {
+  for (int y = 0; y < r->height(); y++) for (int x = 0; x < r->width(); x++) {
     const CRGB c = r->px(x, y);
     sum += c.r > c.g ? (c.r > c.b ? c.r : c.b) : (c.g > c.b ? c.g : c.b);
   }
-  return (int)(sum / 80);
+  return (int)(sum / (r->width() * r->height()));
 }
 // One mainLoop() pass at the current time: the engine renders, then the contract ticks.
 static void frame() { mockEngineFrame(*FLD); mockEngineFrame(*RLD); contractTick(); }

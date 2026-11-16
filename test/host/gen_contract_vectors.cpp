@@ -47,7 +47,7 @@ static void frameSeq(int ceil) { gFrameSeq++; gFrame = ContractUnitState(); gFra
 static void frame(uint32_t nowMs, int effect, uint32_t rgb, int level, int lum, bool restart = false) {
   if (restart) contractLookRestart(gFrame);
   const ContractRGB c = { (uint8_t)(rgb >> 16), (uint8_t)(rgb >> 8), (uint8_t)rgb };
-  const bool drawn = effect == 0 || level == 0 || contractLookGate(gFrame, contractLookSig((ContractEffect)effect, c), nowMs);
+  const bool drawn = effect == 0 || contractLookGateAt(gFrame, contractLookSig((ContractEffect)effect, c), (uint8_t)level, nowMs);
   const uint8_t scale = drawn ? contractFieldScale(gFrame, (uint8_t)level, (uint8_t)lum, nowMs) : 255;
   row({ gFrameSeq, gFrame.ceil, restart ? 1 : 0, (long long)nowMs, effect, (long long)rgb, level, lum,
         drawn ? 1 : 0, scale, gFrame.fieldLit ? 1 : 0, gFrame.fieldRef, gFrame.fieldLitY ? 1 : 0, gFrame.fieldRefY,

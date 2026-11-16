@@ -66,13 +66,17 @@ struct LogicEngineRenderer {
   byte _liveBri = 160;                // fSettings.fBri
   int  _calcCalls = 0;
   unsigned getID() const { return _id; }
-  int width() const { return 8; }
-  int height() const { return 10; }
-  CRGB _px[10][8];
+  // 8 by 10 unless a test asks for another size (mockEngineSize(): the rear display is 16, 24 or
+  // 28 by 4, or 32 by 8, on a real board, and a look that lights columns or rows covers another
+  // share of such a field).
+  int _w = 8, _h = 10;
+  int width() const { return _w; }
+  int height() const { return _h; }
+  CRGB _px[10][32];
   long _writes = 0;                   // setPixelRGB() calls: a frame effect 106 only HELD wrote nothing
   void setPixelRGB(int x, int y, const CRGB& c) {
     _writes++;
-    if (x >= 0 && x < 8 && y >= 0 && y < 10) _px[y][x] = c;
+    if (x >= 0 && x < _w && y >= 0 && y < _h) _px[y][x] = c;
   }
   CRGB px(int x, int y) const { return _px[y][x]; }
   enum ColorVal { kDefault = 0 };
@@ -122,13 +126,17 @@ inline void mockEngineFrame(LogicEngineRenderer& r) {
     if (r._fx == 2 && ran >= 8000u) level = 0;                  // FAILURE has faded out...
     if (r._fx == 2 && ran >= 18000u) keep = false;              // ...and ends itself: back to the default look
     if (r._fx == 3 || (r._fx >= 19 && r._fx <= 24) || (r._fx >= 101 && r._fx <= 105)) level = 200;   // their own level
-    for (int y = 0; y < 10; y++) for (int x = 0; x < 8; x++) r._px[y][x] = CRGB(level, level, level);
+    for (int y = 0; y < r._h; y++) for (int x = 0; x < r._w; x++) r._px[y][x] = CRGB(level, level, level);
   }
   r._prevSeq = r._seq;                                          // fPreviousEffectVal = fDisplayEffectVal  LE:819 (AFTER the effect)
   if (!keep) r._seq = 0;                                        // selectEffect(fDefaultEffect)     LE:829
 }
+// The size of each display from the next mockEngineReset() on: {front, rear} columns and rows.
+static int gMockW[2] = { 8, 8 }, gMockH[2] = { 10, 10 };
+inline void mockEngineSize(int u, int w, int h) { gMockW[u] = w > 32 ? 32 : w; gMockH[u] = h > 10 ? 10 : h; }
 inline void mockEngineReset() {
   _fld_obj = LogicEngineRenderer(); _rld_obj = LogicEngineRenderer(); _rld_obj._id = 2;
+  _fld_obj._w = gMockW[0]; _fld_obj._h = gMockH[0]; _rld_obj._w = gMockW[1]; _rld_obj._h = gMockH[1];
   _rld_obj._liveBri = 140;
   LogicEngineFLDDefault.fBri = 160; LogicEngineRLDDefault.fBri = 140;
 }

@@ -414,9 +414,9 @@ static void test_s9_paths() {
   send("LFB:b=220"); run(20); CHECK(fieldLevel(FLD) == 138);              // a dip of more than a step is a swing,
   send("LFB:b=255"); run(20); CHECK(fieldLevel(FLD) == 160);              // and the way back an onset (the first in a long time)
   send("LFB:b=220"); run(20); CHECK(fieldLevel(FLD) == 138);
-  send("LFB:b=255"); run(20);                                             // the next one waits, a step less one above the dip
-  CHECK(fieldLevel(FLD) > 138 && fieldLevel(FLD) <= 138 + 16);
-  run(260); CHECK(fieldLevel(FLD) <= 138 + 16);
+  send("LFB:b=255"); run(20);                                             // the next one waits: the frame that is up stays up
+  CHECK(fieldLevel(FLD) == 138);
+  run(260); CHECK(fieldLevel(FLD) == 138);
   run(60);  CHECK(fieldLevel(FLD) == 160);
 
   // P's b= is the overlay's own: it never reaches the base look, and a P the cool-down refuses changes nothing
@@ -660,9 +660,9 @@ static void test_rereview() {
   run(250); CHECK(fieldLevel(FLD) == 31);
   run(250); CHECK(fieldLevel(FLD) == 160);                                  // its own ON edge, 510 ms in
   send("LFA:i=solid,c=ffffff"); run(20);
-  CHECK(FLD->_fx == 106 && fieldLevel(FLD) <= 16);
-  run(300); CHECK(fieldLevel(FLD) <= 16);
-  run(40);  CHECK(fieldLevel(FLD) == 160);
+  CHECK(FLD->_fx == 106 && FLD->_writes == 0);                              // effect 106 has the display and has drawn nothing:
+  { const long w = FLD->_writes; run(300); CHECK(FLD->_writes == w); }      // the sequence's last frame stays up, for the window
+  run(40);  CHECK(fieldLevel(FLD) == 160 && FLD->_writes != 0);
   // ...and a brighter B reaches such a sequence only when it next starts; a dimmer one at once
   resetAll(); send("**M:v=show"); send("LFA:i=native:6,b=128"); run(600);
   CHECK(FLD->_fx == 6 && LogicEngineFLDDefault.fBri == 80);
@@ -804,8 +804,9 @@ static void test_ca16() {
   // THE HAND-OVER THAT MAY HAVE LIT (found by the property stage, in the code since CA1.4). The
   // owner's brightness goes back on the idle look (a rise the layer writes), the engine draws
   // it, and a contract look takes the display before the layer has told the gate. It is told the
-  // safe half: the field may have lit just now. That is a change of look too: the contract's
-  // colour does not follow the white frame 10 ms later. The frame that is up stays for 170 ms.
+  // safe half: the field may have lit just now. That is a change of look too, and an onset: the
+  // contract's colour does not follow the white frame 10 ms later (it did, dimmed to a tenth).
+  // The frame that is up stays until the contract's look may light the display, 340 ms on.
   resetAll(); run(500);
   send("LFM:v=show"); run(400);
   send("LFB:b=0"); run(400);                                // the armed display's idle look, dimmed to nothing
@@ -827,7 +828,7 @@ static void test_ca16() {
     if (red && c.r == 160 && !fullAt) fullAt = _mock_millis;
     if (!redAt) CHECK(c.r == 160 && c.g == 160 && c.b == 160);          // the white frame stays up meanwhile
   }
-  CHECK(!redEarly && redAt != 0 && redAt - whiteAt >= 170 && redAt - whiteAt <= 200);
+  CHECK(!redEarly && redAt != 0 && redAt == fullAt);                          // never dimmed: a held frame is not shown
   CHECK(fullAt != 0 && fullAt - whiteAt >= 340 && fullAt - whiteAt <= 370);   // and it lights 340 ms after the white did
 
   // VERB L MOVES PART OF THE FIELD (the PSI review's finding, the same on this board): a meter

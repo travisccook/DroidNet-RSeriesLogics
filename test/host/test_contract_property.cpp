@@ -79,6 +79,19 @@ struct Onsets {
   }
 };
 
+// ---- (h): a PART of the display. A region of a quarter of the field or more is watched the way
+// the whole field is: its level (the mean over ITS pixels of each pixel's brightest channel)
+// against an observer's dark and lit, and going from dark to lit is an onset. One thing more is
+// asked before a region counts as lit: that the pixels in it that are not dark number a quarter
+// of the whole field or more. A lit area smaller than that is not a flash however it moves (S10
+// says the same of a stock look): one column of eight that scans through a region of two.
+// The limit is the spec's: no region lights more than three times in any one second.
+struct Region {
+  int x0, x1, y0, y1;                              // [x0, x1) by [y0, y1)
+  bool lit[3] = { false, false, false }; uint32_t at[3][4]; int n[3] = { 0, 0, 0 };   // the last onsets, per observer
+};
+static const int kRegionBands[3][2] = { { 10, 50 }, { 19, 75 }, { 4, 31 } };   // dark at or below, lit from (% of the ceiling)
+
 // ---- what is measured, per display ----
 struct Watch {
   LogicEngineRenderer* r = nullptr; int ceil = 255;
@@ -91,8 +104,10 @@ struct Watch {
   // field has no colour for it, and the colour it sees when the field is lit again is compared
   // with the one it saw last.
   struct Colour { int darkPct = 10, litPct = 50; bool lit = false; int chroma[3] = { 0, 0, 0 }; long top = 1; bool known = false; uint32_t at = 0; bool any = false; };
-  Colour colour[5];
+  Colour colour[6];              // (the sixth reads a colour from 4 levels up, whatever the ceiling: see reset())
   uint32_t colourMinGap = 0xFFFFFFFFu; long colourChanges = 0;
+  Region regions[17]; int nRegions = 0;            // (h)
+  uint32_t regionMinGap = 0xFFFFFFFFu; long regionOnsets = 0; int regionWorst = -1, regionMost = 0;   // most onsets of one region in a second
   int overCeiling = 0;           // (b) frames with a pixel above the ceiling that effect 106 drew
   long writesSeen = 0;           // ...the mock's count of pixel writes, to tell a drawn frame from a held one
   int notNative = 0;             // (c) frames not on a native look when the display should be
@@ -112,6 +127,16 @@ struct Watch {
     for (int i = 0; i < 4; i++) { narrow[i].darkPct = kNarrow[i][0]; narrow[i].litPct = kNarrow[i][1]; lumNarrow[i] = narrow[i]; }
     static const int kColour[5][2] = { { 10, 50 }, { 19, 75 }, { 4, 31 }, { 3, 15 }, { 45, 60 } };
     for (int i = 0; i < 5; i++) { colour[i].darkPct = kColour[i][0]; colour[i].litPct = kColour[i][1]; }
+    colour[5].darkPct = colour[5].litPct = -1;      // by the brightest LED, in levels: a colour from 4 up, none under
+    // (h): the whole field, its halves, its four quarters, and four bands of columns and of rows
+    // a quarter of the field each (on 10 rows: three rows, the bands overlapping)
+    const int W = r->width(), H = r->height(), cw = (W + 3) / 4, rh = (H + 3) / 4;
+    auto add = [&](int x0, int x1, int y0, int y1) { Region& g = regions[nRegions++]; g.x0 = x0; g.x1 = x1; g.y0 = y0; g.y1 = y1; };
+    add(0, W, 0, H);
+    add(0, W / 2, 0, H); add(W / 2, W, 0, H); add(0, W, 0, H / 2); add(0, W, H / 2, H);
+    add(0, W / 2, 0, H / 2); add(W / 2, W, 0, H / 2); add(0, W / 2, H / 2, H); add(W / 2, W, H / 2, H);
+    for (int i = 0; i < 4; i++) { const int x0 = (i * (W - cw) + 1) / 3; add(x0, x0 + cw, 0, H); }
+    for (int i = 0; i < 4; i++) { const int y0 = (i * (H - rh) + 1) / 3; add(0, W, y0, y0 + rh); }
   }
   void native(uint32_t now) { if (!expectNative) nativeFrom = now; expectNative = true; expectDark = false; }
   void dark(uint32_t now)   { darkFrom = now; expectDark = true; expectNative = false; expectButton = -1; }
@@ -122,6 +147,7 @@ struct Watch {
     for (Onsets& o : lum) o.n = 0;
     for (Onsets& o : lumNarrow) o.n = 0;
     for (Colour& c : colour) c.known = c.any = false;   // ...nor the contract's change of look
+    for (int i = 0; i < nRegions; i++) for (int b = 0; b < 3; b++) regions[i].n[b] = 0;
     expectDark = false;
     if (seq == 14) { ownerDark = true; ownerDarkUp = false; }   // (any other press ends it when the engine starts that one)
     expectButton = held ? seq : -1; buttonFrom = now;
@@ -140,17 +166,26 @@ struct Watch {
     // colour) differs from it by up to 2 levels, and a look that drifts across such an
     // observer's threshold inside those 2 levels reads as lighting later than it did.
     long sr = 0, sg = 0, sb = 0, sy = 0;
-    for (int y = 0; y < 10; y++) for (int x = 0; x < 8; x++) {
+    const int W = r->width(), H = r->height(), N = W * H;
+    for (int y = 0; y < H; y++) for (int x = 0; x < W; x++) {
       const CRGB c = r->px(x, y); sr += c.r; sg += c.g; sb += c.b; sy += (54 * c.r + 183 * c.g + 19 * c.b) >> 8;
     }
-    const int luminance = (int)(sy / 80);
+    const int luminance = (int)(sy / N);
+    int peakLevel = 0;                             // the brightest LED
+    for (int y = 0; y < H; y++) for (int x = 0; x < W; x++) { const CRGB c = r->px(x, y); const int v = c.r > c.g ? (c.r > c.b ? c.r : c.b) : (c.g > c.b ? c.g : c.b); if (v > peakLevel) peakLevel = v; }
     for (Onsets& o : lum) o.see(luminance, ceil, now);
     for (Onsets& o : lumNarrow) o.see(luminance, ceil, now);
     const long top = sr > sg ? (sr > sb ? sr : sb) : (sg > sb ? sg : sb);
     for (Colour& k : colour) {
-      if (!k.lit && level * 100 >= ceil * k.litPct) k.lit = true;
+      // (the sixth: the colour of a field whose brightest LED is only a few levels up. A look
+      // that comes up dim can be seen long before it has risen a step, and the look after it
+      // must keep its 170 ms from THEN: the Flthy soak found 77 ms.)
+      if (k.litPct < 0) k.lit = peakLevel >= (int)LOOK_MIN_LEVEL;   // (the core's own line between a colour and none)
+      else if (!k.lit && level * 100 >= ceil * k.litPct) k.lit = true;
       else if (k.lit && level * 100 <= ceil * k.darkPct) k.lit = false;
-      if (!k.lit || top == 0) continue;            // too dim to have a colour, for this one
+      // too dim to have a colour: for this observer, or for anyone (CA1.6: a frame whose
+      // brightest LED is under 4 levels shows none, and is not a look: contractLookGateAt)
+      if (!k.lit || top == 0 || peakLevel < (int)LOOK_MIN_LEVEL) continue;
       const int c[3] = { (int)(sr * 255 / top), (int)(sg * 255 / top), (int)(sb * 255 / top) };
       int far = 0;
       for (int i = 0; i < 3; i++) { const int d = c[i] > k.chroma[i] ? c[i] - k.chroma[i] : k.chroma[i] - c[i]; if (d > far) far = d; }
@@ -158,13 +193,42 @@ struct Watch {
       // so at a field mean of m levels its share of the brightest channel is known to 255 / m.
       // (ffe500 at 2 levels is the pixel 020100: it reads as orange, and at full it is yellow.
       // That is the LEDs' 8 bits, not a change of look.) Both frames compared have that error.
-      const int blur = (int)(255L * 80 / top) + (k.known ? (int)(255L * 80 / k.top) : 0);
+      const int blur = (int)(255L * N / top) + (k.known ? (int)(255L * N / k.top) : 0);
       if (k.known && far > 96 + blur) {            // a different colour than the field last had: a change of look
         if (k.any && now - k.at < colourMinGap) colourMinGap = now - k.at;
         k.at = now; k.any = true; if (&k == &colour[0]) colourChanges++;
       }
       for (int i = 0; i < 3; i++) k.chroma[i] = c[i];
       k.known = true; k.top = top;
+    }
+    // (h): the regions
+    {
+      long sumV[11][33]; int cnt[3][11][33];       // sums over the pixels above and left of (x, y)
+      for (int x = 0; x <= W; x++) { sumV[0][x] = 0; for (int b = 0; b < 3; b++) cnt[b][0][x] = 0; }
+      for (int y = 0; y < H; y++) {
+        sumV[y + 1][0] = 0; for (int b = 0; b < 3; b++) cnt[b][y + 1][0] = 0;
+        for (int x = 0; x < W; x++) {
+          const CRGB c = r->px(x, y);
+          const int v = c.r > c.g ? (c.r > c.b ? c.r : c.b) : (c.g > c.b ? c.g : c.b);
+          sumV[y + 1][x + 1] = sumV[y][x + 1] + sumV[y + 1][x] - sumV[y][x] + v;
+          for (int b = 0; b < 3; b++) cnt[b][y + 1][x + 1] = cnt[b][y][x + 1] + cnt[b][y + 1][x] - cnt[b][y][x] + (v * 100 > ceil * kRegionBands[b][0] ? 1 : 0);
+        }
+      }
+      for (int i = 0; i < nRegions; i++) {
+        Region& g = regions[i];
+        const int area = (g.x1 - g.x0) * (g.y1 - g.y0);
+        const long mean = (sumV[g.y1][g.x1] - sumV[g.y0][g.x1] - sumV[g.y1][g.x0] + sumV[g.y0][g.x0]) / area;
+        for (int b = 0; b < 3; b++) {
+          const int lit = cnt[b][g.y1][g.x1] - cnt[b][g.y0][g.x1] - cnt[b][g.y1][g.x0] + cnt[b][g.y0][g.x0];
+          if (!g.lit[b] && mean * 100 >= (long)ceil * kRegionBands[b][1] && lit * 4 >= N) {
+            g.lit[b] = true; regionOnsets++;
+            if (g.n[b] > 0 && now - g.at[b][(g.n[b] - 1) & 3] < regionMinGap) regionMinGap = now - g.at[b][(g.n[b] - 1) & 3];
+            g.at[b][g.n[b]++ & 3] = now;
+            int w = 0; for (int k = 0; k < 4 && k < g.n[b]; k++) if (now - g.at[b][(g.n[b] - 1 - k) & 3] < 1000) w++;
+            if (w > regionMost) { regionMost = w; regionWorst = i; }
+          } else if (g.lit[b] && mean * 100 <= (long)ceil * kRegionBands[b][0]) g.lit[b] = false;
+        }
+      }
     }
     if (r->_fx == 106) contractFrames++;
     // (b) is about frames the contract DREW. While a change of look or a hand-over waits (S4,
@@ -173,9 +237,9 @@ struct Watch {
     // brightness down.
     const bool drew = r->_writes != writesSeen; writesSeen = r->_writes;
     if (r->_fx == 106 && drew)
-      for (int y = 0; y < 10; y++) for (int x = 0; x < 8; x++) {
+      for (int y = 0; y < H; y++) for (int x = 0; x < W; x++) {
         const CRGB c = r->px(x, y);
-        if (c.r > ceil || c.g > ceil || c.b > ceil) { overCeiling++; y = 10; break; }
+        if (c.r > ceil || c.g > ceil || c.b > ceil) { overCeiling++; y = H; break; }
       }
     // (c): giving the display back may wait for the onset window (340 ms), and that begins a
     // frame later when effect 106 first has to take the display from a sequence whose light is
@@ -281,6 +345,8 @@ static void step(uint32_t ms = 10) {
       for (const Onsets& o : gW[u].lum) if (o.minGap < 340) traceDump("two luminance onsets under 340 ms apart", u);
       for (const Onsets& o : gW[u].lumNarrow) if (o.minGap < 340) traceDump("two narrow-band luminance onsets under 340 ms apart", u);
       for (const Onsets& o : gW[u].narrow) if (o.minGap < 340) traceDump("two narrow-band onsets under 340 ms apart", u);
+      if (gW[u].regionMost > 3) { char why[96]; const Region& g = gW[u].regions[gW[u].regionWorst];
+        snprintf(why, sizeof why, "a region lit four times in a second (columns %d to %d, rows %d to %d)", g.x0, g.x1 - 1, g.y0, g.y1 - 1); traceDump(why, u); }
       (void)before;
     }
   }
@@ -350,6 +416,13 @@ static std::string randomLine() {
   return b;
 }
 
+// What a stream broke, as bits, so each fix can be seen to clear its own.
+enum : int { BROKE_ONSETS = 1,      // (a), the wide observers: two onsets under 340 ms apart, or four in a second
+             BROKE_NARROW = 2,      // (a), the narrow ones
+             BROKE_LUMINANCE = 4,   // (f)
+             BROKE_COLOUR = 8,      // (g)
+             BROKE_OTHER = 16,      // (b) to (e)
+             BROKE_REGION = 32 };   // (h)
 // ---- the hostile profiles: the rows of the review's table, and three more of the same kind ----
 struct Profile { const char* name; void (*setup)(); void (*at)(uint32_t t); uint32_t period; int expected; };
 static void pShow() { tx("**M:v=show"); }
@@ -415,20 +488,46 @@ static const Profile kProfiles[] = {
   { "blue and white by turns under a fade (B up and down)", []() { pShow(); tx("LFA:i=solid,c=0000ff"); },
     [](uint32_t t) { if (t % 40 == 0) { char l[32]; snprintf(l, sizeof l, "LFB:b=%u", (unsigned)((t / 40) % 2 ? 255 : 20)); tx(l); }
                      if (t == 90) tx("LFA:i=solid,c=ffffff"); if (t == 270) tx("LFA:i=solid,c=0000ff"); }, 360, 0 },
+  { "a dim, slow pulse and another colour 171 ms after its first frame", pShow,
+    [](uint32_t t) { if (t == 0) tx("LFA:i=pulse,c=ff0000,s=0,b=40"); if (t == 171 || t == 180) tx("LFA:i=solid,c=0000ff,b=40"); if (t == 400) tx("LFX"); }, 600, 0 },
+  { "a dim pulse in red and in blue by turns", pShow,
+    [](uint32_t t) { if (t == 0) tx("LFA:i=pulse,c=ff0000,s=120,b=30"); if (t == 180) tx("LFA:i=pulse,c=0000ff,s=120,b=30"); }, 360, 0 },
   { "a coloured wipe restarted in its fill, in two colours", pShow,
     [](uint32_t t) { if (t == 0) tx("LFA:i=wipe,c=22c55e,s=255"); if (t == 180) tx("LFA:i=wipe,c=ffe500,s=255"); }, 350, 0 },
+  // ---- CA1.6: a PART of the field. The whole-field gate sees none of these: the field's level stays legal ----
+  { "a meter with L at 255 and 128 by turns (the top half of the display)", []() { pShow(); tx("L*A:i=meter,c=ffffff"); },
+    [](uint32_t t) { if (t == 0) tx("L*L:v=255"); if (t == 50) tx("L*L:v=128"); }, 100, 0 },
+  { "a meter with L at 255 and 64 by turns, and X now and then", []() { pShow(); tx("L*A:i=meter,c=ffffff"); },
+    [](uint32_t t) { if (t % 60 == 0) tx((t / 60) % 2 ? "L*L:v=64" : "L*L:v=255"); if (t == 420) { tx("L*X"); tx("L*A:i=meter,c=ffffff"); } }, 780, 0 },
+  { "a comet at its top speed", []() { pShow(); tx("L*A:i=comet,c=ffffff,s=255"); }, [](uint32_t) {}, 1000, 0 },
+  { "a comet and a full look by turns, every 170 ms", pShow,
+    [](uint32_t t) { if (t == 0) tx("L*A:i=comet,c=ffffff,s=255"); if (t == 170) tx("L*A:i=solid,c=ffffff"); }, 340, 0 },
+  { "a comet and a full look by turns: 300 ms of comet, 170 ms of the look", pShow,
+    [](uint32_t t) { if (t == 0) tx("L*A:i=comet,c=ffffff,s=255"); if (t == 300) tx("L*A:i=solid,c=ffffff"); }, 470, 0 },
+  // KNOWN, NOT FIXED (CA1.6): two things that each light a part of the field, by turns. The comet
+  // passes a region and the full look that follows lights it again: two onsets in one 680 ms
+  // cycle, four in a second. No whole-field measure can see either: the field's level only
+  // ever goes up at the full look, from a field that is lit.
+  { "a comet and a full look by turns: 510 ms of comet, 170 ms of the look", pShow,
+    [](uint32_t t) { if (t == 0) tx("L*A:i=comet,c=ffffff,s=255"); if (t == 510) tx("L*A:i=solid,c=ffffff"); }, 680, BROKE_REGION },
+  { "a wipe and a full look by turns", pShow,
+    [](uint32_t t) { if (t == 0) tx("L*A:i=wipe,c=ffffff,s=255"); if (t == 170) tx("L*A:i=solid,c=ffffff"); }, 340, 0 },
+  { "a chase at its top speed, and a full look every 510 ms", pShow,
+    [](uint32_t t) { if (t == 0) tx("L*A:i=chase,c=ffffff,s=255"); if (t == 340) tx("L*A:i=solid,c=ffffff"); }, 510, 0 },
+  { "sparkle, twinkle and scan at their top speeds, by turns", pShow,
+    [](uint32_t t) { if (t == 0) tx("L*A:i=sparkle,c=ffffff,s=255"); if (t == 2000) tx("L*A:i=twinkle,c=ffffff,s=255"); if (t == 4000) tx("L*A:i=scan,c=ffffff,s=255"); }, 6000, 0 },
+  // The same with a meter: L lights the top half, and the full look would light it again 150 ms
+  // later. The gate holds that frame, and a held frame is not shown at all (while the layer
+  // showed it dimmed, six tenths of a full look lit the half that was dark: four times a second).
+  { "a meter at half and a full look by turns, with L going up in between", []() { pShow(); tx("L*L:v=128"); },
+    [](uint32_t t) { if (t == 0) tx("L*A:i=meter,c=ffffff"); if (t == 20) tx("L*L:v=255"); if (t == 40) tx("L*L:v=128"); if (t == 170) tx("L*A:i=solid,c=ffffff"); }, 340, 0 },
 };
 static const int kProfileCount = (int)(sizeof kProfiles / sizeof kProfiles[0]);
 static const int kRandomExpected = 0;
 
-// What a stream broke, as bits, so each fix can be seen to clear its own.
-enum : int { BROKE_ONSETS = 1,      // (a), the wide observers: two onsets under 340 ms apart, or four in a second
-             BROKE_NARROW = 2,      // (a), the narrow ones
-             BROKE_LUMINANCE = 4,   // (f)
-             BROKE_COLOUR = 8,      // (g)
-             BROKE_OTHER = 16 };    // (b) to (e)
 struct Result {
-  int worst = 0; uint32_t minGap = 0xFFFFFFFFu, narrowGap = 0xFFFFFFFFu, lumGap = 0xFFFFFFFFu, colourGap = 0xFFFFFFFFu;
+  int worst = 0; uint32_t minGap = 0xFFFFFFFFu, narrowGap = 0xFFFFFFFFu, lumGap = 0xFFFFFFFFu, colourGap = 0xFFFFFFFFu, regionGap = 0xFFFFFFFFu;
+  long regionOnsets = 0; int regionMost = 0;
   int overCeiling = 0, notNative = 0, notDark = 0, wdLate = 0;
   long onsets = 0, darkChecked = 0, nativeChecked = 0, contractFrames = 0, lines = 0;   // how much was looked at
   long presses = 0, buttonChecked = 0, colourChanges = 0, lumOnsets = 0; int notButton = 0;
@@ -439,6 +538,8 @@ struct Result {
       for (const Onsets& o : gW[u].lum) if (o.minGap < lumGap) lumGap = o.minGap;
       for (const Onsets& o : gW[u].lumNarrow) if (o.minGap < lumGap) lumGap = o.minGap;
       if (gW[u].colourMinGap < colourGap) colourGap = gW[u].colourMinGap;
+      if (gW[u].regionMinGap < regionGap) regionGap = gW[u].regionMinGap;
+      regionOnsets += gW[u].regionOnsets; if (gW[u].regionMost > regionMost) regionMost = gW[u].regionMost;
       overCeiling += gW[u].overCeiling; notNative += gW[u].notNative; notDark += gW[u].notDark;
       onsets += gW[u].obs[0].total; darkChecked += gW[u].darkChecked; nativeChecked += gW[u].nativeChecked; contractFrames += gW[u].contractFrames;
       notButton += gW[u].notButton; buttonChecked += gW[u].buttonChecked;
@@ -454,6 +555,8 @@ struct Result {
     if (o.narrowGap < narrowGap) narrowGap = o.narrowGap;
     if (o.lumGap < lumGap) lumGap = o.lumGap;
     if (o.colourGap < colourGap) colourGap = o.colourGap;
+    if (o.regionGap < regionGap) regionGap = o.regionGap;
+    regionOnsets += o.regionOnsets; if (o.regionMost > regionMost) regionMost = o.regionMost;
     overCeiling += o.overCeiling; notNative += o.notNative; notDark += o.notDark; wdLate += o.wdLate;
     onsets += o.onsets; darkChecked += o.darkChecked; nativeChecked += o.nativeChecked; contractFrames += o.contractFrames; lines += o.lines;
     notButton += o.notButton; presses += o.presses; buttonChecked += o.buttonChecked;
@@ -466,6 +569,7 @@ struct Result {
          | (narrowGap < 2 * STROBE_MIN_STATE_MS ? BROKE_NARROW : 0)
          | (lumGap < 2 * STROBE_MIN_STATE_MS ? BROKE_LUMINANCE : 0)
          | (colourGap < STROBE_MIN_STATE_MS ? BROKE_COLOUR : 0)
+         | (regionMost > 3 ? BROKE_REGION : 0)
          | (overCeiling || notNative || notDark || wdLate || notButton ? BROKE_OTHER : 0);
   }
   void print(const char* verdict, const char* name) const {
@@ -476,6 +580,7 @@ struct Result {
     if (b & BROKE_NARROW)    printf(" narrow-band onsets %u ms apart;", narrowGap);
     if (b & BROKE_LUMINANCE) printf(" luminance onsets %u ms apart;", lumGap);
     if (b & BROKE_COLOUR)    printf(" colour changes %u ms apart;", colourGap);
+    if (b & BROKE_REGION)    printf(" a region of a quarter of the field or more lit %d times in one second (the closest two %u ms apart);", regionMost, regionGap);
     if (notDark)     printf(" %d frames lit after X;", notDark);
     if (notNative)   printf(" %d frames not native after idle;", notNative);
     if (overCeiling) printf(" %d frames over the ceiling;", overCeiling);
@@ -484,10 +589,14 @@ struct Result {
     printf("\n");
   }
 };
+// The rear display's size, by turns (the front one is 8 by 10): a look that lights columns or
+// rows covers another share of a field of 4 rows, or of 28 columns.
+static const int kRearSizes[5][2] = { { 8, 10 }, { 28, 4 }, { 16, 4 }, { 32, 8 }, { 24, 4 } };
 static Result runProfile(const Profile& p, int rounds) {
   Result res;
   for (int round = 0; round < rounds; round++) {
     const bool noise = (round & 1) != 0;
+    mockEngineSize(1, kRearSizes[(round / 2) % 5][0], kRearSizes[(round / 2) % 5][1]);
     begin(); p.setup();
     for (int i = 0; i < 50; i++) step();          // the set-up settles (and its live look's hold ends)
     const uint32_t jitter = rnd(4) * 10;
@@ -503,6 +612,7 @@ static Result runProfile(const Profile& p, int rounds) {
 static Result runRandom(int streams) {
   Result res;
   for (int sidx = 0; sidx < streams; sidx++) {
+    mockEngineSize(1, kRearSizes[sidx % 5][0], kRearSizes[sidx % 5][1]);
     begin();
     if (rnd(3) == 0) { LogicEngineFLDDefault.fBri = (byte)(40 + rnd(216)); FLD->_liveBri = LogicEngineFLDDefault.fBri;   // the owner's own setting
                        gW[0].ceil = LogicEngineFLDDefault.fBri; }
@@ -542,7 +652,7 @@ static void verdict(const char* name, const Result& res, int expected) {
   if (getenv("PROPERTY_DISCOVER")) { printf("%2d  %s\n", b, name); return; }
   if (b == expected) { if (b) { res.print("XFAIL", name); gKnown++; } return; }
   res.print((b & ~expected) ? "FAIL " : "XPASS", name);
-  printf("      expected to break %d, broke %d (1 onsets, 2 narrow-band onsets, 4 luminance, 8 colour changes, 16 other)\n", expected, b);
+  printf("      expected to break %d, broke %d (1 onsets, 2 narrow-band onsets, 4 luminance, 8 colour changes, 16 other, 32 regions)\n", expected, b);
   gFails++;
 }
 
@@ -555,6 +665,7 @@ int main() {
   const int streams = getenv("PROPERTY_STREAMS") ? atoi(getenv("PROPERTY_STREAMS")) : 1500;
   // The overlay that expires on a dark baseline (the 2026-11-16 review's finding 1): wildcard accents
   // in a show where the rear display has no look of its own. Five 170 ms pulses are 850 ms of light.
+  mockEngineSize(1, 8, 10);
   begin(); tx("**M:v=show,wd=15"); tx("LFA:i=solid,c=0000ff"); tx("**C:bpm=120,ph=0,bpb=4,beat=0");
   step(); gW[1].litMs = 0;                                 // (the native look before the show was lit, of course)
   for (uint32_t t = 0; t < 10000; t += 10) { if (t % 2000 == 0) tx("L*P:c=ffffff,d=170"); if (t % 4000 == 0) tx("**Q"); step(); }
@@ -562,13 +673,21 @@ int main() {
   CHECK(gW[1].litMs >= 700 && gW[1].litMs <= 1000);
 
   Result all;
-  for (int i = 0; i < kProfileCount; i++) { const Result r = runProfile(kProfiles[i], 8); verdict(kProfiles[i].name, r, kProfiles[i].expected); all.add(r); }
-  const Result rr = runRandom(streams);
+  for (int i = 0; i < kProfileCount; i++) { const Result r = runProfile(kProfiles[i], 10); verdict(kProfiles[i].name, r, kProfiles[i].expected); all.add(r); }
+  Result rr = runRandom(streams);
+  // (h) is ASSERTED on the profiles above: every look by itself, and the scripts that light a
+  // part of the field. In the random streams it is measured and printed, not asserted: they mix
+  // the two known cases above in every way (a comet or a meter, and a change of look or a
+  // hand-back just after it), and a random stream breaks or holds by the luck of its seed.
+  const int randomRegionMost = rr.regionMost; const uint32_t randomRegionGap = rr.regionGap;
+  rr.regionMost = 0; rr.regionGap = 0xFFFFFFFFu;
   verdict("random streams", rr, kRandomExpected); all.add(rr);
 
   if (gFails) { printf("%d CHECK(s) FAILED\n", gFails); return 1; }
-  printf("     (colour changes: %ld, the closest two %u ms apart; luminance onsets: %ld, the closest two %u ms apart; narrow-band onsets the closest two %u ms apart)\n",
-         all.colourChanges, all.colourGap, all.lumOnsets, all.lumGap, all.narrowGap);
+  printf("     (colour changes: %ld, the closest two %u ms apart; luminance onsets: %ld, the closest two %u ms apart; narrow-band onsets the closest two %u ms apart;\n"
+         "      onsets of a region of a quarter of the field or more: %ld; in the random streams, NOT asserted: at most %d of one region in a\n"
+         "      second, the closest two %u ms apart)\n",
+         all.colourChanges, all.colourGap, all.lumOnsets, all.lumGap, all.narrowGap, all.regionOnsets, randomRegionMost, randomRegionGap);
   printf("S9 property OK (%d known defect(s) still open): %ld lines, %ld frames drawn by the contract, %ld onsets, the closest two %u ms apart;\n"
          "   %ld frames checked dark after X, %ld checked native after idle or the watchdog, %ld button presses and %ld frames\n"
          "   checked on the button's sequence (seed 0x%08X, %d random streams)\n",

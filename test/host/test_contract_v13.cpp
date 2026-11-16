@@ -1093,6 +1093,32 @@ static void test_ca14() {
   contractOnStop(k, 200); CHECK(k.lookSig == contractLookSigNative(4) && k.lookMs == 1580);
   contractOnShow(k, 200, 0); contractOnIdle(k, 200); CHECK(k.lookSig == contractLookSigNative(4) && k.lookMs == 1580);
 
+  // CA1.6: a frame whose brightest LED is under 4 levels shows no colour and is not a look: it
+  // is never held, and it does not take the gate. The first frame of 4 levels or more does.
+  { ContractUnitState d; d.ceil = 255;
+    CHECK(LOOK_MIN_LEVEL == 4 && contractLookGate(d, sigRed, 1000));
+    CHECK(contractLookAllowedAt(d, sigBlue, 3, 1010) && contractLookGateAt(d, sigBlue, 3, 1010));   // too dim: drawn,
+    CHECK(d.lookSig == sigRed && d.lookMs == 1000);                                                 // and the gate is where it was
+    CHECK(!contractLookAllowedAt(d, sigBlue, 4, 1100) && !contractLookGateAt(d, sigBlue, 4, 1100) && d.lookSig == sigRed);
+    CHECK(contractLookAllowedAt(d, sigBlue, 4, 1170) && d.lookSig == sigRed);                       // (the ask takes nothing)
+    CHECK(contractLookGateAt(d, sigBlue, 200, 1200) && d.lookSig == sigBlue && d.lookMs == 1200);   // seen: from here
+    CHECK(contractLookGateAt(d, sigRed, 0, 1210) && d.lookSig == sigBlue);                          // black is the dimmest of them
+    CHECK(!contractLookGateAt(d, sigRed, 255, 1369) && contractLookGateAt(d, sigRed, 255, 1370)); }
+  // CA1.6: a native look told with TWO figures. A rainbow at three quarters by level and a third
+  // by luminance, then a contract frame that is dimmer by level and brighter by luminance: with
+  // one figure that was no onset; with two it is, and it waits.
+  { ContractUnitState one, two; one.ceil = two.ceil = 255;
+    contractNativeStarted(one, 6, 191, 1000); contractNativeStarted(two, 6, 191, 84, 1000);
+    CHECK(two.fieldLit && two.fieldRef == 191 && two.fieldLitY && two.fieldRefY == 84 && two.fieldOnsetMs == 1000);
+    CHECK(two.lookSig == contractLookSigNative(6) && one.fieldRefY == 191);
+    CHECK(contractFieldAsk(one, 128, 128, 1100) == 255);                 // one figure: the gate saw luminance fall
+    CHECK(contractFieldAsk(two, 128, 128, 1100) == 255);                 // two: 84 to 128 is a rise while lit: the onset going on
+    contractNativeLevel(two, 100, 20, 1200);                             // the fork dimmed it: both fall
+    CHECK(!two.fieldLit && !two.fieldLitY && two.fieldRef == 100 && two.fieldRefY == 20);
+    CHECK(contractFieldAsk(two, 100, 100, 1250) < 255 && contractFieldAsk(two, 100, 100, 1340) == 255);   // white at that level: an onset in luminance
+    ContractUnitState dark; dark.ceil = 255;
+    contractNativeStarted(dark, 14, 0, 0, 1000); CHECK(dark.lookSig == 0 && dark.fieldOnsetMs == 0); }
+
   // S11: re-applying the same look does not restart it
   ContractUnitState same; same.base = CB_LOOK; same.effect = CE_GRADIENT; same.color = red; same.speed = 90;
   CHECK(contractLookSame(same, CE_GRADIENT, -1, red, 90));

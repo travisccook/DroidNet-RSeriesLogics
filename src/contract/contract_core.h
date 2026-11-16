@@ -816,9 +816,22 @@ inline ContractRGB fxHsv2rgb(uint8_t h, uint8_t s, uint8_t v) {
 // the right answer either way, so these are invisible to the test suite by construction —
 // they can only be caught by inspection. All widenings below are value-preserving on the
 // host, so the pinned vectors and the JS visualizer's parity mirror are unchanged.
+// comet: a lit head with a fading tail (two fifths of the strand) that laps the strand. Every part
+// of the strand goes dark and lit once a lap, and the whole-field gate cannot see that: the
+// field's level never moves. So a lap is a cycle like a pulse's, and is never shorter than
+// FX_CYCLE_MIN_MS (CA1.6: on 8 columns at s=255 a lap took 240 ms, and each half of the display
+// lit four times a second. At 340 ms a lap the comet alone keeps to three, and one hand-over
+// in that second is a fourth; at 680 ms a host that alternates the comet with a full look, as
+// fast as S4 lets it, lights no quarter of the field more than three times a second).
+inline uint32_t fxCometStepMs(uint8_t speed, int N) {
+  uint32_t s = fxStepMs(speed);
+  if (N <= 0) return s;
+  const uint32_t least = (FX_CYCLE_MIN_MS + (uint32_t)N - 1u) / (uint32_t)N;
+  return s < least ? least : s;
+}
 inline int fxHead(uint32_t elapsed, uint8_t speed, int N) {
-  if (N <= 0) return 0; uint32_t s = fxStepMs(speed); if (!s) s = 1;
-  return (int)((elapsed / s) % (uint32_t)N);
+  if (N <= 0) return 0;
+  return (int)((elapsed / fxCometStepMs(speed, N)) % (uint32_t)N);
 }
 inline uint8_t fxCometBright(int p, int head, int N) {
   if (N <= 0) return 0;
@@ -1314,6 +1327,27 @@ inline bool contractLookGate(ContractUnitState& s, uint32_t sig, uint32_t nowMs)
   s.lookSig = sig; s.lookMs = nowMs;
   return true;
 }
+// THE FRAME AT WHICH A LOOK CAN BE SEEN (CA1.6). The look gate's time is that frame's. A look
+// that comes up through a few levels (a pulse, a dim fade) has not changed the field's colour at
+// its first frame: a frame whose BRIGHTEST LED is under LOOK_MIN_LEVEL levels shows no colour,
+// and is no more a look than a black one. It is never held, and it does not take the gate; the
+// first frame with an LED at 4 levels or more does, and the 170 ms run from there. (Taken at
+// the first frame, the gate let the next look follow 171 ms after a frame nobody could see:
+// 77 ms after the colour appeared, in the Flthy fork's streams.) A fork passes the brightest
+// channel of the frame's brightest LED. Not the field level: one full column of a wide panel
+// is a field level of 3 and a colour anyone can see. A fork that does not track the peak passes
+// 255 for any frame that is not black, which is the rule as it was.
+//     if (!contractLookAllowedAt(s, sig, peak, now)) keep what is up;         (ask)
+//     ... the field gate ...
+//     contractLookGateAt(s, sig, peak, now);                                  (the frame is shown)
+// or contractLookGateAt() alone where it does both at once.
+static const uint8_t LOOK_MIN_LEVEL = 4;
+inline bool contractLookAllowedAt(const ContractUnitState& s, uint32_t sig, uint8_t peak, uint32_t nowMs) {
+  return peak < LOOK_MIN_LEVEL || contractLookAllowed(s, sig, nowMs);
+}
+inline bool contractLookGateAt(ContractUnitState& s, uint32_t sig, uint8_t peak, uint32_t nowMs) {
+  return peak < LOOK_MIN_LEVEL || contractLookGate(s, sig, nowMs);
+}
 // S11: "Re-applying the same look does not restart it." A fork asks this BEFORE it writes a live
 // A or a section into the unit. true: the unit's base look is this very look already (the same
 // effect, native code, colour and speed): its timeline carries on, and nothing changes for the
@@ -1355,10 +1389,20 @@ inline void contractLookForced(ContractUnitState& s, uint32_t sig, uint32_t nowM
 //     the brightness the fork gives the look, the ceiling where it gives none. It is told ONCE,
 //     when the look starts (and again only when the fork itself changes it): the look's own
 //     frames are not the gate's business, and a fork does not report them.
-//   * GATED. Its whole field does swing faster, and the fork can scale its frames: it measures
-//     each one and passes it through contractFieldGate() (or contractFieldScale()) like a contract
-//     look. It still calls contractNativeMayStart() before, for the look gate, and
-//     contractLookForced(s, contractLookSigNative(code), now) when it starts.
+//   * GATED. Its whole field does swing faster, and the fork can hold its frames: it measures
+//     each one and passes it through the field gate like a contract look. A fork that asks the
+//     gates where its frames are latched passes the look's signature, contractLookSigNative(code),
+//     to contractLookAllowedAt() / contractLookGateAt() with the look's first lit frame, so the
+//     170 ms run from the frame that is on the LEDs. contractLookForced() when the look is
+//     SELECTED is for a fork that cannot hold that first frame: called before the frame, it
+//     starts S4's window before the look can be seen, and the next look may follow it sooner
+//     than 170 ms after it appeared (CA1.6, from the Flthy fork).
+// TWO FIGURES (CA1.6). contractNativeStarted() and contractNativeLevel() take the look's level,
+// and record it for both measures, which is right for white light and an upper bound for any
+// other. A fork with colour LEDs whose stock look has a luminance well under its level (a
+// rainbow: three quarters and a third) passes both, from a frame it measured: with one figure
+// the gate believes in luminance that is not there, and a contract frame that is dimmer by
+// level and brighter by luminance is no onset to it.
 // A fork that cannot hold a hand-over back (the look is on the LEDs already: a button) skips the
 // ask and tells; the gate then records light it would have refused, and what the CONTRACT does
 // next keeps its distance from it.
@@ -1368,12 +1412,19 @@ inline bool contractNativeMayStart(const ContractUnitState& s, int code, uint8_t
          contractLookAllowed(s, contractLookSigNative(code), nowMs);                     // S4
 }
 inline void contractNativeLevel(ContractUnitState& s, uint8_t level, uint32_t nowMs) { contractFieldForced(s, level, nowMs); }
+inline void contractNativeLevel(ContractUnitState& s, uint8_t level, uint8_t lum, uint32_t nowMs) { contractFieldTell(s, level, lum, nowMs); }
 inline void contractNativeStarted(ContractUnitState& s, int code, uint8_t level, uint32_t nowMs) {
   contractFieldForced(s, level, nowMs);
   if (level == 0) return;
   contractLookForced(s, contractLookSigNative(code), nowMs);
   // A stock look starting is light the gate did not draw, and its first frames may be an onset
   // nobody can see from here. Whatever the contract lights next keeps 340 ms from this frame.
+  s.fieldOnsetMs = nowMs;
+}
+inline void contractNativeStarted(ContractUnitState& s, int code, uint8_t level, uint8_t lum, uint32_t nowMs) {
+  contractFieldTell(s, level, lum, nowMs);          // what is on the LEDs, whatever the rule would have said of it
+  if (level == 0) return;
+  contractLookForced(s, contractLookSigNative(code), nowMs);
   s.fieldOnsetMs = nowMs;
 }
 // `known`: the look that ends is on the fork's allow-list AND ran at the level the gate was told.

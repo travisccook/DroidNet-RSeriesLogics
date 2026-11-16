@@ -131,17 +131,15 @@ static inline CRGB _scaled(const ContractRGB& c, uint8_t bri) {   // apply brigh
 // channel) and the field luminance (the mean of each pixel's Rec.709 luminance).
 static uint32_t gPxSum = 0, gPxLum = 0;
 static uint16_t gPxCount = 0;
-static uint8_t  gPxScale = 255;
+static bool     gPxDry = false;       // measure only: nothing is written to the LEDs
+static uint8_t  gPxPeak = 0;          // the brightest LED of the frame
 static inline void _px(LogicEngineRenderer& r, int x, int y, CRGB c) {
-  if (gPxScale != 255) {
-    c.r = (uint8_t)(((uint16_t)c.r * gPxScale) / 255u);
-    c.g = (uint8_t)(((uint16_t)c.g * gPxScale) / 255u);
-    c.b = (uint8_t)(((uint16_t)c.b * gPxScale) / 255u);
-  }
-  gPxSum += (c.r > c.g) ? (c.r > c.b ? c.r : c.b) : (c.g > c.b ? c.g : c.b);
+  const uint8_t v = (c.r > c.g) ? (c.r > c.b ? c.r : c.b) : (c.g > c.b ? c.g : c.b);
+  if (v > gPxPeak) gPxPeak = v;
+  gPxSum += v;
   gPxLum += contractLuminance(c.r, c.g, c.b);
   gPxCount++;
-  r.setPixelRGB(x, y, c);
+  if (!gPxDry) r.setPixelRGB(x, y, c);
 }
 static inline void _fill(LogicEngineRenderer& r, const CRGB& c) {
   for (int y = 0; y < r.height(); y++)
@@ -638,29 +636,35 @@ inline bool ContractRender(LogicEngineRenderer& r) {
     bri = _beatBright(g, beatPosAt(gBeat, now));
   }
 
+  // MEASURE the frame: it is drawn once without writing a LED.
+  gPxSum = 0; gPxLum = 0; gPxCount = 0; gPxPeak = 0; gPxDry = true;
+  _draw(r, g, eff, col, bri, t0, now, overlay);
+  gPxDry = false;
+  const uint8_t level = gPxCount ? (uint8_t)(gPxSum / gPxCount) : 0;
+  const uint8_t lum   = gPxCount ? (uint8_t)(gPxLum / gPxCount) : 0;
+  const uint8_t peak  = gPxPeak;
+
   // S4 FOR EVERY PATH: a frame that would show another look or colour than the field last showed
   // comes at least 170 ms after the field changed to that one, whichever path asked for it (an
   // accent between two looks, a section, a look after a native one). Until then the frame that is
-  // up stays up. Black is not a look: a blackout is never held.
-  if (eff != CE_OFF && bri != 0 && !contractLookGate(g, contractLookSig(eff, col), now)) return true;
+  // up stays up. A frame too dim to show a colour (its brightest LED under 4 levels:
+  // contractLookAllowedAt) is not a look, and black least of all: a blackout is never held.
+  const uint32_t sig = contractLookSig(eff, col);
+  if (!contractLookAllowedAt(g, sig, peak, now)) return true;
 
-  // S9: draw, measure, and ASK the field gate, by the frame's level and by its luminance. A
-  // frame the gate holds down is drawn again, scaled (the scale rounds down, LED by LED, so the
-  // second frame is at or under what the gate allowed) and measured again: the gate is TOLD
-  // what is on the LEDs.
-  gPxSum = 0; gPxLum = 0; gPxCount = 0; gPxScale = 255;
-  _draw(r, g, eff, col, bri, t0, now, overlay);
-  uint8_t level = gPxCount ? (uint8_t)(gPxSum / gPxCount) : 0;
-  uint8_t lum   = gPxCount ? (uint8_t)(gPxLum / gPxCount) : 0;
+  // S9: ASK the field gate, by the frame's level and by its luminance. A frame the gate holds is
+  // NOT SHOWN: the frame that is up stays up, as it does when the look gate holds one (CA1.6).
+  // The gate's own answer is a scale, and a frame scaled down keeps the whole field's level
+  // under the step; but it lights every part of the field that the frame lights, dimly, and a
+  // part that was dark and is now at six tenths has lit (the PSI review found a meter's top half
+  // doing that ten times a second). A frame that is not shown lights nothing. The gate is TOLD
+  // what is on the LEDs, so of a held frame it is told nothing; and the look gate is taken only
+  // by a frame that is shown, so its 170 ms run from the frame in which the look could be seen.
   const uint8_t scale = contractFieldAsk(g, level, lum, now);
   CONTRACT_GATE_STAT(u, scale);
-  if (scale != 255) {
-    gPxSum = 0; gPxLum = 0; gPxCount = 0; gPxScale = scale;
-    _draw(r, g, eff, col, bri, t0, now, overlay);
-    gPxScale = 255;
-    level = gPxCount ? (uint8_t)(gPxSum / gPxCount) : 0;
-    lum   = gPxCount ? (uint8_t)(gPxLum / gPxCount) : 0;
-  }
+  if (scale != 255) return true;
+  contractLookGateAt(g, sig, peak, now);
+  _draw(r, g, eff, col, bri, t0, now, overlay);
   contractFieldTell(g, level, lum, now);
   return true;   // MUST return true (LogicEngine.h:820 reverts to NORMAL on false)
 }
