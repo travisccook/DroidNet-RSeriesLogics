@@ -1,0 +1,31 @@
+# The host suite on every push, and the real ESP32 cross-compile.
+#
+# `host` runs every stage of test/host/run.sh that needs no microcontroller toolchain. The
+# runner fails (it does not skip) when no compiler can link ASan/UBSan, so a green run means
+# the fuzz stages really ran sanitized.
+#
+# `firmware` is stage 9: `pio run -e wlogicengine32`. REQUIRE_PIO=1 turns "PlatformIO is
+# missing" into a failure here, where on a developer's machine it is a reported skip.
+name: host-tests
+on: [push, pull_request]
+jobs:
+  host:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compilers
+        run: sudo apt-get update && sudo apt-get install -y clang g++
+      - name: Host stages
+        run: ONLY="1 1b 1c 1d 1e 1f 2 2b 2c 2d 3 4 5 6 7 8" bash test/host/run.sh
+  firmware:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: pio-${{ hashFiles('platformio.ini') }}
+      - name: PlatformIO
+        run: pip install platformio
+      - name: Cross-compile the ESP32 image
+        run: REQUIRE_PIO=1 ONLY=9 bash test/host/run.sh

@@ -1,0 +1,5 @@
+src/contract/contract_core.h
+test/host/test_contract_core.cpp
+test/host/fuzz_parsers.cpp
+src/wdp/wdp_announce_core.h
+test/host/test_wdp_announce_core.cpp
