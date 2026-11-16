@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "contract_version": "1.3",
-  "core_sha256": "975e07ac0acd023058b10a1d6bc68c6e939e9b415ba1fe989f0d9e99cc7fb750",
+  "core_sha256": "ed8e3ce28031ed4e6b007c50dcce179a4cce201f4beadd478eac07178841f31a",
   "generator": "test/host/gen_contract_vectors.cpp",
   "constants": {
     "CONTRACT_RELEASE": 1,
@@ -13,9 +13,23 @@
     "ACCENT_DUR_DEFAULT_MS": 180,
     "ACCENT_DUR_MAX_MS": 2550,
     "ACCENT_EVERY_MAX": 16,
-    "CONTRACT_ROUTE_MAX": 99
+    "CONTRACT_ROUTE_MAX": 99,
+    "CONTRACT_QUERY_MAX": 48,
+    "CONTRACT_REPLY_MAX": 57
   },
-  "lines": [],
+  "lines": [
+    {"line": "LFA:i=native:0,c=3b82f6,at=0", "crc16": 43883},
+    {"line": "LFA:i=rainbow,c=f97316,at=56,am=1,m=200,ae=flash", "crc16": 33439},
+    {"line": "LFA:i=native:0,at=447", "crc16": 63976},
+    {"line": "L*A:i=solid,c=0080FF,at=8", "crc16": 53064},
+    {"line": "**A:i=off,at=512", "crc16": 1100},
+    {"line": "LFA:i=comet,c=ff0000,at=56", "crc16": 12779},
+    {"line": "L*A:i=colorcycle,c=3b82f6,s=255,b=255,at=99999,am=2,m=255,an=16,ap=15,ae=colorcycle,ac=ffffff,ad=2550", "crc16": 42029},
+    {"line": "PFA:i=solid,c=f97316,at=44,am=1", "crc16": 272},
+    {"line": "HTA:i=twinkle,c=00ff88,b=120,at=-8", "crc16": 42695},
+    {"line": "123456789", "crc16": 10673},
+    {"line": "", "crc16": 65535}
+  ],
   "groups": {
     "fxStepMs": {"args": ["speed"], "out": ["ms"], "rows": [
       [0, 157],

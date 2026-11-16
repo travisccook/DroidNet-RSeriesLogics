@@ -35,6 +35,8 @@ static const uint16_t ACCENT_DUR_DEFAULT_MS = 180;  // ad= absent
 static const uint16_t ACCENT_DUR_MAX_MS = 2550;     // S5: P d= and ad= ceiling (255 * 10 ms)
 static const uint8_t  ACCENT_EVERY_MAX = 16;        // an= 1..16
 static const uint8_t  CONTRACT_ROUTE_MAX = 99;      // Q:r= 0..99
+static const uint8_t  CONTRACT_QUERY_MAX = 48;      // section 10: "!<cls><unit>q:...<CR>" at most
+static const uint8_t  CONTRACT_REPLY_MAX = 57;      // ...and with its route prefix (";W99,;S0")
 
 enum ContractVerb : uint8_t {
   CV_NONE = 0, CV_ANIMATE, CV_PULSE, CV_CLOCK, CV_BRIGHT, CV_LEVEL, CV_STOP, CV_MODE, CV_QUERY, CV_VERIFY
@@ -561,6 +563,10 @@ struct ScoreEntry {
   ContractRGB            accentColor{0, 0, 0}; // 3B; RESOLVED at insert: ac= if given, else the entry's color
   uint8_t        accentDur10 = 18;     // 1B; duration / 10ms (18 => 180ms). Keeps the entry small
                                        // on AVR: a 2550ms ceiling is far beyond any musical accent.
+  // ---- v1.3 (4 more bytes: 22 an entry on AVR)
+  uint8_t        bright = 255;         // b= as a fraction of the ceiling (contractLevel). Absent == 255.
+  uint8_t        accentEvery = 0;      // accentEveryPack(an, ap): every-N accents for am=2
+  uint16_t       crc = 0;              // contractCrc16() of the line that made this entry (verb V)
 };
 
 // Index of the last entry with atBeat <= beatIndex (-1 if none yet). Entries sorted asc.
@@ -875,4 +881,89 @@ inline bool liveLookDue(ContractUnitState& s, uint32_t nowMs, ContractLookPatch&
   out = s.held;
   s.holdPending = false; s.lastApplyMs = nowMs;
   return true;
+}
+
+// ===== v1.3: SCORE CAPACITY, LOAD VERIFICATION, QUERY (spec sections 6, 7, 10) =====
+
+// CRC-16/CCITT-FALSE (poly 0x1021, init 0xFFFF, no reflection, no final XOR; "123456789" is
+// 0x29B1) of a NUL-terminated line: the bytes from the class character to the last parameter
+// character — no '!', no WCB route, no terminator. Bitwise: no table, about 40 B of AVR flash.
+inline uint16_t contractCrc16(const char* s) {
+  uint16_t crc = 0xFFFFu;
+  for (; *s; s++) {
+    crc ^= (uint16_t)((uint16_t)(uint8_t)*s << 8);
+    for (uint8_t i = 0; i < 8; i++)
+      crc = (crc & 0x8000u) ? (uint16_t)((uint16_t)(crc << 1) ^ 0x1021u) : (uint16_t)(crc << 1);
+  }
+  return crc;
+}
+
+// scoreInsert() that says what happened. Entries stay sorted by atBeat; an equal atBeat replaces.
+enum ScoreInsert : uint8_t { SI_INSERTED = 0, SI_REPLACED = 1, SI_FULL = 2 };
+inline ScoreInsert scoreInsertEx(ScoreEntry* entries, uint8_t& n, uint8_t cap, const ScoreEntry& e) {
+  uint8_t i = 0;
+  while (i < n && entries[i].atBeat < e.atBeat) i++;
+  if (i < n && entries[i].atBeat == e.atBeat) { entries[i] = e; return SI_REPLACED; }
+  if (n >= cap) return SI_FULL;
+  for (uint8_t j = n; j > i; j--) entries[j] = entries[j - 1];
+  entries[i] = e;
+  n++;
+  return SI_INSERTED;
+}
+// A scored A line for this unit: store it with the CRC of its line. false: the table was full —
+// the entry is NOT stored and the load is marked bad, which verb V then reports (overflow is an
+// error, not a silent drop). A line delivered twice replaces itself and changes nothing.
+inline bool scoreAccept(ContractUnitState& s, ScoreEntry* entries, uint8_t cap, ScoreEntry e, uint16_t lineCrc) {
+  e.crc = lineCrc;
+  if (scoreInsertEx(entries, s.scoreLen, cap, e) == SI_FULL) { s.overflow = true; return false; }
+  s.curSection = -1; s.pinForward = false;               // indices moved: re-evaluate the cursor
+  return true;
+}
+// k: the XOR of the held entries' line CRCs. Independent of arrival order and of duplicates.
+inline uint16_t scoreK(const ScoreEntry* entries, uint8_t n) {
+  uint16_t k = 0;
+  for (uint8_t i = 0; i < n; i++) k ^= entries[i].crc;
+  return k;
+}
+// Verb V: n = entries the host expects this unit to hold, k = the XOR of their line CRCs.
+// Returns the verdict and stores it in s.loadOk: 1 good, 2 bad (a count or checksum mismatch, or
+// the table overflowed). On 2 the fork runs its M:v=idle path on the unit; contractShowReset()
+// keeps the 2, so Q reports it until the next M:v=show.
+inline uint8_t scoreVerify(ContractUnitState& s, const ScoreEntry* entries, uint8_t n, uint16_t k) {
+  s.loadOk = (!s.overflow && s.scoreLen == n && scoreK(entries, s.scoreLen) == k) ? 1 : 2;
+  return s.loadOk;
+}
+
+// Is this Q one a board answers? Only a query addressed to it by class AND unit, carrying r=.
+// A wildcard Q is never answered (it still feeds the watchdog: it is Studio's keepalive).
+inline bool contractQueryAnswerable(const ParsedContract& p) {
+  return p.verb == CV_QUERY && p.cls != '*' && p.unit != '*' && p.params.hasRoute;
+}
+// The reply to Q:r=<route>, routed back the way SHADOW routes its replies so the WCB never
+// broadcasts it:   r=0  ";S0!<cls><unit>q:ver=1.3,rel=1,cap=<n>,n=<held>,ok=<0|1|2>,bpm=<n>\r"
+//                  r=n  ";W<n>,;S0!<cls><unit>q:...\r"
+// No NUL is written. Returns the length (at most CONTRACT_REPLY_MAX), or 0 when `out` is smaller
+// than CONTRACT_REPLY_MAX. No printf: that is over 1 KB of flash on an ATmega.
+inline uint8_t _qStr(char* o, uint8_t i, const char* s) { while (*s) o[i++] = *s++; return i; }
+inline uint8_t _qNum(char* o, uint8_t i, uint16_t v) {
+  char t[5]; uint8_t n = 0;
+  do { t[n++] = (char)('0' + (v % 10u)); v = (uint16_t)(v / 10u); } while (v);
+  while (n) o[i++] = t[--n];
+  return i;
+}
+inline uint8_t contractFormatQuery(char* out, uint8_t outLen, uint8_t route, char cls, char unit,
+                                   uint8_t cap, uint8_t held, uint8_t ok, uint16_t bpm) {
+  if (outLen < CONTRACT_REPLY_MAX) return 0;
+  if (route > CONTRACT_ROUTE_MAX) route = CONTRACT_ROUTE_MAX;
+  uint8_t i = 0;
+  if (route != 0) { i = _qStr(out, i, ";W"); i = _qNum(out, i, route); out[i++] = ','; }
+  i = _qStr(out, i, ";S0");
+  out[i++] = '!'; out[i++] = cls; out[i++] = unit;
+  i = _qStr(out, i, "q:ver=" CONTRACT_VERSION ",rel="); i = _qNum(out, i, CONTRACT_RELEASE);
+  i = _qStr(out, i, ",cap=");  i = _qNum(out, i, cap);
+  i = _qStr(out, i, ",n=");    i = _qNum(out, i, held);
+  i = _qStr(out, i, ",ok=");   i = _qNum(out, i, ok > 2 ? 2 : ok);
+  i = _qStr(out, i, ",bpm=");  i = _qNum(out, i, bpm > 999u ? 999u : bpm);
+  out[i++] = '\r';
+  return i;
 }

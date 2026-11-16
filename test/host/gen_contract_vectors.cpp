@@ -49,10 +49,19 @@ int main(int argc, char** argv) {
   printf("    \"ACCENT_EDGE_LATE_MS\": %u,\n    \"ACCENT_DUR_DEFAULT_MS\": %u,\n    \"ACCENT_DUR_MAX_MS\": %u,\n",
          (unsigned)ACCENT_EDGE_LATE_MS, (unsigned)ACCENT_DUR_DEFAULT_MS, (unsigned)ACCENT_DUR_MAX_MS);
   printf("    \"ACCENT_EVERY_MAX\": %u,\n    \"CONTRACT_ROUTE_MAX\": %u", (unsigned)ACCENT_EVERY_MAX, (unsigned)CONTRACT_ROUTE_MAX);
+  printf(",\n    \"CONTRACT_QUERY_MAX\": %u,\n    \"CONTRACT_REPLY_MAX\": %u", (unsigned)CONTRACT_QUERY_MAX, (unsigned)CONTRACT_REPLY_MAX);
   // MORE CONSTANTS GO HERE (each starts with ",\n    ")
   printf("\n  ");
   printf("},\n  \"lines\": [");
-  // LINES ADDED BY LATER TASKS GO HERE
+  // The delivery plan's verb-V reference lines come first (v_vectors.py pins the same CRCs).
+  static const char* const kLines[] = {
+    "LFA:i=native:0,c=3b82f6,at=0", "LFA:i=rainbow,c=f97316,at=56,am=1,m=200,ae=flash", "LFA:i=native:0,at=447",
+    "L*A:i=solid,c=0080FF,at=8", "**A:i=off,at=512", "LFA:i=comet,c=ff0000,at=56",
+    "L*A:i=colorcycle,c=3b82f6,s=255,b=255,at=99999,am=2,m=255,an=16,ap=15,ae=colorcycle,ac=ffffff,ad=2550",
+    "PFA:i=solid,c=f97316,at=44,am=1", "HTA:i=twinkle,c=00ff88,b=120,at=-8", "123456789", "" };
+  for (size_t i = 0; i < sizeof kLines / sizeof kLines[0]; i++)
+    printf("%s\n    {\"line\": \"%s\", \"crc16\": %u}", i ? "," : "", kLines[i], (unsigned)contractCrc16(kLines[i]));
+  printf("\n  ");
   printf("],\n  \"groups\": {");
   static const int speeds[] = { 0, 1, 64, 128, 200, 254, 255 };
   static const int strands[] = { 1, 6, 8, 10, 24, 28 };

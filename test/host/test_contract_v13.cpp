@@ -284,6 +284,103 @@ static void test_live_hold() {
   ContractLookPatch n5 = lookPatchFrom(P("LFA:i=wipe")); lookPatchDefault(n5, CB_NONE); CHECK(n5.effect == CE_WIPE);
 }
 
+// ---- sections 6 and 7: capacity, overflow, per-entry brightness, verb V ----
+// A two-unit board (class L: F and R), the way a fork feeds scored lines to the core.
+struct TwoUnits {
+  ContractUnitState s[2]; ScoreEntry t[2][8];
+  void line(const char* afterBang) {
+    ParsedContract p;
+    if (!contractParse(afterBang, p) || p.verb != CV_ANIMATE || !p.params.hasAt) return;
+    if (p.cls != 'L' && p.cls != '*') return;
+    ScoreEntry e; e.atBeat = p.params.atBeat;
+    const uint16_t crc = contractCrc16(afterBang);
+    if (p.unit == 'F' || p.unit == '*') scoreAccept(s[0], t[0], 8, e, crc);
+    if (p.unit == 'R' || p.unit == '*') scoreAccept(s[1], t[1], 8, e, crc);
+  }
+};
+static void test_score_verify() {
+  CHECK(contractCrc16("123456789") == 0x29B1);       // the CRC-16/CCITT-FALSE check value
+  CHECK(contractCrc16("") == 0xFFFF);
+  CHECK(contractCrc16("LFA:i=native:0,at=447") == 0xF9E8);
+
+  // THE SHARED V VECTORS. The delivery plan pins the same numbers in Jest
+  // (DroidNetSignalBooster benchmarks/lighting-review-2026-11-15/delivery/v_vectors.py). If these
+  // fail, find out which side is wrong before changing either.
+  TwoUnits b;
+  b.line("LFA:i=native:0,c=3b82f6,at=0");
+  b.line("LFA:i=rainbow,c=f97316,at=56,am=1,m=200,ae=flash");
+  b.line("LFA:i=native:0,at=447");
+  b.line("L*A:i=solid,c=0080FF,at=8");               // a wildcard line counts on every unit it addresses
+  b.line("**A:i=off,at=512");
+  b.line("PFA:i=solid,at=4");                        // another board's line counts nowhere here
+  CHECK(b.s[0].scoreLen == 5 && scoreK(b.t[0], b.s[0].scoreLen) == 0x1B18);   // !LFV:n=5,k=1b18
+  CHECK(b.s[1].scoreLen == 2 && scoreK(b.t[1], b.s[1].scoreLen) == 0xCB04);   // !LRV:n=2,k=cb04
+  ParsedContract v;
+  CHECK(contractParse("LFV:n=5,k=1b18", v) && scoreVerify(b.s[0], b.t[0], v.params.n, v.params.k) == 1);
+  CHECK(contractParse("LRV:n=2,k=cb04", v) && scoreVerify(b.s[1], b.t[1], v.params.n, v.params.k) == 1);
+  CHECK(b.s[0].loadOk == 1 && b.s[1].loadOk == 1);
+  b.line("LFA:i=comet,c=ff0000,at=56");              // replaces LF's entry at 56: n stays 5, k moves
+  CHECK(b.s[0].scoreLen == 5 && scoreK(b.t[0], 5) == 0xA86C);                 // !LFV:n=5,k=a86c
+  CHECK(scoreVerify(b.s[0], b.t[0], 5, 0x1B18) == 2 && scoreVerify(b.s[0], b.t[0], 5, 0xA86C) == 1);
+  // a line delivered twice (a mesh retry) changes nothing
+  b.line("LFA:i=comet,c=ff0000,at=56"); b.line("**A:i=off,at=512"); b.line("LFA:i=native:0,at=447");
+  CHECK(b.s[0].scoreLen == 5 && scoreK(b.t[0], 5) == 0xA86C && !b.s[0].overflow);
+  CHECK(b.s[1].scoreLen == 2 && scoreK(b.t[1], 2) == 0xCB04);
+  // arrival order does not matter
+  TwoUnits r;
+  r.line("**A:i=off,at=512"); r.line("L*A:i=solid,c=0080FF,at=8"); r.line("LFA:i=native:0,at=447");
+  r.line("LFA:i=rainbow,c=f97316,at=56,am=1,m=200,ae=flash"); r.line("LFA:i=native:0,c=3b82f6,at=0");
+  CHECK(r.s[0].scoreLen == 5 && scoreK(r.t[0], 5) == 0x1B18 && r.t[0][0].atBeat == 0 && r.t[0][4].atBeat == 512);
+  // what a bad load looks like
+  ContractUnitState c1 = r.s[0];  CHECK(scoreVerify(c1, r.t[0], 6, 0x1B18) == 2);     // the host sent one more
+  ContractUnitState c2 = r.s[0];  CHECK(scoreVerify(c2, r.t[0], 5, 0x1B19) == 2);     // a line differs
+  ContractUnitState c3;           CHECK(scoreVerify(c3, r.t[0], 0, 0x0000) == 1);     // an empty unit, told so: good
+
+  // capacity: a full table refuses, marks the load bad, and keeps what it has
+  ScoreEntry t[2]; ContractUnitState s; ScoreEntry e;
+  e.atBeat = 16; CHECK(scoreAccept(s, t, 2, e, 0x1111));
+  e.atBeat = 0;  CHECK(scoreAccept(s, t, 2, e, 0x2222));
+  CHECK(s.scoreLen == 2 && t[0].atBeat == 0 && t[0].crc == 0x2222 && t[1].crc == 0x1111 && s.curSection == -1);
+  e.atBeat = 32; CHECK(!scoreAccept(s, t, 2, e, 0x4444));
+  CHECK(s.overflow && s.scoreLen == 2 && scoreK(t, 2) == 0x3333);
+  CHECK(scoreVerify(s, t, 2, 0x3333) == 2);          // an overflowed load is bad even when n and k match
+  e.atBeat = 16; CHECK(scoreAccept(s, t, 2, e, 0x5555) && s.scoreLen == 2);   // a replace still fits a full table
+  uint8_t n = 2; ScoreEntry same; same.atBeat = 0;
+  CHECK(scoreInsertEx(t, n, 2, same) == SI_REPLACED && n == 2);
+  same.atBeat = 7; CHECK(scoreInsertEx(t, n, 2, same) == SI_FULL && n == 2);
+  ScoreEntry d; CHECK(d.bright == 255 && d.accentEvery == 0 && d.crc == 0);   // b= absent: the ceiling
+}
+
+// ---- section 10: the query reply and its route ----
+static void test_query_reply() {
+  char buf[CONTRACT_REPLY_MAX];
+  struct { uint8_t route; char cls, unit; uint8_t cap, held, ok; uint16_t bpm; const char* want; } rows[] = {
+    {   0, 'L', 'F',  32,   5, 1, 120, ";S0!LFq:ver=1.3,rel=1,cap=32,n=5,ok=1,bpm=120\r" },
+    {   2, 'P', 'R',  12,   0, 0,   0, ";W2,;S0!PRq:ver=1.3,rel=1,cap=12,n=0,ok=0,bpm=0\r" },
+    {  99, 'H', 'T', 255, 255, 2, 300, ";W99,;S0!HTq:ver=1.3,rel=1,cap=255,n=255,ok=2,bpm=300\r" },   // the longest there is
+    { 200, 'L', 'F',   1,   1, 9, 5000, ";W99,;S0!LFq:ver=1.3,rel=1,cap=1,n=1,ok=2,bpm=999\r" },      // out-of-range inputs clamp
+  };
+  for (size_t i = 0; i < sizeof rows / sizeof rows[0]; i++) {
+    const uint8_t n = contractFormatQuery(buf, sizeof buf, rows[i].route, rows[i].cls, rows[i].unit,
+                                          rows[i].cap, rows[i].held, rows[i].ok, rows[i].bpm);
+    CHECK(n == strlen(rows[i].want) && memcmp(buf, rows[i].want, n) == 0);
+    CHECK(n <= CONTRACT_REPLY_MAX);
+    const char* bang = strchr(rows[i].want, '!');                              // the contract part alone
+    CHECK(strlen(bang) <= CONTRACT_QUERY_MAX);
+  }
+  CHECK(strlen(rows[2].want) == 54);
+  CHECK(contractFormatQuery(buf, CONTRACT_REPLY_MAX - 1, 0, 'L', 'F', 32, 5, 1, 120) == 0);   // too small: nothing written
+  ParsedContract p;
+  CHECK(contractParse("LFQ:r=0", p) && contractQueryAnswerable(p) && p.params.route == 0);
+  CHECK(contractParse("LRQ:r=3", p) && contractQueryAnswerable(p) && p.params.route == 3);
+  CHECK(contractParse("LFQ", p) && !contractQueryAnswerable(p));               // no r=: not answered
+  CHECK(contractParse("L*Q:r=0", p) && !contractQueryAnswerable(p));           // a wildcard is never answered
+  CHECK(contractParse("*FQ:r=0", p) && !contractQueryAnswerable(p));
+  CHECK(contractParse("**Q", p) && !contractQueryAnswerable(p));               // (it is still a valid line: a keepalive)
+  CHECK(contractParse("LFA:r=0", p) && !contractQueryAnswerable(p));
+  CHECK(!contractParse("LFq:ver=1.3,rel=1,cap=32,n=5,ok=1,bpm=120", p));       // a reply is never a command
+}
+
 int main() {
   test_saturating_params();
   test_bpm_range_and_hold();
@@ -291,6 +388,8 @@ int main() {
   test_rate_floor_and_every_n();
   test_show_reset_and_watchdog();
   test_live_hold();
+  test_score_verify();
+  test_query_reply();
   printf("%s  %d/%d checks passed\n", g_fail ? "FAILURES" : "OK", g_total - g_fail, g_total);
   return g_fail ? 1 : 0;
 }
