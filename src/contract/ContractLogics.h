@@ -478,7 +478,7 @@ static inline void _draw(LogicEngineRenderer& r, const ContractUnitState& g, Con
       _fill(r, CRGB(0, 0, 0));
       break;
     case CE_FLASH: {
-      bool on = fxFlashOn(now - t0, g.speed);            // the shared timing: 170..425 ms a state (strobe cap)
+      bool on = fxFlashOn(now - t0, g.speed);            // the shared timing: 190..445 ms a state (strobe cap)
       // v1.2 FIX: the lit state renders at the BEAT-PUMPED level (bri), not the raw ceiling.
       // It was the only sustained look on this board that ignored the envelope, so an
       // i=flash section pumped on the HPs/PSIs and sat flat on the Logics. During an
@@ -534,7 +534,7 @@ static inline void _draw(LogicEngineRenderer& r, const ContractUnitState& g, Con
       uint32_t el = now - t0;
       CRGB on = _scaled(col, bri), off(0, 0, 0);
       for (int x = 0; x < W; x++) {
-        CRGB c = fxChaseLit(x, el, g.speed) ? on : off;
+        CRGB c = fxChaseLit(x, el, g.speed, W) ? on : off;
         for (int y = 0; y < H; y++) _px(r, x, y, c);
       }
       break;
@@ -572,7 +572,7 @@ static inline void _draw(LogicEngineRenderer& r, const ContractUnitState& g, Con
       break;
     }
     case CE_PULSE: {
-      // The shared breathe (fxPulseBright: a 2000..340 ms cycle, never faster, S8) when nothing
+      // The shared breathe (fxPulseBright: a 2000..680 ms cycle, never faster, S8) when nothing
       // pumps the look. Under the beat pump the envelope IS the breathe, so the fill is steady
       // and the pump moves it; two modulations at once would beat against each other.
       const bool pumped = !overlay && g.accentMode != 0 && g.beatMod != 0 && gBeat.running;

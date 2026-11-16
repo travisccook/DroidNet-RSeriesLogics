@@ -757,6 +757,14 @@ inline int scoreInsert(ScoreEntry* entries, int n, int cap, const ScoreEntry& e)
 // speed knob. fxHash16: cheap xorshift PRNG hash for sparkle/twinkle seeding.
 // fxHsv2rgb: standard 6-sextant HSV->RGB (integer division, matches the JS parity port).
 inline uint32_t fxStepMs(uint8_t speed) { return 30u + (uint32_t)(255 - speed) / 2u; }
+// The shortest cycle of a look that lights its whole field once a cycle (pulse, wipe). The S9
+// gate lets a field light again 340 ms after it last got BRIGHTER, which is the cycle's peak, so
+// the falling half and the first tenth of the next rise have to take 340 ms between them: a
+// triangle needs 618 ms, a wipe on 8 positions 605. Shorter, and the gate holds the rise back.
+// Measured (test/host/gate_held_table.cpp): nothing is held from 640 ms up with frames 10 to
+// 15 ms apart, and from 680 ms up with frames as much as 40 ms apart. 680 is four states of the
+// strobe floor.
+static const uint32_t FX_CYCLE_MIN_MS = 4u * STROBE_MIN_STATE_MS;
 // The `x +=` is load-bearing: a bare xorshift has 0 as a FIXED POINT (0^0 == 0 at every
 // step), so fxHash16(0) returned 0. Every consumer seeds from the strand index, so index 0
 // hashed to zero — in twinkle that gave pixel 0 the minimum period AND zero phase offset,
@@ -820,9 +828,15 @@ inline uint8_t fxCometBright(int p, int head, int N) {
   // dist*255 wraps a 16-bit int for dist > 128, i.e. any strand with N > ~322.
   return (uint8_t)(255u - ((uint32_t)dist * 255u) / (uint32_t)trail);
 }
-inline bool fxChaseLit(int p, uint32_t elapsed, uint8_t speed) {
+// chase: every third position of a RING of N lit, the ring turning one position a step. The
+// lit count is the same at every step, ceil(N / 3), whatever N is (CA1.5). It used to be every
+// third position of the line, which lights 3, 3, then 2 of 8: the field mean moved by an eighth
+// of the ceiling at every step, more than the S9 gate's tenth. Where N is not a multiple of 3
+// one gap of the ring is shorter than the others, and it travels with the rest.
+inline bool fxChaseLit(int p, uint32_t elapsed, uint8_t speed, int N) {
+  if (N <= 0) return false;
   uint32_t s = fxStepMs(speed); if (!s) s = 1;
-  return (((uint32_t)p + elapsed / s) % 3u) == 0u;
+  return ((((uint32_t)p + elapsed / s) % (uint32_t)N) % 3u) == 0u;
 }
 // A ping-pong wipe: fill 0 -> N-1, then DRAIN BACK from the far end. The drain half used to
 // read `p > (ph - N)`, which empties from position 0 upward — i.e. the erase head travelled
@@ -830,8 +844,16 @@ inline bool fxChaseLit(int p, uint32_t elapsed, uint8_t speed) {
 // ping-ponged at all. That contradicted the spec, this function's own comment, and the JS
 // visualizer's preview. The mirrored form below empties from N-1 downward, which is what a
 // ping-pong is, and keeps the identical cadence (one position per step, N steps per half).
+// One wipe, fill and drain, takes 2 * N steps, and never less than FX_CYCLE_MIN_MS (CA1.5): a
+// short strand at a high speed lit its whole field again less than 340 ms after it was last
+// full, and the S9 gate held the fill back. The step is stretched where 2 * N of them are shorter.
+inline uint32_t fxWipeStepMs(uint8_t speed, int N) {
+  uint32_t s = fxStepMs(speed);
+  const uint32_t least = (FX_CYCLE_MIN_MS + (uint32_t)N * 2u - 1u) / ((uint32_t)N * 2u);
+  return s < least ? least : s;
+}
 inline bool fxWipeLit(int p, uint32_t elapsed, uint8_t speed, int N) {
-  if (N <= 0) return false; uint32_t s = fxStepMs(speed); if (!s) s = 1;
+  if (N <= 0) return false; uint32_t s = fxWipeStepMs(speed, N);
   uint32_t ph = (elapsed / s) % ((uint32_t)N * 2u);   // 2*N wraps a 16-bit int for N > 16383
   if (ph < (uint32_t)N) return p <= (int)ph;          // fill: light 0..ph
   return p < (int)((uint32_t)N * 2u - 1u - ph);       // drain: dark from N-1 back down
@@ -1427,15 +1449,21 @@ inline uint8_t contractFormatQuery(char* out, uint8_t outLen, uint8_t route, cha
 // and swept at different rates on the three boards. These are the shared definitions.
 // R1 adopts ONLY the pulse floor (S8: a pulse cycle is never shorter than 340 ms); the forks
 // switch flash and scan to these in R2, because that changes how those looks appear.
-inline uint32_t fxFlashHalfMs(uint8_t speed) { return STROBE_MIN_STATE_MS + (uint32_t)(255 - speed); }   // 170..425 ms a state
+// (CA1.5: the fastest state is 190 ms, not STROBE_MIN_STATE_MS. A flash that lights exactly
+// every 340 ms meets the S9 gate's 340 ms window with no room at all: a frame drawn a few
+// milliseconds late makes the next ON edge early by as much, the gate holds it for a frame, and
+// every held edge moves the next one later still, until a whole flash is lost. With 20 ms a
+// state to spare nothing is held with frames up to 40 ms apart: test/host/gate_held_table.cpp.)
+static const uint32_t FX_FLASH_MIN_STATE_MS = STROBE_MIN_STATE_MS + 20u;
+inline uint32_t fxFlashHalfMs(uint8_t speed) { return FX_FLASH_MIN_STATE_MS + (uint32_t)(255 - speed); }   // 190..445 ms a state
 inline bool fxFlashOn(uint32_t elapsed, uint8_t speed) {
   const uint32_t h = fxFlashHalfMs(speed);
   return (elapsed % (2u * h)) < h;
 }
-// pulse: a triangle breathe 0..255..0. The full cycle is 2000 ms at s=0 down to
-// 2 * STROBE_MIN_STATE_MS (340 ms) at s=255: S8, never faster than the photosensitivity cap.
+// pulse: a triangle breathe 0..255..0. The full cycle is 2000 ms at s=0 down to FX_CYCLE_MIN_MS
+// at s=255 (it was 340 ms until CA1.5: S8's floor, which the S9 gate then squared off).
 inline uint32_t fxPulsePeriodMs(uint8_t speed) {
-  return 2000u - ((uint32_t)speed * (2000u - 2u * STROBE_MIN_STATE_MS)) / 255u;
+  return 2000u - ((uint32_t)speed * (2000u - FX_CYCLE_MIN_MS)) / 255u;
 }
 inline uint8_t fxPulseBright(uint32_t elapsed, uint8_t speed) {
   const uint32_t period = fxPulsePeriodMs(speed);

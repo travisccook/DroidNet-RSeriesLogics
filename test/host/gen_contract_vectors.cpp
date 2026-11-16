@@ -150,8 +150,10 @@ int main(int argc, char** argv) {
   for (int n : strands) for (int s : speeds) for (uint32_t t = 0; t < 6000; t += 373) row({ (long)t, s, n, fxHead(t, (uint8_t)s, n) });
   group("fxCometBright", "\"p\", \"head\", \"N\"", "\"bright\"");
   for (int n : strands) for (int h = 0; h < n; h += (n > 8 ? 5 : 1)) for (int p = 0; p < n; p++) row({ p, h, n, fxCometBright(p, h, n) });
-  group("fxChaseLit", "\"p\", \"elapsed\", \"speed\"", "\"lit\"");
-  for (int s : speeds) for (uint32_t t = 0; t < 2000; t += 211) for (int p = 0; p < 6; p++) row({ p, (long)t, s, fxChaseLit(p, t, (uint8_t)s) ? 1 : 0 });
+  // CA1.5: fxChaseLit takes N (every third position of a ring of N: a constant lit count).
+  group("fxChaseLit", "\"p\", \"elapsed\", \"speed\", \"N\"", "\"lit\"");
+  for (int n : { 6, 7, 8, 10 }) for (int s : { 0, 128, 255 }) for (uint32_t t = 0; t < 2000; t += 211) for (int p = 0; p < n; p++)
+    row({ p, (long)t, s, n, fxChaseLit(p, t, (uint8_t)s, n) ? 1 : 0 });
   group("fxWipeLit", "\"p\", \"elapsed\", \"speed\", \"N\"", "\"lit\"");
   for (int n : { 6, 8, 10 }) for (int s : { 0, 128, 255 }) for (uint32_t t = 0; t < 4000; t += 331) for (int p = 0; p < n; p++) row({ p, (long)t, s, n, fxWipeLit(p, t, (uint8_t)s, n) ? 1 : 0 });
   group("fxGradientHue", "\"p\", \"N\", \"baseHue\", \"elapsed\", \"speed\"", "\"hue\"");

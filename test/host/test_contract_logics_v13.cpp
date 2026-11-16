@@ -732,11 +732,22 @@ static void test_shared_effect_timing() {
   CHECK(FLD->px(0, 0).r <= 2);
   run(990); CHECK(FLD->px(0, 0).r >= 158 && FLD->px(0, 0).r <= 160);       // the peak is the ceiling, not above it
   run(1000); CHECK(FLD->px(0, 0).r <= 2);
-  // S8: at the fastest speed the cycle is 340 ms, never shorter: under 2.95 swings a second
+  // S8, CA1.5: at the fastest speed the cycle is 680 ms, never shorter: 1.47 swings a second,
+  // and the S9 gate leaves the triangle as drawn (at 340 ms it squared the rise off)
   resetAll(); send("LFA:i=pulse,c=ffffff,s=255");
   uint32_t gap = 0;
   const int fast = levelSwings(30, 120, 10000, gap);
-  CHECK(fast >= 29 && fast <= 30 && gap >= 330);                           // a 340 ms cycle: 2.94 a second
+  CHECK(fast >= 14 && fast <= 15 && gap >= 670);
+  resetAll(); send("LFA:i=pulse,c=ffffff,s=255"); run(1020 + 170);        // a quarter of the way up its second rise
+  CHECK(FLD->px(0, 0).r >= 76 && FLD->px(0, 0).r <= 84);                   // half the ceiling, as the triangle says: not held
+  // chase lights the same number of columns at every step (3 of 8), so the field mean stands still
+  resetAll(); send("LFA:i=chase,c=ffffff,s=255"); run(400);
+  { const int level = fieldLevel(FLD); int moved = 0;
+    for (int i = 0; i < 100; i++) { run(10); if (fieldLevel(FLD) != level) moved++; }
+    CHECK(level == 160 * 3 / 8 && moved == 0); }
+  // a wipe on 8 columns at the top speed takes 680 ms a cycle and is not held either
+  resetAll(); send("LFA:i=wipe,c=ffffff,s=255"); run(10);
+  levelSwings(30, 120, 10000, gap); CHECK(gap >= 670 && gap <= 700);
   // under the beat pump the fill is steady and the pump moves it (S2 keeps that under the same floor)
   resetAll(); send("LFA:i=pulse,c=ffffff,s=255,m=255,am=2"); send("**C:bpm=300,ph=0,bpb=4,beat=0");
   levelSwings(30, 120, 10000, gap); CHECK(gap >= 390);                     // 300 BPM: every second beat, 400 ms
@@ -757,14 +768,15 @@ static void test_shared_effect_timing() {
   for (int step = 0; step < 16; step++) CHECK(col[step] == want[step]);
   for (int y = 0; y < 10; y++) CHECK(FLD->px(1, y).r > 0);                 // a whole column, top to bottom
 
-  // flash: 170 ms a state at s=255 and 425 ms at s=0, the strobe cap at every speed
+  // flash: 190 ms a state at s=255 and 445 ms at s=0: over the strobe cap at every speed, by
+  // the 20 ms that keep a late frame from putting the next ON edge inside the S9 window (CA1.5)
   resetAll(); send("LFA:i=flash,c=ffffff,s=255"); run(10);
-  CHECK(FLD->px(0, 0).r == 160); run(150); CHECK(FLD->px(0, 0).r == 160);  // 160 ms: still lit
-  run(20);  CHECK(FLD->px(0, 0).r == 0);                                   // 180 ms: dark
-  run(160); CHECK(FLD->px(0, 0).r == 160);                                 // 340 ms: lit again
+  CHECK(FLD->px(0, 0).r == 160); run(170); CHECK(FLD->px(0, 0).r == 160);  // 180 ms: still lit
+  run(20);  CHECK(FLD->px(0, 0).r == 0);                                   // 200 ms: dark
+  run(180); CHECK(FLD->px(0, 0).r == 160);                                 // 380 ms: lit again
   resetAll(); send("LFA:i=flash,c=ffffff,s=255");
-  levelSwings(30, 120, 10000, gap); CHECK(gap >= 330);
-  resetAll(); send("LFA:i=flash,c=ffffff,s=0"); run(420);
+  levelSwings(30, 120, 10000, gap); CHECK(gap >= 370 && gap <= 390);
+  resetAll(); send("LFA:i=flash,c=ffffff,s=0"); run(440);
   CHECK(FLD->px(0, 0).r == 160); run(20); CHECK(FLD->px(0, 0).r == 0);
 }
 

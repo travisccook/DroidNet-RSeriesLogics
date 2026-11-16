@@ -615,15 +615,21 @@ static void test_query_reply() {
 
 // ---- S8 and section 12: one timing definition for flash / pulse / scan ----
 static void test_v1_effect_timing() {
-  CHECK(fxFlashHalfMs(255) == 170 && fxFlashHalfMs(0) == 425 && fxFlashHalfMs(128) == 297);
-  CHECK(fxFlashOn(0, 255) && fxFlashOn(169, 255) && !fxFlashOn(170, 255) && !fxFlashOn(339, 255) && fxFlashOn(340, 255));
-  for (int sp = 0; sp <= 255; sp++) CHECK(fxFlashHalfMs((uint8_t)sp) >= STROBE_MIN_STATE_MS);
-  // S8: the pulse cycle is never shorter than 2 * STROBE_MIN_STATE_MS, at any speed
-  CHECK(fxPulsePeriodMs(0) == 2000 && fxPulsePeriodMs(255) == 340);
-  for (int sp = 0; sp <= 255; sp++) CHECK(fxPulsePeriodMs((uint8_t)sp) >= 2u * STROBE_MIN_STATE_MS);
+  // (CA1.5: 190 ms at the fastest, 20 ms over the strobe floor, so that a late frame does not put
+  // the next ON edge inside the S9 gate's window)
+  CHECK(FX_FLASH_MIN_STATE_MS == 190);
+  CHECK(fxFlashHalfMs(255) == 190 && fxFlashHalfMs(0) == 445 && fxFlashHalfMs(128) == 317);
+  CHECK(fxFlashOn(0, 255) && fxFlashOn(189, 255) && !fxFlashOn(190, 255) && !fxFlashOn(379, 255) && fxFlashOn(380, 255));
+  for (int sp = 0; sp <= 255; sp++) CHECK(fxFlashHalfMs((uint8_t)sp) >= FX_FLASH_MIN_STATE_MS && fxFlashHalfMs((uint8_t)sp) > STROBE_MIN_STATE_MS);
+  // S8, and CA1.5: the pulse cycle is never shorter than FX_CYCLE_MIN_MS (680 ms), at any speed.
+  // It was 340 ms, which the S9 gate does not let through as drawn: the field may light again
+  // only 340 ms after its PEAK.
+  CHECK(FX_CYCLE_MIN_MS == 680);
+  CHECK(fxPulsePeriodMs(0) == 2000 && fxPulsePeriodMs(255) == 680);
+  for (int sp = 0; sp <= 255; sp++) CHECK(fxPulsePeriodMs((uint8_t)sp) >= FX_CYCLE_MIN_MS);
   CHECK(fxPulseBright(0, 0) == 0 && fxPulseBright(1000, 0) == 255 && fxPulseBright(500, 0) == 127);
   CHECK(fxPulseBright(2000, 0) == 0 && fxPulseBright(1500, 0) == 127);
-  CHECK(fxPulseBright(170, 255) == 255 && fxPulseBright(340, 255) == 0 && fxPulseBright(85, 255) == 127);
+  CHECK(fxPulseBright(340, 255) == 255 && fxPulseBright(680, 255) == 0 && fxPulseBright(170, 255) == 127);
   for (int sp = 0; sp <= 255; sp += 5)              // every period, odd ones included: never past 255
     for (uint32_t t = 0; t < 2100; t++) CHECK(fxPulseBright(t, (uint8_t)sp) <= 255);
   const int want[] = { 0, 1, 2, 3, 2, 1, 0, 1 };     // ping-pong on N=4, one step per 30 ms

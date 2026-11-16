@@ -9,6 +9,7 @@ static unsigned long gStatFrames[2], gStatHeld[2], gStatLoss[2];
 #include <cstdio>
 #include <string>
 
+static bool gJitter = false;
 static void measure(const std::string& setup, const std::string& look, uint32_t ms, double out[2][2]) {
   resetAll();
   for (int i = 0; i < 50; i++) { _mock_millis += 10; frame(); }
@@ -17,13 +18,27 @@ static void measure(const std::string& setup, const std::string& look, uint32_t 
   send(("L*A:" + look).c_str());
   for (int i = 0; i < 100; i++) { _mock_millis += 10; frame(); }      // the look is up, its first onset is behind it
   for (int u = 0; u < 2; u++) gStatFrames[u] = gStatHeld[u] = gStatLoss[u] = 0;
-  for (uint32_t t = 0; t < ms; t += 10) { _mock_millis += 10; frame(); }
+  // frames 10 to 15 ms apart, as a loop with other work in it draws them (a fixed generator)
+  uint32_t x = 0x2545F491u;
+  for (uint32_t t = 0; t < ms; ) {
+    x = x * 1664525u + 1013904223u;
+    const uint32_t dt = gJitter ? 10u + (x >> 24) % 6u : 10u;
+    _mock_millis += dt; t += dt; frame();
+  }
   for (int u = 0; u < 2; u++) {
     out[u][0] = gStatFrames[u] ? 100.0 * gStatHeld[u] / gStatFrames[u] : 0;
     out[u][1] = gStatHeld[u] ? 100.0 * gStatLoss[u] / (255.0 * gStatHeld[u]) : 0;
   }
 }
+static void table(bool jitter);
 int main() {
+  table(false);
+  printf("\nThe same with frames 10 to 15 ms apart:\n\n");
+  table(true);
+  return 0;
+}
+static void table(bool jitter) {
+  gJitter = jitter;
   static const char* const kLooks[] = { "solid", "flash", "pulse", "rainbow", "scan", "sparkle", "meter", "comet", "chase",
                                         "wipe", "gradient", "colorcycle", "twinkle" };
   static const int kSpeeds[] = { 0, 64, 128, 192, 255 };
@@ -54,5 +69,4 @@ int main() {
     }
     printf("\n");
   }
-  return 0;
 }
