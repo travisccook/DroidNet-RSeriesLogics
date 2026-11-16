@@ -16,29 +16,65 @@
 #   7. Marcduino prefix-collision guard (registered actions + library catalog snapshot)
 #   8. native #LEBRI brightness parser fuzz + differential (ASan/UBSan, deterministic)
 #   9. REAL cross-compile for the ESP32 (optional; needs PlatformIO)
-set -e
+#
+# How it runs:
+#   * Any C++17 compiler: clang++ if present, else g++ (override with CXX=...).
+#   * The fuzz stages need ASan + UBSan. The first of $CXX, clang++, g++ that can BUILD AND RUN
+#     a sanitized binary here is used for them. If none can, the run FAILS (it does not quietly
+#     skip them); ALLOW_NO_SANITIZER=1 runs them unsanitized, with a warning.
+#   * Binaries go to a fresh temporary directory that is removed on exit.
+#   * ONLY="1 4" runs just those stage ids. The last lines list what ran and what was skipped.
+#   * Stage 9 is skipped without PlatformIO; REQUIRE_PIO=1 turns that into a failure.
+set -euo pipefail
 cd "$(dirname "$0")"
-echo "[1/9] contract_core parser unit tests"
-clang++ -std=c++17 -Wall -Wextra -O0 test_contract_core.cpp -o /tmp/rseries_contract_test
-/tmp/rseries_contract_test
-echo "[1b/9] wifi_connect_core FSM unit tests"
-clang++ -std=c++17 -Wall -Wextra -O0 test_wifi_connect_core.cpp -o /tmp/rseries_wifi_test
-/tmp/rseries_wifi_test
-echo "[1c/9] wdp_announce_core WDP device announce unit tests"
+OUT="$(mktemp -d "${TMPDIR:-/tmp}/rseries-host.XXXXXX")"
+trap 'rm -rf "$OUT"' EXIT
+
+CXX="${CXX:-$(command -v clang++ || command -v g++ || true)}"
+[ -n "$CXX" ] || { echo "FAIL: no C++ compiler found (clang++ or g++)"; exit 1; }
+SAN="-fsanitize=address,undefined -fno-sanitize-recover=all"
+san_ok() {   # can this compiler build AND run a sanitized binary here?
+  echo 'int main(){return 0;}' > "$OUT/san.cpp"
+  "$1" $SAN "$OUT/san.cpp" -o "$OUT/san" 2>/dev/null && "$OUT/san"
+}
+SANCXX=""
+for c in "$CXX" clang++ g++; do
+  if command -v "$c" >/dev/null 2>&1 && san_ok "$c"; then SANCXX="$c"; break; fi
+done
+if [ -z "$SANCXX" ] && [ "${ALLOW_NO_SANITIZER:-0}" != 1 ]; then
+  echo "FAIL: no compiler here can link ASan/UBSan, so the fuzz stages cannot run."
+  echo "      Install one (apt: libclang-rt-dev, or g++), or set ALLOW_NO_SANITIZER=1 to run them unsanitized."
+  exit 1
+fi
+if [ -z "$SANCXX" ]; then
+  echo "WARNING: fuzz stages run WITHOUT sanitizers (ALLOW_NO_SANITIZER=1)"; SANCXX="$CXX"; SAN=""
+fi
+echo "compiler: $CXX   sanitized stages: $SANCXX ${SAN:+(ASan+UBSan)}"
+
+RAN=""; SKIPPED=""
+want() { [ -z "${ONLY:-}" ] || case " $ONLY " in *" $1 "*) return 0;; *) return 1;; esac; }
+# stage <id> <title> <compiler> <flags and source...>: build into $OUT, run, record.
+stage() {
+  local id="$1" title="$2" cxx="$3"; shift 3
+  want "$id" || return 0
+  echo "[$id] $title"
+  "$cxx" "$@" -o "$OUT/stage_$id"       # two lines on purpose: `a && b` would hide a failed build from set -e
+  "$OUT/stage_$id"
+  RAN="$RAN $id"
+}
+
+stage 1  "contract_core parser unit tests" "$CXX" -std=c++17 -Wall -Wextra -O0 test_contract_core.cpp
+stage 1b "wifi_connect_core FSM unit tests" "$CXX" -std=c++17 -Wall -Wextra -O0 test_wifi_connect_core.cpp
 # -std=c++11: the AVR forks build this same header with avr-gcc's gnu++11.
-clang++ -std=c++11 -Wall -Wextra -Werror -O0 test_wdp_announce_core.cpp -o /tmp/rseries_wdp_test
-/tmp/rseries_wdp_test
-echo "[1d/9] wdp_fork RSeries WDP identity + Serial1 adapter"
+stage 1c "wdp_announce_core WDP device announce unit tests" "$CXX" -std=c++11 -Wall -Wextra -Werror -O0 test_wdp_announce_core.cpp
 # Fork-local. Builds the line from the header's own WDP_TYPE/WDP_CAPS with a dirty build's fw
 # ("<sha>-dirty") and with any fw up to the WCB's 27-char limit, and drives wdpForkTick()
 # against a mock port. -std=c++11: the ESP32 core builds with gnu++11.
-clang++ -std=c++11 -Wall -Wextra -Werror -O0 test_wdp_fork.cpp -o /tmp/rseries_wdp_fork_test
-/tmp/rseries_wdp_fork_test
-echo "[2/9] ContractLogics.h firmware type-check"
-clang++ -std=c++17 -Wall -Wextra compile_contract_logics.cpp -o /tmp/rseries_fw_syntax
-/tmp/rseries_fw_syntax
+stage 1d "wdp_fork RSeries WDP identity + Serial1 adapter" "$CXX" -std=c++11 -Wall -Wextra -Werror -O0 test_wdp_fork.cpp
+stage 2  "ContractLogics.h firmware type-check" "$CXX" -std=c++17 -Wall -Wextra compile_contract_logics.cpp
 
-echo "[3/9] Marcduino command-buffer width guard"
+if want 3; then
+echo "[3] Marcduino command-buffer width guard"
 # lib/Reeltwo/src/core/Marcduino.h:173-175 — MarcduinoSerial::animate() reads a byte and:
 #     else if (fPos < SizeOfArray(fBuffer)-1) fBuffer[fPos++] = ch;
 # Every byte past that is DROPPED ON THE FLOOR, with no error and no flag; on the next CR it
@@ -110,8 +146,9 @@ if [ "$WIDTH" -lt "$need" ]; then
   exit 1
 fi
 echo "MarcduinoSerial BUFFER_SIZE=$WIDTH >= $need (worst v1.2 scored line ${#worst} chars) OK"
+RAN="$RAN 3"
+fi
 
-echo "[4/9] parser fuzz + differential (ASan/UBSan, deterministic)"
 # The parsers are the one place this project eats bytes off a shared, noisy serial bus, and to
 # save 1,008 B of flash on the PSI they were hand-rolled instead of using strtol/strtoul. This
 # stage is the differential that keeps them honest: ~1.55M checks against an INDEPENDENT model
@@ -119,37 +156,27 @@ echo "[4/9] parser fuzz + differential (ASan/UBSan, deterministic)"
 # overflow -- which is the whole trap), plus hostile/whole-byte-range lines through
 # contractParse() under AddressSanitizer + UndefinedBehaviorSanitizer.
 # Fixed seed: deterministic and reproducible, not a slot machine.
-clang++ -std=c++17 -O1 -fsanitize=address,undefined -fno-sanitize-recover=all \
-        fuzz_parsers.cpp -o /tmp/rserieslogics_fuzz
-/tmp/rserieslogics_fuzz
+stage 4 "parser fuzz + differential (ASan/UBSan, deterministic)" "$SANCXX" -std=c++17 -O1 $SAN fuzz_parsers.cpp
 
-echo "[5/9] native #LEBRI brightness parser unit tests"
 # src/native/native_brightness_parse.h: the strict reject rule (no clamp, no floor), every
 # boundary, and outputs untouched on a rejected tail.
-clang++ -std=c++17 -Wall -Wextra -Werror -O0 test_native_brightness.cpp -o /tmp/rseries_native_brightness_test
-/tmp/rseries_native_brightness_test
+stage 5 "native #LEBRI brightness parser unit tests" "$CXX" -std=c++17 -Wall -Wextra -Werror -O0 test_native_brightness.cpp
 
-echo "[6/9] native #LEBRI brightness action behaviour (mock)"
 # src/native/NativeBrightness.h against mock_native_brightness.h: controller capture, the
 # raise-once baseline, the per-display correction, and a display with no controller ignored.
-clang++ -std=c++17 -Wall -Wextra -Werror -O0 test_native_brightness_action.cpp -o /tmp/rseries_native_brightness_action
-/tmp/rseries_native_brightness_action
+stage 6 "native #LEBRI brightness action behaviour (mock)" "$CXX" -std=c++17 -Wall -Wextra -Werror -O0 test_native_brightness_action.cpp
 
-echo "[7/9] Marcduino prefix-collision guard"
 # Marcduino.h runs every action whose text prefixes the line and only the LAST one survives,
 # so a prefix clash silently drops a command. Reads the registered actions from source and the
 # library's example lines from catalog_example_lines.tsv (refresh_catalog_examples.py).
-clang++ -std=c++17 -Wall -Wextra -Werror -O1 prefix_guard.cpp -o /tmp/rseries_prefix_guard
-/tmp/rseries_prefix_guard
+stage 7 "Marcduino prefix-collision guard" "$CXX" -std=c++17 -Wall -Wextra -Werror -O1 prefix_guard.cpp
 
-echo "[8/9] native #LEBRI brightness parser fuzz + differential (ASan/UBSan, deterministic)"
 # Fork-local. fuzz_parsers.cpp above is shared byte-identically with the PSI and Flthy forks
 # and is not edited here.
-clang++ -std=c++17 -Wall -Wextra -Werror -O1 -fsanitize=address,undefined -fno-sanitize-recover=all \
-        fuzz_native_brightness.cpp -o /tmp/rseries_native_brightness_fuzz
-/tmp/rseries_native_brightness_fuzz
+stage 8 "native #LEBRI brightness parser fuzz + differential (ASan/UBSan, deterministic)" "$SANCXX" -std=c++17 -Wall -Wextra -Werror -O1 $SAN fuzz_native_brightness.cpp
 
-echo "[9/9] REAL cross-compile (ESP32 (wlogicengine32)) -- optional"
+if want 9; then
+echo "[9] REAL cross-compile (ESP32 (wlogicengine32)) -- optional"
 # THIS is the stage that makes "it compiles" a claim about the FIRMWARE rather than a claim
 # about our mock. Stages 1-3 are host checks: they prove the contract logic and they pin the
 # board API against a HAND-WRITTEN MOCK -- and a mock is only ever as honest as its author.
@@ -167,21 +194,33 @@ echo "[9/9] REAL cross-compile (ESP32 (wlogicengine32)) -- optional"
 # stages 1-8 still run and still mean something -- just strictly less than they appear to.
 PIO="${PIO:-$HOME/.platformio/penv/bin/pio}"
 [ -x "$PIO" ] || PIO="$(command -v pio 2>/dev/null || true)"
-if [ -z "$PIO" ] || [ ! -x "$PIO" ]; then
+if [ -n "$PIO" ] && [ -x "$PIO" ]; then
+  echo "using $PIO"
+  ( cd ../.. && "$PIO" run -e wlogicengine32 )
+  echo "cross-compiles for the real MCU (ESP32 (wlogicengine32)) OK"
+  echo "    (a successful LINK is not a bench test. firmware/README.md says what has run on hardware.)"
+  echo
+  echo "    NOTE: this stage builds the wlogicengine32 (plain ESP32) env only. The wlogicengine32s3"
+  echo "    (ESP32-S3) env DOES build -- run: pio run -e wlogicengine32s3 -- but it is left out of"
+  echo "    the suite deliberately. It is a fork-local hand-translation of upstream's make TARGET=ESP32S3"
+  echo "    (upstream has no S3 PlatformIO env), and it carries hardware-config guesses a green build"
+  echo "    cannot check: USB-CDC-on-boot is not set, so Serial would land on UART0 and the board would"
+  echo "    likely look silent. It compiles. That is ALL it does. See the README."
+  RAN="$RAN 9"
+elif [ "${REQUIRE_PIO:-0}" = 1 ]; then
+  echo "FAIL: REQUIRE_PIO=1 and PlatformIO was not found (pip install platformio, or PIO=/path/to/pio)"
+  exit 1
+else
   echo "SKIP: PlatformIO not found, so NOTHING here was compiled for the real MCU."
-  echo "      Stages 1-8 passed, but they only type-check against our mock."
   echo "      Install it and re-run for the real check:  pip install platformio"
   echo "      Or point this at an existing install:      PIO=/path/to/pio $0"
-  exit 0
+  SKIPPED="$SKIPPED 9(no-PlatformIO)"
 fi
-echo "using $PIO"
-( cd ../.. && "$PIO" run -e wlogicengine32 )
-echo "cross-compiles for the real MCU (ESP32 (wlogicengine32)) OK"
-echo "    (a successful LINK is not a bench test: this firmware has never been flashed.)"
+fi
+
 echo
-echo "    NOTE: this stage builds the wlogicengine32 (plain ESP32) env only. The wlogicengine32s3"
-echo "    (ESP32-S3) env DOES build now -- run: pio run -e wlogicengine32s3 -- but it is left out of"
-echo "    the suite deliberately. It is a fork-local hand-translation of upstream\'s make TARGET=ESP32S3"
-echo "    (upstream has no S3 PlatformIO env), and it carries hardware-config guesses a green build"
-echo "    cannot check: USB-CDC-on-boot is not set, so Serial would land on UART0 and the board would"
-echo "    likely look silent. It compiles. That is ALL it does. See the README."
+echo "stages run:$RAN"
+echo "stages skipped:${SKIPPED:- none}"
+if [ -n "$SKIPPED" ]; then
+  echo "NOTE: a skipped stage proved nothing. Stage 9 is the only real cross-compile."
+fi

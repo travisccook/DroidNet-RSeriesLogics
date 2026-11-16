@@ -6,9 +6,8 @@
 //
 // Build it the way test/host/run.sh does, with the sanitizers on and a fixed seed:
 //
-//   clang++ -std=c++17 -Wall -Wextra -Werror -O1 -fsanitize=address,undefined \
-//           -fno-sanitize-recover=all test/host/fuzz_native_brightness.cpp \
-//           -o /tmp/rseries_native_brightness_fuzz && /tmp/rseries_native_brightness_fuzz
+//   ONLY=8 bash test/host/run.sh
+//   (-std=c++17 -Wall -Wextra -Werror -O1 -fsanitize=address,undefined -fno-sanitize-recover=all)
 //
 // Every tail is copied into a HEAP buffer of exactly strlen()+1 bytes, so one byte read past
 // the NUL is an AddressSanitizer failure rather than a silent success. Every result is
@@ -126,8 +125,8 @@ static void sectionC() {
       int limit = 1;
       for (int i = 0; i < len; i++) limit *= 10;
       for (int v = 0; v < limit; v++) {
-        char digits[8];
-        snprintf(digits, sizeof digits, "%0*d", len, v);
+        std::string digits = std::to_string(v);            // v < 10^len: never more than len digits
+        digits.insert(0, (size_t)len - digits.size(), '0');
         check(std::string(unit) + digits);
       }
     }
