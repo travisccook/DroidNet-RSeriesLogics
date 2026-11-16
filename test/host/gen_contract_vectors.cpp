@@ -11,6 +11,8 @@
 //             groups: { <function>: { args: [name...], out: [name...], rows: [[args..., outs...]] } } }
 // Every group value is an integer. A float is carried scaled (phase_e6 = round(phase * 1e6)).
 // Groups are append-only: a later change adds a group, it never reshapes one.
+// A STATEFUL group (contractFieldGate) has "seq" as its first argument: the rows of one seq run in
+// order through one state, and a new seq starts from a fresh one (docs/CHANGING_THE_CORE.md).
 // Fork-local to RSeries, the canonical home of the shared core; the JSON it prints is committed as
 // test/host/vectors/contract_vectors.json and copied to Studio (docs/CHANGING_THE_CORE.md).
 #include "../../src/contract/contract_core.h"
@@ -28,6 +30,20 @@ static void row(std::initializer_list<long long> v) {
   bool first = true;
   for (long long x : v) { printf("%s%lld", first ? "" : ", ", x); first = false; }
   printf("]");
+}
+
+// The S9 field gate is a state machine, so its group is sequences, not independent rows.
+// gateSeq(ceil) starts one from a fresh ContractUnitState with that ceiling; gate() runs one step
+// and prints the answer and the state after it. reset = 1: the show reset (contractShowReset, with
+// the row's ceiling) runs first, which is what every M:v=show, X and M:v=idle does.
+static int gGateSeq = 0;
+static ContractUnitState gGate;
+static void gateSeq(int ceil) { gGateSeq++; gGate = ContractUnitState(); gGate.ceil = (uint8_t)ceil; }
+static void gate(uint32_t nowMs, int level, bool reset = false, int newCeil = -1) {
+  if (reset) contractShowReset(gGate, (uint8_t)(newCeil >= 0 ? newCeil : gGate.ceil));
+  const uint8_t allowed = contractFieldGate(gGate, (uint8_t)level, nowMs);
+  row({ gGateSeq, gGate.ceil, reset ? 1 : 0, (long long)nowMs, level,
+        allowed, gGate.fieldLit ? 1 : 0, gGate.fieldRef, (long long)gGate.fieldOnsetMs });
 }
 
 // A C line with all four keys, received at seedMs.
@@ -164,6 +180,71 @@ int main(int argc, char** argv) {
   for (int s : speeds) for (uint32_t t = 0; t < 4100; t += 67) row({ t, s, fxPulseBright(t, (uint8_t)s) });
   group("fxScanPos", "\"elapsed\", \"speed\", \"N\", \"wrap\"", "\"pos\"");
   for (int n : strands) for (int w : { 0, 1 }) for (int s : { 0, 128, 255 }) for (uint32_t t = 0; t < 5000; t += 211) row({ t, s, n, w, fxScanPos(t, (uint8_t)s, n, w != 0) });
+  // S9, the field gate (CA1.2). STATEFUL: see gate() above and docs/CHANGING_THE_CORE.md.
+  group("contractFieldGate", "\"seq\", \"ceil\", \"reset\", \"nowMs\", \"level\"",
+        "\"allowed\", \"lit\", \"ref\", \"onsetMs\"");
+  // 1. The plain life of a display, ceiling 200 (step 51): dark, a first light, a dip that is
+  //    not a fall, a blackout (never delayed), a relight held to step - 1 above the trough until
+  //    exactly 340 ms after the onset, texture under a step passing meanwhile.
+  gateSeq(200);
+  gate(1000, 0); gate(1010, 200); gate(1020, 180); gate(1030, 200); gate(1040, 0);
+  gate(1050, 200); gate(1100, 40); gate(1200, 51); gate(1349, 200); gate(1350, 200); gate(1360, 200);
+  //    The window runs from when the field last got BRIGHTER: a slow rise keeps moving it.
+  gate(1700, 0); gate(1710, 60); gate(1900, 120); gate(2100, 200); gate(2110, 0);
+  gate(2400, 200); gate(2439, 200); gate(2440, 200);
+  //    A fall to a trough that is not dark, the hold measured from that trough, and the trough
+  //    following the level down while it is held.
+  gate(2450, 120); gate(2460, 200); gate(2470, 100); gate(2480, 200); gate(2490, 30); gate(2500, 200);
+  gate(2779, 200); gate(2780, 200);
+  // 2. The threshold from both sides, ceiling 200: a rise of 50 above the trough is texture and one
+  //    of 51 an onset; a fall of 50 below the peak leaves the field lit and one of 51 does not.
+  gateSeq(200);
+  gate(5000, 0); gate(5010, 50); gate(5020, 0); gate(5030, 51); gate(5040, 1); gate(5050, 0);
+  gate(6000, 200); gate(6010, 150); gate(6020, 200); gate(6030, 149); gate(6040, 200); gate(6400, 200);
+  gate(6410, 10); gate(6420, 60); gate(6430, 61); gate(6440, 9); gate(6450, 59); gate(6460, 60); gate(6800, 60);
+  // 3. Power-on: the anchor starts at 0, so the first 340 ms are held.
+  gateSeq(255);
+  gate(0, 255); gate(100, 255); gate(339, 255); gate(340, 255); gate(350, 0); gate(679, 255); gate(680, 255);
+  // 4. millis() wrapping, ceiling 255: an onset before the wrap, the relight held across it.
+  gateSeq(255);
+  gate(4294967040u, 255); gate(4294967168u, 0); gate(4294967295u, 255); gate(0u, 255); gate(16u, 255);
+  gate(83u, 255); gate(84u, 255); gate(100u, 0); gate(423u, 255); gate(424u, 255);
+  // 5. State kept across a show reset: X, M:v=show and M:v=idle cannot be used to open the window,
+  //    and a reset that brings a new ceiling changes the step, not the anchor or the level reference.
+  gateSeq(200);
+  gate(3000, 200); gate(3010, 0); gate(3100, 200, true); gate(3200, 200, true); gate(3300, 200, true);
+  gate(3339, 200); gate(3340, 200); gate(3350, 0, true); gate(3400, 100, true, 100); gate(3679, 100); gate(3680, 100);
+  gate(3690, 80, true, 255); gate(3700, 255); gate(3710, 100); gate(3720, 255); gate(4059, 255); gate(4060, 255);
+  // 6. Odd ceilings. The step is ceil / 4 + 1: 1 for ceilings under 4, so every rise is an onset
+  //    there. The same script at each: light, dark, relight at once, dark, a step exactly, the hold.
+  for (int c : { 0, 1, 2, 3, 4, 20, 63, 64, 160, 200, 254, 255 }) {
+    const int step = c / 4 + 1;
+    gateSeq(c);
+    gate(10000, 0); gate(10010, c); gate(10020, 0); gate(10030, c); gate(10349, c); gate(10350, c);
+    gate(10360, c > step ? c - step : 0); gate(10370, c); gate(10380, c >= step ? c - step + 1 : 0); gate(10390, c);
+    gate(10400, 0); gate(10410, step - 1 <= c ? step - 1 : c); gate(10420, step <= c ? step : c); gate(10730, c);
+    gate(10740, c / 2); gate(10750, c); gate(11090, c);
+  }
+  // 7. A long deterministic walk (a fixed LCG: no clock, no library RNG), at three ceilings: jumps,
+  //    ramps, texture and irregular frame times, so a mirror is pinned well away from the hand-made cases.
+  for (int c : { 37, 160, 255 }) {
+    gateSeq(c);
+    uint32_t x = 0x1234567u + (uint32_t)c, now = 2000; int level = 0;
+    for (int i = 0; i < 400; i++) {
+      x = x * 1664525u + 1013904223u;
+      const uint32_t r = x >> 8;
+      now += (r % 13 == 0) ? 10 + (r >> 4) % 400 : (r % 5 == 0 ? 1 + (r >> 4) % 30 : 10);
+      switch ((r >> 12) % 6) {
+        case 0: level = 0; break;
+        case 1: level = c; break;
+        case 2: level = (int)((r >> 16) % (uint32_t)(c + 1)); break;
+        case 3: level = level + (int)((r >> 16) % 9) > c ? c : level + (int)((r >> 16) % 9); break;
+        case 4: level = level - (int)((r >> 16) % 9) < 0 ? 0 : level - (int)((r >> 16) % 9); break;
+        default: break;                                              // the same level again
+      }
+      gate(now, level, (r >> 20) % 97 == 0);
+    }
+  }
   // GROUPS ADDED BY LATER TASKS GO HERE (keep the order: appended groups never renumber old ones)
   printf("\n    ]}\n  }\n}\n");
   return 0;

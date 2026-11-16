@@ -46,6 +46,27 @@ the firmware and the preview cannot disagree without a test failing. Schema 1:
 
 Groups are append-only: a later change adds a group, it never reshapes one.
 
+### A stateful group
+
+Most groups are pure functions: every row stands alone. `contractFieldGate` is a state machine, so its group is
+sequences. Its first argument is `seq`:
+
+- `args`: `seq`, `ceil`, `reset`, `nowMs`, `level`. `out`: `allowed`, `lit`, `ref`, `onsetMs`.
+- The rows of one `seq` run **in file order through one state**. A new `seq` starts from a fresh state: not lit,
+  `ref` 0, `onsetMs` 0, and the row's `ceil`.
+- Each row is one call: `allowed = contractFieldGate(state, level, nowMs)`. `allowed` is what a mirror has to
+  reproduce. `lit`, `ref` and `onsetMs` are the state after the call (`fieldLit`, `fieldRef`, `fieldOnsetMs`), for a
+  mirror that keeps the same three.
+- `reset` = 1: the show reset runs before the call, with the row's `ceil` as the new ceiling. It keeps the gate's
+  three fields, which is the point of those rows. `ceil` changes only on such a row.
+- `nowMs` is a uint32 `millis()` and wraps inside one sequence; the differences are what count.
+
+The sequences: a display's plain life (first light, a relight held and released at exactly 340 ms, a blackout
+never delayed, a slow rise, a trough that is not dark); the quarter-of-the-ceiling step from both sides; power-on;
+the `millis()` wrap; resets inside the window, one with a new ceiling; the same script at twelve ceilings from 0
+to 255; and three long walks from a fixed generator. A later stateful group follows the same shape: `seq` first,
+rows in order, the state after each call in `out`.
+
 ## Core revision CA1.2 (2026-11-16): what a fork has to do
 
 CA1.2 closes the findings of the 2026-11-16 review of R1. Most of it needs nothing from a fork beyond the re-copy:
