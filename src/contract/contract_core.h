@@ -925,7 +925,23 @@ inline void lookPatchDefault(ContractLookPatch& lp, uint8_t base) {
   }
 }
 
-struct ContractUnitState {
+// THE SAFETY ANCHORS of a unit: what no reset clears (contractShowReset). They are a struct of
+// their own so that the reset keeps them as one piece: a field added here is kept without
+// anyone having to remember it.
+struct ContractAnchors {
+  uint32_t       lastApplyMs = 0;       // S4: when the unit's look last changed (a live A, a section)
+  uint32_t       pulseLastMs = 0;       // the strobe cool-down
+  // ---- S9: the field gate (contractFieldGate)
+  uint32_t       fieldOnsetMs = 0;      // when the field last lit, or last got brighter while lit
+  uint8_t        fieldRef = 0;          // lit: the brightest level since it lit. Not lit: the darkest since it fell.
+  bool           fieldLit = false;
+  uint8_t        fieldRefY = 0;         // the same two for the field's LUMINANCE (a colour change moves it
+  bool           fieldLitY = false;     // while the brightest channel stays where it was)
+  // ---- S4 for every path: the look gate (contractLookGate)
+  uint32_t       lookSig = 0;           // the look the field last showed lit (contractLookSig); 0: none yet
+  uint32_t       lookMs = 0;            // when it changed to that, or the field last lit or got brighter in it
+};
+struct ContractUnitState : ContractAnchors {
   bool           inShow = false;        // M:v=show armed (it stays set through X)
   uint8_t        base = CB_NONE;        // ContractBase
   // ---- the look
@@ -941,14 +957,12 @@ struct ContractUnitState {
   // ---- S4: the held live look
   bool           holdPending = false;
   ContractLookPatch held;
-  uint32_t       lastApplyMs = 0;       // SAFETY ANCHOR: survives a reset
   // ---- the accent overlay
   bool           pulseActive = false;
   ContractEffect pulseFx = CE_NONE;
   ContractRGB    pulseColor{255, 255, 255};
   uint16_t       pulseDurMs = 0;
   uint32_t       pulseStartMs = 0;
-  uint32_t       pulseLastMs = 0;       // SAFETY ANCHOR (the strobe cool-down): survives a reset
   uint8_t        pulseBright = 255;     // the overlay's own brightness fraction (P's b=): never the base look's
   // ---- the score cursor, and the load check
   uint8_t        scoreLen = 0;          // entries held (the table itself is the fork's, sized by its cap)
@@ -960,15 +974,6 @@ struct ContractUnitState {
   int32_t        lastAccentBeat = BEAT_NONE;
   // ---- L2
   uint8_t        wdSec = 0;             // 0 = no watchdog
-  // ---- S9: the field gate (contractFieldGate). SAFETY ANCHORS: all of them survive a reset.
-  uint32_t       fieldOnsetMs = 0;      // when the field last lit, or last got brighter while lit
-  uint8_t        fieldRef = 0;          // lit: the brightest level since it lit. Not lit: the darkest since it fell.
-  bool           fieldLit = false;
-  uint8_t        fieldRefY = 0;         // the same two for the field's LUMINANCE (a colour change moves it
-  bool           fieldLitY = false;     // while the brightest channel stays where it was)
-  // ---- S4 for every path: the look gate (contractLookGate). SAFETY ANCHORS too.
-  uint32_t       lookSig = 0;           // the look the field last showed lit (contractLookSig); 0: none yet
-  uint32_t       lookMs = 0;            // when it changed to that, or the field last lit or got brighter in it
 };
 
 // S6: the level a brightness fraction gives under a ceiling. 255 is the ceiling itself, 128 half
@@ -983,14 +988,11 @@ inline uint8_t contractLevel(uint8_t ceil, uint8_t fraction) {
 // (X, then P, repeated). A failed load check (loadOk == 2) is kept too; contractOnShow() is what
 // clears it.
 inline void contractShowReset(ContractUnitState& s, uint8_t ceiling) {
-  const uint32_t keepPulse = s.pulseLastMs, keepApply = s.lastApplyMs, keepOnset = s.fieldOnsetMs;
-  const uint8_t  keepOk = (s.loadOk == 2) ? 2 : 0, keepRef = s.fieldRef, keepRefY = s.fieldRefY;
-  const bool     keepLit = s.fieldLit, keepLitY = s.fieldLitY;
-  const uint32_t keepSig = s.lookSig, keepLook = s.lookMs;
+  const ContractAnchors keep = s;
+  const uint8_t keepOk = (s.loadOk == 2) ? 2 : 0;
   s = ContractUnitState();
-  s.pulseLastMs = keepPulse; s.lastApplyMs = keepApply; s.loadOk = keepOk;
-  s.fieldOnsetMs = keepOnset; s.fieldRef = keepRef; s.fieldLit = keepLit;
-  s.fieldRefY = keepRefY; s.fieldLitY = keepLitY; s.lookSig = keepSig; s.lookMs = keepLook;
+  static_cast<ContractAnchors&>(s) = keep;
+  s.loadOk = keepOk;
   s.ceil = ceiling;
 }
 // M:v=show[,wd=<s>]: reset and arm. base stays CB_NONE: the native idle look keeps running until

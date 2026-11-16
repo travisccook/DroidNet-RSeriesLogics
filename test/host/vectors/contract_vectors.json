@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "contract_version": "1.3",
-  "core_sha256": "2e5a49332086c4f191e4459579b715e2e942316bb52e671df0f01b893e2bb185",
+  "core_sha256": "651eb2f347865b7366c49dbe014ea91d253f8fbc666121c0e018b7c06bebd6fe",
   "generator": "test/host/gen_contract_vectors.cpp",
   "constants": {
     "CONTRACT_RELEASE": 1,
