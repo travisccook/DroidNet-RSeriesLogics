@@ -20,7 +20,7 @@ static int gFails = 0, gKnown = 0;   // gKnown: defects still marked KNOWN_BUG
 static void send(const char* afterBang) { contractHandleLine(afterBang); }
 // Power-on state for every fork-owned global and for the mock engine.
 static void resetAll() {
-  for (uint8_t u = 0; u < 2; u++) gContract[u] = ContractUnitState();
+  for (uint8_t u = 0; u < 2; u++) { gContract[u] = ContractUnitState(); gBriTouched[u] = false; }
   gBeat = BeatClock();
   gLevel = 0;
   mockEngineReset();

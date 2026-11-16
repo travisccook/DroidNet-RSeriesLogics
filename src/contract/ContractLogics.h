@@ -27,7 +27,6 @@
 #pragma once
 #include "contract_core.h"
 
-static const uint8_t  SAFE_MAX_BRIGHTNESS = 200;   // the brightness ceiling (heat/USB clamp)
 static const byte     FX_CONTRACT   = 106;         // single fork effect id (appended in main.cpp)
 static const byte     NATIVE_LIGHTSOUT = 14;       // native blackout / de-energize
 static const byte     NATIVE_NORMAL = 0;           // native idle shimmer
@@ -38,10 +37,36 @@ static ContractUnitState gContract[2];
 static BeatClock  gBeat;                // ONE beat clock for both displays (verb C)
 static uint8_t    gLevel = 0;           // verb L energy 0..255 (drives CE_METER)
 static ScoreEntry gScore[2][SCORE_MAX];
+// S6 / verb B on native looks. The engine copies its RAM default object back over the live
+// settings on every effect change (LogicEngine.h:807, :1830), so a brightness that has to last
+// is written THERE, and the owner's value is put back at every show boundary.
+static bool       gBriTouched[2] = { false, false };
+static uint8_t    gBriSaved[2]   = { 0, 0 };
+static uint8_t    gBriWritten[2] = { 0, 0 };
 
 // ---------------------------------------------------------------- helpers ----
 static inline LogicEngineRenderer* _engine(uint8_t u) { return u == 0 ? FLD : RLD; }
-static inline uint8_t _ownerBri(uint8_t) { return SAFE_MAX_BRIGHTNESS; }
+static inline LogicEngineSettings& _defaults(uint8_t u) { return u == 0 ? LogicEngineFLDDefault : LogicEngineRLDDefault; }
+// S6: the brightness ceiling is the display's OWN brightness, as its owner set it (the engine's
+// fBri: its trimpot, web slider or #LEBRI baseline) — never a compile-time maximum.
+static inline uint8_t _ownerBri(uint8_t u) { return gBriTouched[u] ? gBriSaved[u] : _defaults(u).fBri; }
+// Give a native look this level. It goes through the RAM default object, so it survives the
+// engine's restoreSettings() on the next effect change.
+static inline void _engineBri(uint8_t u, uint8_t level) {
+  LogicEngineSettings& d = _defaults(u);
+  if (!gBriTouched[u]) { gBriSaved[u] = d.fBri; gBriTouched[u] = true; }
+  d.fBri = level; gBriWritten[u] = level;
+  if (_engine(u)) { _engine(u)->setBrightness(level); _engine(u)->calculateAllColors(); }
+}
+// Put the owner's brightness back — unless something else (#LEBRI, the web UI, the trimpot)
+// changed the default while the show held it; then that newer value stands.
+static inline void _engineBriRestore(uint8_t u) {
+  if (!gBriTouched[u]) return;
+  gBriTouched[u] = false;
+  if (_defaults(u).fBri != gBriWritten[u]) return;
+  _defaults(u).fBri = gBriSaved[u];
+  if (_engine(u)) { _engine(u)->setBrightness(gBriSaved[u]); _engine(u)->calculateAllColors(); }
+}
 // A unit the contract does not hold yet takes its ceiling now.
 static inline void _arm(uint8_t u) { if (gContract[u].base == CB_NONE) gContract[u].ceil = _ownerBri(u); }
 // The level of the unit's look: b= / B is a fraction of the ceiling (S6).
@@ -94,6 +119,7 @@ static inline uint8_t _beatBright(const ContractUnitState& g, const BeatPos& bp)
 static inline void _fireAccent(uint8_t u, ContractEffect fx, const ContractRGB& c, uint32_t durMs) {
   ContractUnitState& g = gContract[u];
   uint32_t now = millis();
+  if (g.base == CB_NATIVE) return;      // R1: no overlay on a native look — an accent never restarts a native sequence
   if (!strobeCoolDownExpired(g.pulseLastMs, now, 2 * STROBE_MIN_STATE_MS)) return;
   g.pulseFx     = fx;
   g.pulseColor  = c;
@@ -273,6 +299,7 @@ static inline void _stopClockIfUnused() {
 static inline void _boundary(uint8_t u, char kind, uint8_t wdSec) {
   ContractUnitState& g = gContract[u];
   const bool held = _holds(g);
+  _engineBriRestore(u);
   if (kind == 's')      contractOnShow(g, _ownerBri(u), wdSec);
   else if (kind == 'x') contractOnStop(g, _ownerBri(u));
   else                  contractOnIdle(g, _ownerBri(u));
@@ -298,6 +325,7 @@ static inline void _applyLook(uint8_t u, ContractLookPatch lp, uint32_t now) {
     g.base = (lp.effect == CE_NATIVE && lp.nativeCode >= 0) ? CB_NATIVE : CB_LOOK;
   }
   _showBase(u);
+  if (g.base == CB_NATIVE) _engineBri(u, _level(g));
 }
 
 inline void applyContractToUnit(uint8_t u, const ParsedContract& p, uint16_t lineCrc) {
@@ -306,6 +334,8 @@ inline void applyContractToUnit(uint8_t u, const ParsedContract& p, uint16_t lin
   uint32_t now = millis();
   switch (p.verb) {
     case CV_ANIMATE: {
+      // S7: a line naming a native code that is not on the allow-list is dropped whole.
+      if (pr.hasEffect && pr.effect == CE_NATIVE && !nativeAllowedLogics(pr.nativeCode)) break;
       if (pr.hasAt) {                             // a scored look: store it, do not apply it now
         ScoreEntry e;
         e.atBeat = pr.atBeat;
@@ -335,6 +365,7 @@ inline void applyContractToUnit(uint8_t u, const ParsedContract& p, uint16_t lin
     }
     case CV_PULSE: {
       // The accent overlay, live. It honours i= (an effect-swap accent, not just a solid fill).
+      if (g.base == CB_NATIVE) break;             // R1: no overlay on a native look
       _arm(u);
       if (contractShowBegin(g)) _showBase(u);     // L1: the show's first P: the baseline goes dark first
       if (pr.hasBright) g.bright = pr.bright;
@@ -349,7 +380,7 @@ inline void applyContractToUnit(uint8_t u, const ParsedContract& p, uint16_t lin
     case CV_BRIGHT:
       _arm(u);
       g.bright = pr.hasBright ? pr.bright : (pr.hasLevel ? pr.level : g.bright);   // a fraction of the ceiling
-      if (_engine(u)) _engine(u)->setBrightness(_level(g));   // volatile fBri too; no NVS
+      _engineBri(u, _level(g));                   // native looks too, and it survives restoreSettings()
       break;
     case CV_STOP:
       _boundary(u, 'x', 0);
@@ -409,6 +440,7 @@ inline void contractTick() {
     g.pulseActive = false;
     g.base = (s.effect == CE_NATIVE && s.nativeCode >= 0) ? CB_NATIVE : CB_LOOK;
     _showBase(u);
+    if (g.base == CB_NATIVE) _engineBri(u, _level(g));
   }
 
   // The board fires its OWN effect-swap accent, once per accent beat. This is what makes a

@@ -110,9 +110,76 @@ static void test_clock() {
   CHECK(gContract[0].curSection == 0 && FLD->px(0, 0).r > 0);
 }
 
+// ---- S6, S7: the owner's brightness is the ceiling; verb B; the native allow-list ----
+static void test_brightness_and_native() {
+  // the ceiling is the display's own brightness, read when the show arms
+  resetAll(); LogicEngineFLDDefault.fBri = 90;             // the owner turned the front down
+  send("**M:v=show"); send("L*A:i=solid,c=ffffff,b=255"); run(50);
+  CHECK(gContract[0].ceil == 90 && FLD->px(0, 0).r == 90);                // full is the owner's 90, not 255
+  CHECK(gContract[1].ceil == 140 && RLD->px(0, 0).r == 140);              // each display has its own
+  run(200); send("LFA:b=128"); run(250);
+  CHECK(FLD->px(0, 0).r == 45);                                           // half of the ceiling
+  // ...and with no show at all (a live cue on a booted board)
+  resetAll(); send("LFA:i=solid,c=ffffff"); run(50);
+  CHECK(gContract[0].ceil == 160 && FLD->px(0, 0).r == 160);
+  // the accent overlay rides the look's level, so it is under the ceiling too
+  resetAll(); send("LFP:c=ffffff,d=200"); run(50);
+  CHECK(FLD->px(0, 0).r == 160);
+
+  // verb B reaches native looks and survives the engine's restoreSettings()
+  resetAll(); send("**M:v=show"); send("LFB:b=64"); send("LFA:i=native:0"); run(50);
+  CHECK(FLD->_seq == 0 && FLD->_liveBri == 40 && LogicEngineFLDDefault.fBri == 40);   // 160 * 64 / 255
+  run(200); send("LFA:i=native:4"); run(250);
+  CHECK(FLD->_seq == 4 && FLD->_liveBri == 40);                           // an effect change later, still 40
+  CHECK(RLD->_liveBri == 140 && LogicEngineRLDDefault.fBri == 140);       // the rear was not addressed
+  run(200); send("LFA:i=native:0,b=255"); run(250);
+  CHECK(FLD->_liveBri == 160);                                            // b= on a native look does the same
+  send("LFB:b=64"); CHECK(FLD->_liveBri == 40);
+  // every boundary puts the owner's brightness back
+  send("**M:v=idle"); run(50);
+  CHECK(LogicEngineFLDDefault.fBri == 160 && FLD->_liveBri == 160 && FLD->_seq == 0);
+  resetAll(); send("LFB:b=64"); send("LFX");   CHECK(LogicEngineFLDDefault.fBri == 160);
+  resetAll(); send("LFB:b=64"); send("**M:v=show"); CHECK(LogicEngineFLDDefault.fBri == 160);
+  // ...but does not undo a change someone else made during the show (#LEBRI, the web UI, the trimpot)
+  resetAll(); send("**M:v=show"); send("LFB:b=64"); LogicEngineFLDDefault.fBri = 255; send("**M:v=idle");
+  CHECK(LogicEngineFLDDefault.fBri == 255);
+  // the ceiling is re-read at each boundary, from the owner's value, not from what B wrote
+  resetAll(); send("**M:v=show"); send("LFB:b=64"); send("**M:v=show"); send("LFA:i=solid,c=ffffff"); run(50);
+  CHECK(gContract[0].ceil == 160 && FLD->px(0, 0).r == 160);
+
+  // S7: a line naming a native code off the allow-list is dropped whole, live or scored
+  const int off[] = { 25, 15, 18, 99, 100, 106, 300, -1 };
+  for (int code : off) {
+    char l[40];
+    resetAll(); send("LFA:i=solid,c=ff0000"); run(200);
+    snprintf(l, sizeof l, "LFA:i=native:%d,c=00ff00", code); send(l); run(250);
+    CHECK(FLD->_seq == 106 && gContract[0].color.r == 0xff && FLD->_oobCalls == 0);   // not even its colour was taken
+    resetAll(); send("**M:v=show"); snprintf(l, sizeof l, "LFA:i=native:%d,at=0", code); send(l);
+    CHECK(gContract[0].scoreLen == 0);
+  }
+  const int on[] = { 0, 4, 14, 19, 24, 101, 105 };
+  for (int code : on) {
+    char l[40];
+    resetAll(); snprintf(l, sizeof l, "LFA:i=native:%d", code); send(l); run(50);
+    CHECK(FLD->_seq == code && gContract[0].base == CB_NATIVE);
+  }
+
+  // no overlay on a native look (R1): neither the scored accent nor a live P restarts it
+  resetAll(); send("**M:v=show"); send("LFA:i=native:4,at=0,am=2,m=200,ae=flash");
+  send("**C:bpm=120,ph=0,bpb=4,beat=0"); run(5000);
+  CHECK(FLD->_seq == 4 && FLD->_restarts[4] == 1 && !gContract[0].pulseActive);
+  send("LFP:c=ffffff"); run(300);
+  CHECK(FLD->_seq == 4 && FLD->_restarts[4] == 1 && !gContract[0].pulseActive);
+  // ...while the same accent on a contract look still fires
+  resetAll(); send("**M:v=show"); send("LFA:i=solid,c=ff0000,at=0,am=2,m=200,ae=flash");
+  send("**C:bpm=120,ph=0,bpb=4,beat=0"); run(50);
+  CHECK(gContract[0].pulseActive);
+}
+
 int main() {
   test_lifecycle();
   test_clock();
+  test_brightness_and_native();
   if (gFails) { printf("%d CHECK(s) FAILED\n", gFails); return 1; }
   printf("contract v1.3 on the RSeries layer OK\n");
   return 0;

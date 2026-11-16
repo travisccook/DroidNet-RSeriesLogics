@@ -25,7 +25,7 @@ static void send(const char* afterBang) {
 }
 // Wipe every fork-owned global so each scenario starts from power-on state.
 static void resetAll() {
-  for (uint8_t u = 0; u < 2; u++) gContract[u] = ContractUnitState();
+  for (uint8_t u = 0; u < 2; u++) { gContract[u] = ContractUnitState(); gBriTouched[u] = false; }
   mockEngineReset();
   gBeat = BeatClock{};
   gLevel = 0;

@@ -51,7 +51,7 @@ static void reanchorRun(int bpm, int am, uint32_t off, int& offBeat, int& missed
 int main() {
   // F3 (S7): native:25 reaches LogicEffectDefaultSelector's off-by-one (LE:2733).
   resetAll(); send("LFA:i=native:25"); run(50);
-  KNOWN_BUG("F3 native:25 runs past the engine's effect table", FLD->_oobCalls == 0);
+  CHECK(FLD->_oobCalls == 0);
   resetAll(); send("LFA:i=native:4"); run(50);
   CHECK(FLD->_seq == 4);                                   // an allowed code still runs
 
@@ -69,13 +69,14 @@ int main() {
   // F5: an accent on a scored native section restarts the native sequence every beat.
   resetAll(); send("**M:v=show"); send("LFA:i=native:4,at=0,am=2,m=200,ae=flash");
   send("**C:bpm=120,ph=0,bpb=4,beat=0"); run(10000);
-  KNOWN_BUG("F5 accent restarts a native section", FLD->_restarts[4] == 1);
+  CHECK(FLD->_restarts[4] == 1);
 
   // F7 (S6): brightness. B must survive restoreSettings(); the ceiling is the owner's fBri (160).
   resetAll(); send("L*B:b=100"); send("LFA:i=native:0"); run(50); send("LFA:i=native:4"); run(300);
-  KNOWN_BUG("F7 verb B is undone by the next effect change", FLD->_liveBri == 100);
+  // (S6 as amended: B is a FRACTION of the owner's ceiling, so b=100 under fBri 160 is level 62.)
+  CHECK(FLD->_liveBri == contractLevel(160, 100) && FLD->_liveBri == 62);
   resetAll(); send("LFA:i=solid,c=ffffff,b=255"); run(200);
-  KNOWN_BUG("S6 a contract look is brighter than the owner's setting", FLD->px(0, 0).r <= 160);
+  CHECK(FLD->px(0, 0).r <= 160);
 
   // F1 (C1): the 4 s re-anchor must not move or swallow accents.
   int ob = 0, mi = 0;
