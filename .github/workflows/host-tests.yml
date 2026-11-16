@@ -16,7 +16,7 @@ jobs:
       - name: Compilers
         run: sudo apt-get update && sudo apt-get install -y clang g++
       - name: Host stages
-        run: ONLY="1 1b 1c 1d 1e 1f 2 2b 2c 2d 3 4 5 6 7 8" bash test/host/run.sh
+        run: ONLY="1 1b 1c 1d 1e 1f 1g 2 2b 2c 2d 3 4 5 6 7 8" bash test/host/run.sh
   firmware:
     runs-on: ubuntu-latest
     steps:

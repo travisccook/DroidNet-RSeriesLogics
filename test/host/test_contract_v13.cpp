@@ -3,6 +3,17 @@
 // RSeries/PSI/Flthy forks.  SPDX-License-Identifier: LGPL-2.1-only OR MIT
 // Host unit tests for the contract v1.3 additions to contract_core.h — no external deps.
 // -std=c++11 clean: the AVR forks build the core with gnu++11.
+//
+// Built twice by run.sh. The second time with -DCONTRACT_TEST_FLASH_HOOKS, which stands in for an
+// AVR fork's PSTR() / pgm_read_byte(): a "flash" pointer is the real pointer with a high address
+// bit flipped, and CONTRACT_READ_BYTE flips it back. Any code in the core that dereferences a
+// name table directly, instead of through the hook, then faults instead of passing by accident.
+#ifdef CONTRACT_TEST_FLASH_HOOKS
+#include <stdint.h>
+#define CONTRACT_FLASH_FLIP ((uintptr_t)1 << (sizeof(uintptr_t) * 8 - 2))
+#define CONTRACT_PSTR(s) ((const char*)((uintptr_t)(s) ^ CONTRACT_FLASH_FLIP))
+#define CONTRACT_READ_BYTE(p) (*(const char*)((uintptr_t)(p) ^ CONTRACT_FLASH_FLIP))
+#endif
 #include "../../src/contract/contract_core.h"
 #include <cstdio>
 #include <cstring>
@@ -406,6 +417,83 @@ static void test_v1_effect_timing() {
   }
 }
 
+// ---- the name tables: every effect name and every key, and nothing that only looks like one ----
+static void test_name_tables() {
+  static const struct { const char* name; ContractEffect e; } fx[] = {
+    { "off", CE_OFF }, { "solid", CE_SOLID }, { "flash", CE_FLASH }, { "pulse", CE_PULSE },
+    { "rainbow", CE_RAINBOW }, { "scan", CE_SCAN }, { "sparkle", CE_SPARKLE }, { "meter", CE_METER },
+    { "comet", CE_COMET }, { "chase", CE_CHASE }, { "wipe", CE_WIPE }, { "gradient", CE_GRADIENT },
+    { "colorcycle", CE_COLORCYCLE }, { "twinkle", CE_TWINKLE } };
+  for (size_t i = 0; i < sizeof fx / sizeof fx[0]; i++) {
+    int nc = 7;
+    CHECK(_effectFromName(fx[i].name, strlen(fx[i].name), nc) == fx[i].e && nc == -1);
+    char l[40];
+    snprintf(l, sizeof l, "LFA:i=%s", fx[i].name);      CHECK(P(l).hasEffect && P(l).effect == fx[i].e);
+    snprintf(l, sizeof l, "LFA:i=%sx", fx[i].name);     CHECK(!P(l).hasEffect);     // a longer word is not it
+    snprintf(l, sizeof l, "LFA:i=%.*s", (int)strlen(fx[i].name) - 1, fx[i].name);
+    CHECK(!P(l).hasEffect);                                                         // nor a shorter one
+    snprintf(l, sizeof l, "LFA:ae=%s", fx[i].name);
+    CHECK(P(l).hasAccentFx == accentEffectAllowed(fx[i].e));
+  }
+  int nc = 0;
+  CHECK(_effectFromName("native:105", 10, nc) == CE_NATIVE && nc == 105);
+  CHECK(_effectFromName("native:", 7, nc) == CE_NONE);          // no number: not native
+  CHECK(_effectFromName("native", 6, nc) == CE_NONE && _effectFromName("nativE:5", 8, nc) == CE_NONE);
+  CHECK(_effectFromName("", 0, nc) == CE_NONE && _effectFromName(",", 1, nc) == CE_NONE);
+  CHECK(_effectFromName("off,solid", 9, nc) == CE_NONE);        // the table's own text is not a name
+  CHECK(_effectFromName("solidXXXX", 5, nc) == CE_SOLID);       // a slice: only its first 5 bytes are read
+  CHECK(!P("LFA:i=Solid").hasEffect && !P("LFA:i=").hasEffect && !P("LFA:i").hasEffect);
+
+  // every key sets its own field and no other
+  const ContractParams a = P("LFA:i=wipe,c=010203,s=4,d=5,b=6,m=7,at=8,am=2,an=3,ap=1");
+  CHECK(a.hasEffect && a.hasColor && a.hasSpeed && a.hasDur && a.hasBright && a.hasBeatMod && a.hasAt && a.hasAm);
+  CHECK(a.effect == CE_WIPE && a.color.b == 3 && a.speed == 4 && a.durMs == 5 && a.bright == 6 && a.beatMod == 7);
+  CHECK(a.atBeat == 8 && a.accentMode == 2 && a.hasAn && a.an == 3 && a.hasAp && a.ap == 1);
+  CHECK(!a.hasBpm && !a.hasPh && !a.hasBpb && !a.hasBeat && !a.hasLevel && !a.hasAccentFx && !a.hasWd && !a.hasN && !a.hasK && !a.hasRoute);
+  const ContractParams b = P("**C:bpm=120,ph=40,bpb=3,beat=-8,v=9,ae=flash,ac=0a0b0c,ad=300,wd=15,n=5,k=00ff,r=2");
+  CHECK(b.hasBpm && b.bpm == 120 && b.hasPh && b.phMs == 40 && b.hasBpb && b.bpb == 3 && b.hasBeat && b.beatAnchor == -8);
+  CHECK(b.hasLevel && b.level == 9 && b.hasAccentFx && b.accentFx == CE_FLASH && b.hasAccentColor && b.accentColor.g == 0x0b);
+  CHECK(b.hasAccentDur && b.accentDurMs == 300 && b.hasWd && b.wd == 15 && b.hasN && b.n == 5 && b.hasK && b.k == 0x00ff);
+  CHECK(b.hasRoute && b.route == 2 && !b.hasEffect && !b.hasColor && !b.hasSpeed && !b.hasAt && !b.hasAm);
+  // near-misses of keys are unknown keys: parsed past, nothing set
+  const ContractParams z = P("LFA:I=solid,cc=010203,a=1,t=2,bp=3,bea=4,beats=5,w=6,kk=0000,ii=off,sw=50,=7");
+  CHECK(!z.hasEffect && !z.hasColor && !z.hasAt && !z.hasAm && !z.hasBpm && !z.hasBpb && !z.hasBeat && !z.hasWd && !z.hasK);
+  CHECK(_nameIndex(CONTRACT_PSTR("a,bb,ccc"), "bb", 2) == 1 && _nameIndex(CONTRACT_PSTR("a,bb,ccc"), "ccc", 3) == 2);
+  CHECK(_nameIndex(CONTRACT_PSTR("a,bb,ccc"), "b", 1) == -1 && _nameIndex(CONTRACT_PSTR("a,bb,ccc"), "", 0) == -1);
+  CHECK(_nameIndex(CONTRACT_PSTR("a,bb,ccc"), "a,bb", 4) == -1 && _nameIndex(CONTRACT_PSTR("a"), "a", 1) == 0);
+
+  // a default ScoreEntry, wherever it is declared (the defaults come from its constructor)
+  static ScoreEntry table[3];
+  ScoreEntry local;
+  const ScoreEntry* all[] = { &table[0], &table[2], &local };
+  for (size_t i = 0; i < 3; i++) {
+    const ScoreEntry& e = *all[i];
+    CHECK(e.atBeat == 0 && e.effect == CE_SOLID && e.nativeCode == -1 && e.speed == 128 && e.beatMod == 0);
+    CHECK(e.color.r == 0 && e.color.g == 0 && e.color.b == 0 && e.accentMode == 0 && e.accentFx == CE_NONE);
+    CHECK(e.accentColor.r == 0 && e.accentDur10 == 18 && e.bright == 255 && e.accentEvery == 0 && e.crc == 0);
+  }
+  // S6: verb B is honoured only in show mode, and a reset clears it
+  ContractUnitState s;
+  CHECK(!contractBrightHonoured(s));
+  contractOnShow(s, 160, 0); CHECK(contractBrightHonoured(s));
+  s.bright = 64; contractOnStop(s, 160); CHECK(s.bright == 255 && contractBrightHonoured(s));   // X stays in show mode
+  s.bright = 64; contractOnShow(s, 160, 0); CHECK(s.bright == 255);
+  s.bright = 64; contractOnIdle(s, 160); CHECK(s.bright == 255 && !contractBrightHonoured(s));
+}
+
+// ---- S7: the forks' native allow-lists ----
+static int countAllowed(bool (*allowed)(int)) { int n = 0; for (int c = -300; c <= 300; c++) if (allowed(c)) n++; return n; }
+static void test_native_allow_psi_flthy() {
+  // PSI Pro: modes 0..22 and 92, without Flash (2), Alarm (3) and Scream (5)
+  CHECK(countAllowed(nativeAllowedPsi) == 21);
+  for (int c = 0; c <= 22; c++) CHECK(nativeAllowedPsi(c) == (c != 2 && c != 3 && c != 5));
+  CHECK(nativeAllowedPsi(92) && !nativeAllowedPsi(23) && !nativeAllowedPsi(91) && !nativeAllowedPsi(93));
+  CHECK(!nativeAllowedPsi(-1) && !nativeAllowedPsi(32767) && !nativeAllowedPsi(-32767));
+  // Flthy: Leia (1) and rainbow (6), nothing else
+  CHECK(countAllowed(nativeAllowedFlthy) == 2 && nativeAllowedFlthy(1) && nativeAllowedFlthy(6));
+  CHECK(!nativeAllowedFlthy(0) && !nativeAllowedFlthy(2) && !nativeAllowedFlthy(5) && !nativeAllowedFlthy(7) && !nativeAllowedFlthy(-1));
+}
+
 // ---- S7: the logics' native allow-list ----
 static void test_native_allow_logics() {
   int allowed = 0;
@@ -430,6 +518,8 @@ int main() {
   test_query_reply();
   test_v1_effect_timing();
   test_native_allow_logics();
+  test_native_allow_psi_flthy();
+  test_name_tables();
   printf("%s  %d/%d checks passed\n", g_fail ? "FAILURES" : "OK", g_total - g_fail, g_total);
   return g_fail ? 1 : 0;
 }

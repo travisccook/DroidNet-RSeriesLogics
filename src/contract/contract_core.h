@@ -112,16 +112,51 @@ inline bool _parseHex6(const char* s, size_t len, ContractRGB& out) {
   out.b = (uint8_t)(v[4] * 16 + v[5]);
   return true;
 }
+// ---- name tables, and where they live -------------------------------------------------
+// The parser's vocabulary (effect names, parameter keys, the mode words) and the query reply's
+// fixed text are each ONE comma-separated string, matched by _nameIndex(). That replaced an
+// if-chain of strlen()/strncmp() calls, one per name, which was the largest single piece of this
+// file on an ATmega.
+//
+// On a Harvard MCU (AVR) a string literal lives in RAM unless it is placed in flash and read back
+// with a special instruction. This file stays pure C++, so it does that through two macros a fork
+// MAY define before including it (both, or neither):
+//     #define CONTRACT_PSTR(s)       PSTR(s)             // put this literal in flash
+//     #define CONTRACT_READ_BYTE(p)  pgm_read_byte(p)    // read one byte of it
+// Undefined, they are the plain-C identity, which is right for the host and the ESP32. Every read
+// of a table goes through CONTRACT_READ_BYTE: the host suite builds the tests a second time with
+// stand-ins that make a direct dereference of a "flash" pointer fault (test_contract_v13.cpp).
+#ifndef CONTRACT_PSTR
+#define CONTRACT_PSTR(s) (s)
+#define CONTRACT_READ_BYTE(p) (*(const char*)(p))
+#endif
+// Which entry of the comma-separated `list` is exactly the slice s[0..len)? -1: none.
+// Never reads s past len. The list must not be empty and must not end in a comma.
+inline int8_t _nameIndex(const char* list, const char* s, size_t len) {
+  int8_t idx = 0;
+  size_t i = 0;
+  bool same = true;
+  for (;;) {
+    const char c = (char)CONTRACT_READ_BYTE(list);
+    list++;
+    if (c == ',' || c == '\0') {
+      if (same && i == len) return idx;
+      if (c == '\0') return -1;
+      idx++; i = 0; same = true;
+    } else {
+      if (i >= len || s[i] != c) same = false;
+      i++;
+    }
+  }
+}
+// The effect table is in ContractEffect order, CE_NATIVE (which takes a number) left out.
+static_assert(CE_OFF == 1 && CE_METER == 8 && CE_NATIVE == 9 && CE_COMET == 10 && CE_TWINKLE == 15,
+              "ContractEffect changed: update the name table in _effectFromName()");
 inline ContractEffect _effectFromName(const char* s, size_t len, int& nativeCode) {
   nativeCode = -1;
-  auto eq = [&](const char* k) { size_t kl = strlen(k); return kl == len && strncmp(s, k, kl) == 0; };
-  if (eq("off")) return CE_OFF;         if (eq("solid")) return CE_SOLID;
-  if (eq("flash")) return CE_FLASH;     if (eq("pulse")) return CE_PULSE;
-  if (eq("rainbow")) return CE_RAINBOW; if (eq("scan")) return CE_SCAN;
-  if (eq("sparkle")) return CE_SPARKLE; if (eq("meter")) return CE_METER;
-  if (eq("comet")) return CE_COMET;       if (eq("chase")) return CE_CHASE;
-  if (eq("wipe")) return CE_WIPE;         if (eq("gradient")) return CE_GRADIENT;
-  if (eq("colorcycle")) return CE_COLORCYCLE; if (eq("twinkle")) return CE_TWINKLE;
+  const int8_t idx = _nameIndex(CONTRACT_PSTR("off,solid,flash,pulse,rainbow,scan,sparkle,meter,"
+                                              "comet,chase,wipe,gradient,colorcycle,twinkle"), s, len);
+  if (idx >= 0) return (ContractEffect)(idx + (idx >= 8 ? 2 : 1));     // skip CE_NATIVE's slot
   // native:<n>. The digits are parsed BOUNDED BY len, not by a NUL.
   // This used to be `nativeCode = atoi(s + 7)`, and atoi() stops at the first NON-DIGIT — not
   // at s+len. So a caller handing us a slice that ends in a digit (a view into a ring buffer,
@@ -131,7 +166,7 @@ inline ContractEffect _effectFromName(const char* s, size_t len, int& nativeCode
   // _parseParams always ends a value slice on ',' or '\0', both non-digits, inside the same
   // NUL-terminated line buffer — so this closes a latent trap for a future caller, on a parser
   // that eats bytes off a shared serial bus. Behaviour is unchanged for every reachable input.
-  if (len > 7 && strncmp(s, "native:", 7) == 0) {
+  if (len > 7 && _nameIndex(CONTRACT_PSTR("native:"), s, 7) == 0) {
     size_t i = 7;
     int32_t sign = 1;
     if (i < len && (s[i] == '-' || s[i] == '+')) { sign = (s[i] == '-') ? -1 : 1; i++; }
@@ -249,10 +284,6 @@ inline bool _parseHex4(const char* s, size_t len, uint16_t& out) {
   out = v;
   return true;
 }
-// Exact-length word compare for a value slice.
-inline bool _sliceIs(const char* v, size_t vl, const char* word) {
-  return vl == strlen(word) && strncmp(v, word, vl) == 0;
-}
 // S5: an accent duration in range (verb P's d= and the scored ad=).
 inline uint16_t accentDurClamp(uint32_t d) {
   if (d < STROBE_MIN_STATE_MS) d = STROBE_MIN_STATE_MS;
@@ -263,47 +294,62 @@ inline uint16_t accentDurClamp(uint32_t d) {
 // One key=value token. k/kl and v/vl are slices into the (null-terminated) source
 // buffer; numeric parses (_parseSatU8/_parseU32/_parseI32) read v up to the next ',' or '\0'.
 inline void _applyParam(ContractParams& pr, const char* k, size_t kl, const char* v, size_t vl) {
-  auto key = [&](const char* s) { return kl == strlen(s) && strncmp(k, s, kl) == 0; };
-  if (key("i")) {
-    int nc; ContractEffect e = _effectFromName(v, vl, nc);
-    if (e != CE_NONE) { pr.hasEffect = true; pr.effect = e; pr.nativeCode = nc; }
-  } else if (key("c")) {
-    ContractRGB rgb; if (_parseHex6(v, vl, rgb)) { pr.hasColor = true; pr.color = rgb; }
-  } else if (key("s"))  { pr.hasSpeed = true;   pr.speed = _parseSatU8(v, 255); }
-  else if (key("d"))    { pr.hasDur = true;     pr.durMs = _parseU32(v); }
-  else if (key("b"))    { pr.hasBright = true;  pr.bright = _parseSatU8(v, 255); }
-  else if (key("m"))    { pr.hasBeatMod = true; pr.beatMod = _parseSatU8(v, 255); }
-  else if (key("at"))   { pr.hasAt = true;      pr.atBeat = _parseI32(v); }
-  else if (key("am"))   { pr.hasAm = true;      pr.accentMode = _parseSatU8(v, 255);
-                          if (pr.accentMode > 4) pr.accentMode = 0; }   // an unknown mode is no accent
-  else if (key("an"))   { pr.hasAn = true;      pr.an = _parseSatU8(v, 255); }
-  else if (key("ap"))   { pr.hasAp = true;      pr.ap = _parseSatU8(v, 255); }
-  else if (key("v"))    { pr.hasLevel = true;   pr.level = _parseSatU8(v, 255);
-                          if (_sliceIs(v, vl, "show")) pr.mode = 's';          // S5: exactly these two
-                          else if (_sliceIs(v, vl, "idle")) pr.mode = 'i'; }
-  else if (key("bpm"))  { pr.hasBpm = true;     pr.bpm = _parseSatU16(v, 65535u); }
-  else if (key("ph"))   { pr.hasPh = true;      pr.phMs = _parseU32(v); }
-  else if (key("bpb"))  { pr.hasBpb = true;     pr.bpb = _parseSatU8(v, 255); }
-  else if (key("beat")) { pr.hasBeat = true;    pr.beatAnchor = _parseI32(v); }
-  // ---- v1.2 accent overlay (ae/ac/ad). key() is an EXACT-LENGTH compare, so these three
-  // cannot alias a/at/am/b/c/d/i/s/m/v/bpm/ph/bpb/beat/sw.
-  else if (key("ae"))   { int nc; ContractEffect e = _effectFromName(v, vl, nc);
-                          // native:<n> and the stateful effects are rejected here (see
-                          // accentEffectAllowed) => hasAccentFx stays false => no accent.
-                          if (e != CE_NONE && accentEffectAllowed(e)) { pr.hasAccentFx = true; pr.accentFx = e; }
-                          (void)nc; }
-  else if (key("ac"))   { ContractRGB rgb; if (_parseHex6(v, vl, rgb)) { pr.hasAccentColor = true; pr.accentColor = rgb; } }
-  else if (key("ad"))   { // 32-bit, not atoi: `int` is 16-bit on AVR, so a stray ad=99999
-                          // would wrap NEGATIVE before it could ever be clamped.
-                          uint32_t d = _parseU32(v);
-                          if (d > 2550UL) d = 2550UL;                 // 255 * 10ms — the score stores /10
-                          pr.hasAccentDur = true; pr.accentDurMs = (uint16_t)d; }
-  // ---- v1.3: watchdog, load verification, query route. Exact-length keys, as above.
-  else if (key("wd"))   { pr.hasWd = true;    pr.wd = _parseSatU8(v, 255); }
-  else if (key("n"))    { pr.hasN = true;     pr.n = _parseSatU8(v, 255); }
-  else if (key("k"))    { uint16_t k; if (_parseHex4(v, vl, k)) { pr.hasK = true; pr.k = k; } }
-  else if (key("r"))    { pr.hasRoute = true; pr.route = _parseSatU8(v, CONTRACT_ROUTE_MAX); }
-  // "sw" (swing) and any unknown key: parsed-and-ignored (forward-compatible)
+  // The key table. _nameIndex() is an EXACT-LENGTH match, so no key can alias another
+  // (a/at/am/an/ap, b/bpm/bpb/beat, ...). The enum is in the table's order.
+  enum { K_I, K_C, K_S, K_D, K_B, K_M, K_AT, K_AM, K_AN, K_AP, K_V, K_BPM, K_PH, K_BPB, K_BEAT,
+         K_AE, K_AC, K_AD, K_WD, K_N, K_K, K_R };
+  switch (_nameIndex(CONTRACT_PSTR("i,c,s,d,b,m,at,am,an,ap,v,bpm,ph,bpb,beat,ae,ac,ad,wd,n,k,r"), k, kl)) {
+    case K_I: {
+      int nc; ContractEffect e = _effectFromName(v, vl, nc);
+      if (e != CE_NONE) { pr.hasEffect = true; pr.effect = e; pr.nativeCode = nc; }
+      break;
+    }
+    case K_C: { ContractRGB rgb; if (_parseHex6(v, vl, rgb)) { pr.hasColor = true; pr.color = rgb; } break; }
+    case K_S:    pr.hasSpeed = true;   pr.speed = _parseSatU8(v, 255); break;
+    case K_D:    pr.hasDur = true;     pr.durMs = _parseU32(v); break;
+    case K_B:    pr.hasBright = true;  pr.bright = _parseSatU8(v, 255); break;
+    case K_M:    pr.hasBeatMod = true; pr.beatMod = _parseSatU8(v, 255); break;
+    case K_AT:   pr.hasAt = true;      pr.atBeat = _parseI32(v); break;
+    case K_AM:   pr.hasAm = true;      pr.accentMode = _parseSatU8(v, 255);
+                 if (pr.accentMode > 4) pr.accentMode = 0;              // an unknown mode is no accent
+                 break;
+    case K_AN:   pr.hasAn = true;      pr.an = _parseSatU8(v, 255); break;
+    case K_AP:   pr.hasAp = true;      pr.ap = _parseSatU8(v, 255); break;
+    case K_V: {
+      pr.hasLevel = true; pr.level = _parseSatU8(v, 255);
+      const int8_t word = _nameIndex(CONTRACT_PSTR("show,idle"), v, vl);   // S5: exactly these two
+      if (word == 0) pr.mode = 's'; else if (word == 1) pr.mode = 'i';
+      break;
+    }
+    case K_BPM:  pr.hasBpm = true;     pr.bpm = _parseSatU16(v, 65535u); break;
+    case K_PH:   pr.hasPh = true;      pr.phMs = _parseU32(v); break;
+    case K_BPB:  pr.hasBpb = true;     pr.bpb = _parseSatU8(v, 255); break;
+    case K_BEAT: pr.hasBeat = true;    pr.beatAnchor = _parseI32(v); break;
+    // ---- v1.2 accent overlay (ae/ac/ad)
+    case K_AE: {
+      // native:<n> and the stateful effects are rejected here (see accentEffectAllowed)
+      // => hasAccentFx stays false => no accent.
+      int nc; ContractEffect e = _effectFromName(v, vl, nc);
+      if (e != CE_NONE && accentEffectAllowed(e)) { pr.hasAccentFx = true; pr.accentFx = e; }
+      (void)nc;
+      break;
+    }
+    case K_AC: { ContractRGB rgb; if (_parseHex6(v, vl, rgb)) { pr.hasAccentColor = true; pr.accentColor = rgb; } break; }
+    case K_AD: {
+      // 32-bit: `int` is 16-bit on AVR, so a stray ad=99999 would wrap NEGATIVE before it could
+      // ever be clamped.
+      uint32_t d = _parseU32(v);
+      if (d > 2550UL) d = 2550UL;                 // 255 * 10ms — the score stores /10
+      pr.hasAccentDur = true; pr.accentDurMs = (uint16_t)d;
+      break;
+    }
+    // ---- v1.3: watchdog, load verification, query route
+    case K_WD:   pr.hasWd = true;      pr.wd = _parseSatU8(v, 255); break;
+    case K_N:    pr.hasN = true;       pr.n = _parseSatU8(v, 255); break;
+    case K_K: { uint16_t k16; if (_parseHex4(v, vl, k16)) { pr.hasK = true; pr.k = k16; } break; }
+    case K_R:    pr.hasRoute = true;   pr.route = _parseSatU8(v, CONTRACT_ROUTE_MAX); break;
+    default: break;   // "sw" (swing) and any unknown key: parsed-and-ignored (forward-compatible)
+  }
 }
 inline void _parseParams(const char* s, ContractParams& pr) {
   while (*s) {
@@ -549,24 +595,38 @@ inline uint8_t envBright(uint8_t bright, uint8_t beatMod, uint8_t amt) {
 
 // A per-unit section-schedule entry (Phase-2 score, built from verb A + at=).
 struct ScoreEntry {
-  int32_t        atBeat = 0;
-  ContractEffect effect = CE_SOLID;
-  int            nativeCode = -1;      // for effect==CE_NATIVE (an iconic native look)
-  ContractRGB            color{0, 0, 0};
-  uint8_t        speed = 128;
-  uint8_t        beatMod = 0;
-  uint8_t        accentMode = 0;
+  int32_t        atBeat;
+  ContractEffect effect;
+  int            nativeCode;           // for effect==CE_NATIVE (an iconic native look)
+  ContractRGB    color;
+  uint8_t        speed;
+  uint8_t        beatMod;
+  uint8_t        accentMode;
   // ---- v1.2 accent overlay. accentFx == CE_NONE => no overlay => EXACT v1.1 behaviour.
   // The firmware's beat-edge trigger tests `accentFx == CE_NONE` and bails, so an entry
   // built from a v1.1 line (no ae=) can never arm the overlay.
-  ContractEffect accentFx = CE_NONE;   // 1B; never CE_NATIVE/CE_SCAN/... (rejected at parse)
-  ContractRGB            accentColor{0, 0, 0}; // 3B; RESOLVED at insert: ac= if given, else the entry's color
-  uint8_t        accentDur10 = 18;     // 1B; duration / 10ms (18 => 180ms). Keeps the entry small
+  ContractEffect accentFx;             // 1B; never CE_NATIVE/CE_SCAN/... (rejected at parse)
+  ContractRGB    accentColor;          // 3B; RESOLVED at insert: ac= if given, else the entry's color
+  uint8_t        accentDur10;          // 1B; duration / 10ms (18 => 180ms). Keeps the entry small
                                        // on AVR: a 2550ms ceiling is far beyond any musical accent.
   // ---- v1.3 (4 more bytes: 22 an entry on AVR)
-  uint8_t        bright = 255;         // b= as a fraction of the ceiling (contractLevel). Absent == 255.
-  uint8_t        accentEvery = 0;      // accentEveryPack(an, ap): every-N accents for am=2
-  uint16_t       crc = 0;              // contractCrc16() of the line that made this entry (verb V)
+  uint8_t        bright;               // b= as a fraction of the ceiling (contractLevel). Absent == 255.
+  uint8_t        accentEvery;          // accentEveryPack(an, ap): every-N accents for am=2
+  uint16_t       crc;                  // contractCrc16() of the line that made this entry (verb V)
+  // The defaults are set by this constructor, NOT by default member initialisers, on purpose. With
+  // initialisers the type is constant-initialised, so a fork's score table (a static array of
+  // these) becomes a pre-built image in flash that start-up copies to RAM: 22 bytes of flash an
+  // entry. A constructor that is not constexpr leaves the table in .bss and fills it with one
+  // small loop instead (measured with avr-gcc 7.3 on a 12-entry table: 134 bytes less flash).
+  // Every ScoreEntry, wherever it is declared, still starts with exactly these values.
+  ScoreEntry() {
+    atBeat = 0; effect = CE_SOLID; nativeCode = -1;
+    color.r = color.g = color.b = 0;
+    speed = 128; beatMod = 0; accentMode = 0;
+    accentFx = CE_NONE;
+    accentColor.r = accentColor.g = accentColor.b = 0;
+    accentDur10 = 18; bright = 255; accentEvery = 0; crc = 0;
+  }
 };
 
 // Index of the last entry with atBeat <= beatIndex (-1 if none yet). Entries sorted asc.
@@ -852,6 +912,9 @@ inline bool contractShowBegin(ContractUnitState& s) {
   s.base = CB_DARK;
   return true;
 }
+// S6: verb B is honoured only in show mode, so a host sends it after M:v=show. (Every reset puts
+// `bright` back to 255, so a B never outlives its show.)
+inline bool contractBrightHonoured(const ContractUnitState& s) { return s.inShow; }
 // L1: a board's beat clock stops at a reset only when NO unit on it needs it any more.
 inline bool contractUnitNeedsClock(const ContractUnitState& s) {
   return s.scoreLen != 0 || s.base == CB_LOOK || s.base == CB_NATIVE;
@@ -944,7 +1007,14 @@ inline bool contractQueryAnswerable(const ParsedContract& p) {
 //                  r=n  ";W<n>,;S0!<cls><unit>q:...\r"
 // No NUL is written. Returns the length (at most CONTRACT_REPLY_MAX), or 0 when `out` is smaller
 // than CONTRACT_REPLY_MAX. No printf: that is over 1 KB of flash on an ATmega.
-inline uint8_t _qStr(char* o, uint8_t i, const char* s) { while (*s) o[i++] = *s++; return i; }
+inline uint8_t _qStr(char* o, uint8_t i, const char* flashStr) {       // flashStr: a CONTRACT_PSTR() literal
+  for (;;) {
+    const char c = (char)CONTRACT_READ_BYTE(flashStr);
+    if (c == '\0') return i;
+    flashStr++;
+    o[i++] = c;
+  }
+}
 inline uint8_t _qNum(char* o, uint8_t i, uint16_t v) {
   char t[5]; uint8_t n = 0;
   do { t[n++] = (char)('0' + (v % 10u)); v = (uint16_t)(v / 10u); } while (v);
@@ -956,14 +1026,14 @@ inline uint8_t contractFormatQuery(char* out, uint8_t outLen, uint8_t route, cha
   if (outLen < CONTRACT_REPLY_MAX) return 0;
   if (route > CONTRACT_ROUTE_MAX) route = CONTRACT_ROUTE_MAX;
   uint8_t i = 0;
-  if (route != 0) { i = _qStr(out, i, ";W"); i = _qNum(out, i, route); out[i++] = ','; }
-  i = _qStr(out, i, ";S0");
-  out[i++] = '!'; out[i++] = cls; out[i++] = unit;
-  i = _qStr(out, i, "q:ver=" CONTRACT_VERSION ",rel="); i = _qNum(out, i, CONTRACT_RELEASE);
-  i = _qStr(out, i, ",cap=");  i = _qNum(out, i, cap);
-  i = _qStr(out, i, ",n=");    i = _qNum(out, i, held);
-  i = _qStr(out, i, ",ok=");   i = _qNum(out, i, ok > 2 ? 2 : ok);
-  i = _qStr(out, i, ",bpm=");  i = _qNum(out, i, bpm > 999u ? 999u : bpm);
+  if (route != 0) { i = _qStr(out, i, CONTRACT_PSTR(";W")); i = _qNum(out, i, route); out[i++] = ','; }
+  i = _qStr(out, i, CONTRACT_PSTR(";S0!"));
+  out[i++] = cls; out[i++] = unit;
+  i = _qStr(out, i, CONTRACT_PSTR("q:ver=" CONTRACT_VERSION ",rel=")); i = _qNum(out, i, CONTRACT_RELEASE);
+  i = _qStr(out, i, CONTRACT_PSTR(",cap="));  i = _qNum(out, i, cap);
+  i = _qStr(out, i, CONTRACT_PSTR(",n="));    i = _qNum(out, i, held);
+  i = _qStr(out, i, CONTRACT_PSTR(",ok="));   i = _qNum(out, i, ok > 2 ? 2 : ok);
+  i = _qStr(out, i, CONTRACT_PSTR(",bpm="));  i = _qNum(out, i, bpm > 999u ? 999u : bpm);
   out[i++] = '\r';
   return i;
 }
@@ -1012,3 +1082,11 @@ inline int fxScanPos(uint32_t elapsed, uint8_t speed, int N, bool wrap) {
 inline bool nativeAllowedLogics(int code) {
   return (code >= 0 && code <= 14) || (code >= 19 && code <= 24) || (code >= 101 && code <= 105);
 }
+// PSI Pro (its mode numbers): 0..22 and 92, WITHOUT Flash (2), Alarm (3) and Scream (5), which are
+// full-field white at 8.3 and 4 Hz — past the strobe floor this contract holds everywhere else.
+inline bool nativeAllowedPsi(int code) {
+  return (code >= 0 && code <= 22 && code != 2 && code != 3 && code != 5) || code == 92;
+}
+// Flthy holoprojectors (its LED function numbers): Leia (1) and rainbow (6), until the contract's
+// own looks replace the rest of its native hatch.
+inline bool nativeAllowedFlthy(int code) { return code == 1 || code == 6; }

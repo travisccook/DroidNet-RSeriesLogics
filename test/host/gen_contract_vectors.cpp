@@ -54,6 +54,12 @@ int main(int argc, char** argv) {
   printf(",\n    \"NATIVE_ALLOW_LOGICS\": [");
   { bool first = true; for (int c = 0; c < 256; c++) if (nativeAllowedLogics(c)) { printf("%s%d", first ? "" : ", ", c); first = false; } }
   printf("]");
+  printf(",\n    \"NATIVE_ALLOW_PSI\": [");
+  { bool first = true; for (int c = 0; c < 256; c++) if (nativeAllowedPsi(c)) { printf("%s%d", first ? "" : ", ", c); first = false; } }
+  printf("]");
+  printf(",\n    \"NATIVE_ALLOW_FLTHY\": [");
+  { bool first = true; for (int c = 0; c < 256; c++) if (nativeAllowedFlthy(c)) { printf("%s%d", first ? "" : ", ", c); first = false; } }
+  printf("]");
   // MORE CONSTANTS GO HERE (each starts with ",\n    ")
   printf("\n  ");
   printf("},\n  \"lines\": [");
