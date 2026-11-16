@@ -75,7 +75,9 @@ struct LogicEngineRenderer {
     if (x >= 0 && x < 8 && y >= 0 && y < 10) _px[y][x] = c;
   }
   CRGB px(int x, int y) const { return _px[y][x]; }
-  void selectSequence(byte s, int = 0, int = 0, int = 0) { _seq = s; _selects++; }
+  enum ColorVal { kDefault = 0 };
+  int  _speed = 0;                    // the speed digit of the last selection (LE:160)
+  void selectSequence(byte s, int = 0, int speed = 0, int = 0) { _seq = s; _speed = speed; _selects++; }
   void resetEffect() { _prevSeq = -1; }
   bool hasEffectChanged() const { return _seq != _prevSeq; }    // LE:842: a selection is waiting for the next frame
   // fFlipFlop (LE:795-799, 941). The engine toggles it every effect delay, whatever runs; here
@@ -89,8 +91,8 @@ struct LogicEngineRenderer {
 static LogicEngineRenderer _fld_obj, _rld_obj;
 static LogicEngineRenderer* FLD = &_fld_obj;
 static LogicEngineRenderer* RLD = &_rld_obj;
-inline void FLD_selectSequence(byte s, int = 0, int = 0, int = 0) { FLD->selectSequence(s); }
-inline void RLD_selectSequence(byte s, int = 0, int = 0, int = 0) { RLD->selectSequence(s); }
+inline void FLD_selectSequence(byte s, int = 0, int speed = 0, int = 0) { FLD->selectSequence(s, 0, speed); }
+inline void RLD_selectSequence(byte s, int = 0, int speed = 0, int = 0) { RLD->selectSequence(s, 0, speed); }
 
 inline bool ContractRender(LogicEngineRenderer& r);   // the fork effect, id 106
 inline void contractEngineLatched(uint8_t u, unsigned seq);   // main.cpp's effect selectors call this

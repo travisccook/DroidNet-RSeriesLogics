@@ -645,20 +645,17 @@ static void test_rereview() {
   // ...NORMAL is the exception: an armed show begins from it at once
   resetAll(); run(1000); send("**M:v=show"); send("LFA:i=solid,c=ffffff"); run(20);
   CHECK(fieldLevel(FLD) == 160);
-  // A sequence that is not on the allow-list can only come from the owner's hand, and what it
-  // does is not known at all. FAILURE (2) is dark from its eighth second and ends itself at 18 s:
-  // the engine relights NORMAL then, by itself. The contract's next light keeps 340 ms from that.
-  resetAll(); send("**M:v=show"); send("LFA:i=native:2"); run(50);
-  CHECK(FLD->_fx == 0);                                                     // (through the contract: refused, S10)
-  FLD->selectSequence(2); run(17990);
+  // FAILURE (2) is dark from its eighth second and ends itself at 18 s: the engine relights
+  // NORMAL then, by itself, and the show goes on. The contract's next light keeps 340 ms from that.
+  resetAll(); send("**M:v=show"); send("LFA:i=native:2"); run(17990);
   CHECK(FLD->_fx == 2 && fieldLevel(FLD) == 0);                             // (the mock has FAILURE's timing)
-  run(30); CHECK(FLD->_fx == 0 && fieldLevel(FLD) == 160);                  // it ran out: NORMAL again
+  run(30); CHECK(FLD->_fx == 0 && fieldLevel(FLD) == 160 && gContract[0].inShow);   // it ran out: NORMAL again
   send("LFX"); run(10); send("LFA:i=solid,c=ffffff"); run(20);
   CHECK(fieldLevel(FLD) <= 16);
-  // FLASHCOLOR (6) is full and 50/255 by turns, every 250 ms. A contract look that takes the
-  // display from it, in its dim half or just after its own flash, waits the window out too.
-  resetAll(); send("LFA:i=native:6"); run(50); CHECK(FLD->_fx == 0);        // (refused)
-  FLD->selectSequence(6); run(20);
+  // FLASHCOLOR (6) is full and 50/255 by turns, every 250 ms: its whole field moves by itself,
+  // so nothing is known of it when it ends. A contract look that takes the display from it, in
+  // its dim half or just after its own flash, waits the window out.
+  resetAll(); send("**M:v=show"); send("LFA:i=native:6"); run(20);
   CHECK(FLD->_fx == 6 && fieldLevel(FLD) == 160);
   run(250); CHECK(fieldLevel(FLD) == 31);
   run(250); CHECK(fieldLevel(FLD) == 160);                                  // its own ON edge, 510 ms in
@@ -666,6 +663,43 @@ static void test_rereview() {
   CHECK(FLD->_fx == 106 && fieldLevel(FLD) <= 16);
   run(300); CHECK(fieldLevel(FLD) <= 16);
   run(40);  CHECK(fieldLevel(FLD) == 160);
+  // ...and a brighter B reaches such a sequence only when it next starts; a dimmer one at once
+  resetAll(); send("**M:v=show"); send("LFA:i=native:6,b=128"); run(600);
+  CHECK(FLD->_fx == 6 && LogicEngineFLDDefault.fBri == 80);
+  send("LFB:b=64"); run(50);  CHECK(LogicEngineFLDDefault.fBri == 40);
+  send("LFB:b=255"); run(900); CHECK(LogicEngineFLDDefault.fBri == 40);     // not on top of its own flashes
+  send("LFA:i=native:1"); run(900); CHECK(FLD->_fx == 1 && LogicEngineFLDDefault.fBri == 160);   // the next look has it
+  // (a steady sequence takes it while it runs, through the gate, as before)
+  resetAll(); send("**M:v=show"); send("LFA:i=native:1,b=128"); run(600); send("LFB:b=255"); run(600);
+  CHECK(FLD->_fx == 1 && LogicEngineFLDDefault.fBri == 160);
+
+  // S10: where a stock sequence's rate follows the engine's speed digit, the contract starts it
+  // at the fastest speed that passes the test (the core's nativeSpeedLogics)
+  { static const int kSeq[][2] = { { 4, 1 }, { 19, 1 }, { 20, 2 }, { 22, 1 }, { 6, 0 }, { 7, 0 }, { 24, 0 }, { 1, 0 } };
+    for (const auto& q : kSeq) {
+      char l[40]; snprintf(l, sizeof l, "LFA:i=native:%d", q[0]);
+      resetAll(); send("**M:v=show"); send(l); run(100);
+      CHECK(FLD->_fx == q[0] && FLD->_speed == q[1]);
+    }
+    resetAll(); send("**M:v=show"); send("LFA:i=native:4"); run(100); send("LFA:i=solid,c=ffffff"); run(600);
+    CHECK(FLD->_fx == 106 && FLD->_speed == 0); }
+
+  // S11: re-applying the same look does not restart it; a look that differs in anything does
+  resetAll(); send("**M:v=show"); send("LFA:i=gradient,c=ffffff,s=90"); run(500);
+  { const uint32_t t0 = gContract[0].startMs;
+    send("LFA:i=gradient,c=ffffff,s=90"); run(300); CHECK(gContract[0].startMs == t0);
+    send("LFA:b=200"); run(300);                    CHECK(gContract[0].startMs == t0 && gContract[0].bright == 200);
+    send("LFA:c=ffffff"); run(300);                 CHECK(gContract[0].startMs == t0);
+    send("LFA:s=91"); run(300);                     CHECK(gContract[0].startMs != t0);
+    const uint32_t t1 = gContract[0].startMs;
+    send("LFA:c=ff0000"); run(300);                 CHECK(gContract[0].startMs != t1); }
+  // ...and neither does a section that carries on the look of the one before it
+  resetAll(); send("**M:v=show");
+  send("LFA:i=gradient,c=ffffff,s=90,at=0"); send("LFA:i=gradient,c=ffffff,s=90,b=128,at=4"); send("LFA:i=solid,c=ffffff,at=8");
+  send("**C:bpm=120,ph=0,bpb=4,beat=0"); run(1000);
+  { const uint32_t t0 = gContract[0].startMs;
+    run(1500); CHECK(gContract[0].curSection == 1 && gContract[0].startMs == t0 && gContract[0].bright == 128);
+    run(2000); CHECK(gContract[0].curSection == 2 && gContract[0].startMs != t0); }
 }
 
 // ---- L2: the host-silence watchdog ----

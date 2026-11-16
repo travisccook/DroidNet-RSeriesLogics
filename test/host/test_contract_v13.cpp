@@ -719,15 +719,21 @@ static void test_native_allow_psi_flthy() {
 static void test_native_allow_logics() {
   int allowed = 0;
   for (int c = -5; c <= 300; c++) if (nativeAllowedLogics(c)) allowed++;
-  CHECK(allowed == 12 + 5 + 2);
+  CHECK(allowed == 14 + 6 + 2);
   CHECK(!nativeAllowedLogics(3));                                    // Leia sets its own brightness, past the ceiling (S6)
   CHECK(nativeAllowedLogics(1) && nativeAllowedLogics(4) && nativeAllowedLogics(12));
   CHECK(nativeAllowedLogics(0) && nativeAllowedLogics(14) && nativeAllowedLogics(19) && nativeAllowedLogics(24));
   CHECK(nativeAllowedLogics(101) && nativeAllowedLogics(105));
-  // S10: a sequence whose whole field swings faster than the floor is not on it (the engine
-  // draws it, so it cannot be gated): flash colour, fire, failure's glitch, three custom effects
-  CHECK(!nativeAllowedLogics(6) && !nativeAllowedLogics(22) && !nativeAllowedLogics(2));
+  // S10, by onsets (test_native_s10.cpp is the count): failure, flash colour and fire pass it,
+  // fire at a slower speed; three custom effects do not, or cannot be said to
+  CHECK(nativeAllowedLogics(2) && nativeAllowedLogics(6) && nativeAllowedLogics(22) && nativeAllowedLogics(10));
   CHECK(!nativeAllowedLogics(102) && !nativeAllowedLogics(103) && !nativeAllowedLogics(104));
+  // ...and the speed the contract starts each at: the engine's own (0) but for four
+  for (int c = -5; c <= 300; c++)
+    CHECK(nativeSpeedLogics(c) == (c == 20 ? 2 : (c == 4 || c == 19 || c == 22) ? 1 : 0));
+  // the sequences whose whole field stays at the level the gate is told
+  for (int c = -5; c <= 300; c++)
+    CHECK(nativeSteadyLogics(c) == (c == 0 || c == 1 || c == 4 || c == 5 || c == 7 || c == 8 || (c >= 11 && c <= 14)));
   // S6: which of them take the board's brightness (b=, B)
   for (int c = -5; c <= 300; c++) {
     CHECK(nativeDimsLogics(c) == (nativeAllowedLogics(c) && c <= 14));
@@ -983,6 +989,16 @@ static void test_ca14() {
   // the look gate's state is a safety anchor too
   contractOnStop(k, 200); CHECK(k.lookSig == contractLookSigNative(4) && k.lookMs == 1580);
   contractOnShow(k, 200, 0); contractOnIdle(k, 200); CHECK(k.lookSig == contractLookSigNative(4) && k.lookMs == 1580);
+
+  // S11: re-applying the same look does not restart it
+  ContractUnitState same; same.base = CB_LOOK; same.effect = CE_GRADIENT; same.color = red; same.speed = 90;
+  CHECK(contractLookSame(same, CE_GRADIENT, -1, red, 90));
+  CHECK(!contractLookSame(same, CE_GRADIENT, -1, blue, 90) && !contractLookSame(same, CE_GRADIENT, -1, red, 91));
+  CHECK(!contractLookSame(same, CE_SOLID, -1, red, 90) && !contractLookSame(same, CE_NATIVE, 4, red, 90));
+  same.base = CB_DARK; CHECK(!contractLookSame(same, CE_GRADIENT, -1, red, 90));     // nothing was showing: it starts
+  same.base = CB_NONE; CHECK(!contractLookSame(same, CE_GRADIENT, -1, red, 90));
+  same.base = CB_NATIVE; same.effect = CE_NATIVE; same.nativeCode = 4;
+  CHECK(contractLookSame(same, CE_NATIVE, 4, red, 90) && !contractLookSame(same, CE_NATIVE, 7, red, 90));
 
   // A SECTION is applied 170 ms after the unit's last look change at the earliest, and is one
   ContractUnitState c2;

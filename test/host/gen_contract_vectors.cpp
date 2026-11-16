@@ -115,6 +115,11 @@ int main(int argc, char** argv) {
   printf(",\n    \"NATIVE_GATED_FLTHY\": [");
   { bool first = true; for (int c = 0; c < 256; c++) if (nativeGatedFlthy(c)) { printf("%s%d", first ? "" : ", ", c); first = false; } }
   printf("]");
+  // S10: the engine speed digit the contract starts each logics code with, in the order of
+  // NATIVE_ALLOW_LOGICS (CA1.5: the fastest speed at which the stock sequence passes S10's test).
+  printf(",\n    \"NATIVE_SPEED_LOGICS\": [");
+  { bool first = true; for (int c = 0; c < 256; c++) if (nativeAllowedLogics(c)) { printf("%s%d", first ? "" : ", ", nativeSpeedLogics(c)); first = false; } }
+  printf("]");
   // S9: the gate's step is more than a tenth of the ceiling and at least 2 levels: ceil / DIV + 1.
   printf(",\n    \"FIELD_STEP_DIV\": 10,\n    \"FIELD_STEP_MIN\": 2");
   // MORE CONSTANTS GO HERE (each starts with ",\n    ")

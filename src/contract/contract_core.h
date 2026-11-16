@@ -1234,10 +1234,18 @@ inline bool contractLookGate(ContractUnitState& s, uint32_t sig, uint32_t nowMs)
   s.lookSig = sig; s.lookMs = nowMs;
   return true;
 }
-// A live A or a section was applied: the look's own timeline starts again (a gradient goes back
-// to its first hue, a scan to its first column), so what the field shows next is a change of
-// look even when the look has the same effect and colour as before. The next lit frame goes
-// through the gate as a new look.
+// S11: "Re-applying the same look does not restart it." A fork asks this BEFORE it writes a live
+// A or a section into the unit. true: the unit's base look is this very look already (the same
+// effect, native code, colour and speed): its timeline carries on, and nothing changes for the
+// gate. false: the look starts again. The fork then sets its start time and calls
+// contractLookRestart(): a look whose timeline starts again (a gradient back at its first hue, a
+// scan at its first column) is a change of look even when its effect and colour are the old
+// ones, and the next lit frame goes through the gate as a new look.
+inline bool contractLookSame(const ContractUnitState& s, ContractEffect effect, int nativeCode, const ContractRGB& c, uint8_t speed) {
+  return (s.base == CB_LOOK || s.base == CB_NATIVE) && s.base == ((effect == CE_NATIVE && nativeCode >= 0) ? CB_NATIVE : CB_LOOK) &&
+         s.effect == effect && s.nativeCode == nativeCode && s.speed == speed &&
+         s.color.r == c.r && s.color.g == c.g && s.color.b == c.b;
+}
 inline void contractLookRestart(ContractUnitState& s) { s.lookSig = 0; }
 // A look nobody asked the gate about is on the LEDs (a native look that started; a button).
 inline void contractLookForced(ContractUnitState& s, uint32_t sig, uint32_t nowMs) {
@@ -1452,32 +1460,46 @@ inline int fxScanPos(uint32_t elapsed, uint8_t speed, int N, bool wrap) {
 // generated vector file can carry them and Studio's vocabulary is tested against the firmware's
 // own list.
 // RSeries logics (LogicEngine sequence ids, and the fork's custom effects from 101). The engine
-// draws these itself, so there is no gated kind here (S10): a sequence is on the list when its
-// whole field does not swing by more than a tenth more than three times in any second, as the
-// contract selects it (default colour, speed 0, no microphone source). DROIDNET_FORK.md has the
-// figure for every code. On it:
-//    0 normal, 1 alarm, 4 march, 5 solid colour, 7 and 8 flip flop, 9 colour swap, 10 rainbow,
-//    11 red alert, 12 and 13 the mic effects, 14 lights out, 19 roaming pixel, 20 and 21 the scan
-//    lines, 23 PSI colour wipe, 24 pulse, 101 plasma, 105 colour wheel.
+// draws these itself, so there is no gated kind here (S10): a sequence is on the list when it
+// passes S10's test as the contract starts it (default colour, the speed below, no microphone
+// source): by brightness and by luminance, no two onsets closer than 340 ms, over the whole
+// field and over any region of a quarter of it or more. test/host/test_native_s10.cpp is that
+// test, on a model of the stock code, and DROIDNET_FORK.md has its table. On the list:
+//    0 normal, 1 alarm, 2 failure, 4 march, 5 solid colour, 6 flash colour, 7 and 8 flip flop,
+//    9 colour swap, 10 rainbow, 11 red alert, 12 and 13 the mic effects, 14 lights out,
+//    19 roaming pixel, 20 and 21 the scan lines, 22 fire, 23 PSI colour wipe, 24 pulse,
+//    101 plasma, 105 colour wheel.
 // Not on it:
-//    2 failure        (its glitch swings the field by a third about every 320 ms: at the limit)
 //    3 Leia           (sets its own brightness, 50..255, every frame: past the ceiling, deaf to B)
-//    6 flash colour   (the whole field, full and 50/255 by turns, every 250 ms)
 //    15..18 text      (they need a message)
-//    22 fire          (the whole field is rolled again every 200 ms)
-//    102 metaballs, 103 fractal, 104 fade and scroll (whole-field colour and level changes, up to
-//                     many a second, at random)
+//    102 metaballs, 103 fractal (whole-field colour and level changes, many a second)
+//    104 fade and scroll (what it does is drawn at random when it starts)
 //    25 (one past the engine's effect table, an out-of-bounds call), 99 (RANDOM can pick
 //    anything), 100 (the bitmap needs an SD card), 106 (the contract's own renderer).
 inline bool nativeAllowedLogics(int code) {
-  return (code >= 0 && code <= 14 && code != 2 && code != 3 && code != 6) ||
-         (code >= 19 && code <= 24 && code != 22) || code == 101 || code == 105;
+  return (code >= 0 && code <= 14 && code != 3) || (code >= 19 && code <= 24) || code == 101 || code == 105;
+}
+// S10: "where a stock look's rate follows a speed setting, the contract starts it at the fastest
+// speed that passes". The engine's speed digit (0..9) a fork selects the sequence with:
+//    4 march            speed 1: its thirds flip every 300 ms, not every 150 (a region lights every 600 ms)
+//    19 roaming pixel   speed 1: a pixel every 50 ms, not every 10 (a rear row is a quarter of the field)
+//    20 horizontal scan speed 2: a row every 150 ms, not every 50 (the same rear row)
+//    22 fire            speed 1: the field is rolled again every 200 ms, not every 100
+// and 0, the engine's own, for every other code.
+inline uint8_t nativeSpeedLogics(int code) {
+  return code == 20 ? 2 : (code == 4 || code == 19 || code == 22) ? 1 : 0;
 }
 // S6: which of them draw at the board's brightness, so that b= and B reach them. The rest (19..24
 // and the custom effects) set their pixels at a level of their own: a native look selected
 // through the contract looks as it does when its button is pressed, and a host has no use for b=
 // on it. For the field gate such a look is lit at full scale, whatever the ceiling.
 inline bool nativeDimsLogics(int code) { return code >= 0 && code <= 14 && nativeAllowedLogics(code); }
+// Which of them hold the WHOLE field within a tenth of the level the gate is told, for as long
+// as they run (march and the flip flops do: their halves take turns). What a fork may rely on
+// when such a look ends; after any other the field may stand anywhere (contractNativeEnded).
+inline bool nativeSteadyLogics(int code) {
+  return code == 0 || code == 1 || code == 4 || code == 5 || code == 7 || code == 8 || (code >= 11 && code <= 14);
+}
 inline bool nativeGatedLogics(int) { return false; }
 // PSI Pro (its mode numbers): 0..22 and 92, WITHOUT Flash (2), Alarm (3) and Scream (5), which are
 // full-field white at 8.3 and 4 Hz — past the strobe floor this contract holds everywhere else.

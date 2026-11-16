@@ -154,7 +154,12 @@ static inline uint32_t _hash3(int x, int y, uint32_t t) {
   h ^= h >> 13; h *= 0x5bd1e995u; h ^= h >> 15; return h;
 }
 // verb-dispatch context (outside an effect fn): act on one engine by unit index.
-static inline void _select(uint8_t u, byte seq) { if (u == 0) FLD_selectSequence(seq); else RLD_selectSequence(seq); }
+// (S10: with the engine's default colour, and the speed the core's list gives the sequence)
+static inline void _select(uint8_t u, byte seq) {
+  const uint8_t speed = nativeSpeedLogics((int)seq);
+  if (u == 0) FLD_selectSequence(seq, LogicEngineRenderer::kDefault, speed);
+  else        RLD_selectSequence(seq, LogicEngineRenderer::kDefault, speed);
+}
 static inline void _reset(uint8_t u)            { if (_engine(u)) _engine(u)->resetEffect(); }
 // The brightness the engine has now, as far as the contract set it.
 static inline uint8_t _engineBriNow(uint8_t u) { return gBriTouched[u] ? gBriWritten[u] : _ownerBri(u); }
@@ -224,6 +229,11 @@ static inline void _nativeBright(uint8_t u, uint32_t now) {
     // (LogicLightsOutEffect draws level 0), and 19..24 and the custom effects draw at a level of
     // their own. The value is kept in step for whatever sequence comes next; nothing is gated.
   } else if (want > cur) {
+    // A sequence whose whole field moves by itself (flash colour, failure, rainbow, colour swap)
+    // lights in its own time, and nothing here can tell when. A rise put on top of it could
+    // land just before, or just after, one of its own: so it is given a brighter level only
+    // when it starts (contractEngineLatched). Darker is at once, as everywhere.
+    if (!nativeSteadyLogics((int)gEngineSeq[u])) return;
     if (contractFieldAllowed(g, want, now) < want) return;          // S9: held. Asked again next pass.
     // S4: a native look that was running dark (b=0) comes out of the dark: that is the look
     // arriving on the field, a change of look like any other.
@@ -307,13 +317,13 @@ static inline void _present(uint8_t u, uint32_t now) {
       // sequence (contractEngineLatched): a selection can still be replaced before that frame,
       // and nothing may be said, or written, about light that never reached the LEDs.
       // S10: the engine is on a sequence whose light is not known: one that is NOT on the
-      // allow-list (someone's button, and a line now asks for a native look), or one that draws
-      // at a level of its own. The display does not go from it straight to another look that is
-      // lit: effect 106 takes it first and holds its last frame (ContractRender), the gate takes
-      // the field as dark and just lit (contractEngineLatched), and the look follows when the
-      // window has passed.
-      if (seq != NATIVE_LIGHTSOUT && gEngineSeq[u] != FX_CONTRACT &&
-          (!nativeAllowedLogics((int)gEngineSeq[u]) || _ownLevel(gEngineSeq[u]))) {
+      // allow-list (someone's button, and a line now asks for a native look), one that draws at
+      // a level of its own, or one whose whole field moves by itself (flash colour, failure,
+      // rainbow: anything the core does not call steady). The display does not go from it
+      // straight to another look that is lit: effect 106 takes it first and holds its last
+      // frame (ContractRender), the gate takes the field as dark and just lit
+      // (contractEngineLatched), and the look follows when the window has passed.
+      if (seq != NATIVE_LIGHTSOUT && gEngineSeq[u] != FX_CONTRACT && !nativeSteadyLogics((int)gEngineSeq[u])) {
         if (gShown[u] != SH_CONTRACT) _choose(u, SH_CONTRACT, FX_CONTRACT);
         return;
       }
@@ -364,17 +374,19 @@ inline void contractEngineLatched(uint8_t u, unsigned seq) {
     gRise[u] = false;
   }
   // N2 / S10. The sequence that ENDS at this frame.
-  //   * One that is not on the allow-list (someone's button: FLASHCOLOR, FAILURE, fire) is not
-  //     known to the gate at all, and one that draws at a level of its own (a scan line, plasma)
-  //     may stand anywhere between dark and full. Whatever starts now, the field is taken as
-  //     dark and just lit: the contract's next light keeps 340 ms from this frame.
+  //   * One the core does not call steady (nativeSteadyLogics): a sequence that is not on the
+  //     allow-list (someone's button) is not known to the gate at all, one that draws at a level
+  //     of its own (a scan line, plasma) may stand anywhere between dark and full, and one whose
+  //     whole field moves by itself (flash colour, failure, rainbow, colour swap) may be in its
+  //     dim half or have lit a moment ago. Whatever starts now, the field is taken as dark and
+  //     just lit: the contract's next light keeps 340 ms from this frame.
   //   * A native look the contract takes over from (effect 106 starts) was not necessarily
   //     steady light either: PULSE breathes, COLORSWAP changes its hue. It may have lit the field
   //     a moment ago, and nothing told the gate: the 340 ms run from this frame. NORMAL is the
   //     exception (a steady shimmer: it is what an armed show leaves up until it begins, and a
   //     show must be able to begin), with lights-out.
   if (was != FX_CONTRACT) {
-    if (!nativeAllowedLogics((int)was) || _ownLevel(was)) contractNativeEnded(g, false, now);
+    if (!nativeSteadyLogics((int)was)) contractNativeEnded(g, false, now);
     else if (seq == FX_CONTRACT && was != NATIVE_NORMAL && was != NATIVE_LIGHTSOUT) contractNativeEnded(g, true, now);
   }
   if (seq == FX_CONTRACT) {                             // its frames go through the gate one by one (ContractRender)
@@ -677,14 +689,19 @@ static inline void _applyLook(uint8_t u, ContractLookPatch lp, uint32_t now) {
   _arm(u);
   contractShowBegin(g);                           // L1: the show's first live A (the look below replaces the dark baseline)
   lookPatchDefault(lp, g.base);                   // L5: no i= and no look yet => i=solid
+  const ContractUnitState was = g;
   if (lp.has & LP_COLOR)   g.color = lp.color;
   if (lp.has & LP_SPEED)   g.speed = lp.speed;
   if (lp.has & LP_BRIGHT)  g.bright = lp.bright;  // a fraction of the ceiling (S6)
   if (lp.has & LP_BEATMOD) g.beatMod = lp.beatMod;
   if (lp.has & LP_AM)      g.accentMode = lp.accentMode;
   if (lp.has & LP_EVERY)   g.accentEvery = lp.every;
-  g.startMs = now; g.pulseActive = false;
-  contractLookRestart(g);                         // S4 at the output: the look's timeline starts again
+  g.pulseActive = false;
+  // S11: re-applying the same look does not restart it. Anything else starts the look's timeline
+  // again, which is a change of look at the output.
+  const ContractEffect effect = (lp.has & LP_EFFECT) ? lp.effect : g.effect;
+  const int nativeCode = (lp.has & LP_EFFECT) ? lp.nativeCode : g.nativeCode;
+  if (!contractLookSame(was, effect, nativeCode, g.color, g.speed)) { g.startMs = now; contractLookRestart(g); }
   if (lp.has & LP_EFFECT) {
     g.effect = lp.effect; g.nativeCode = lp.nativeCode;
     g.base = (lp.effect == CE_NATIVE && lp.nativeCode >= 0) ? CB_NATIVE : CB_LOOK;
@@ -838,11 +855,11 @@ inline void contractTick() {
     if (!contractSectionMayApply(g, now)) continue;
     const ScoreEntry& s = gScore[u][idx];
     _arm(u);
+    if (!contractLookSame(g, s.effect, s.nativeCode, s.color, s.speed)) { g.startMs = now; contractLookRestart(g); }   // S11
     g.effect = s.effect; g.nativeCode = s.nativeCode; g.color = s.color; g.speed = s.speed;
     g.bright = s.bright;
     g.beatMod = s.beatMod; g.accentMode = s.accentMode; g.accentEvery = s.accentEvery;
-    g.curSection = (int8_t)idx; g.startMs = now; g.sectionStart = s.atBeat;
-    contractLookRestart(g);
+    g.curSection = (int8_t)idx; g.sectionStart = s.atBeat;
     g.sectionEnd = (idx + 1 < g.scoreLen) ? gScore[u][idx + 1].atBeat : (s.atBeat + 9999);
     g.pulseActive = false;
     g.base = (s.effect == CE_NATIVE && s.nativeCode >= 0) ? CB_NATIVE : CB_LOOK;
