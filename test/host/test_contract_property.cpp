@@ -343,32 +343,32 @@ struct Profile { const char* name; void (*setup)(); void (*at)(uint32_t t); uint
 static void pShow() { tx("**M:v=show"); }
 static const Profile kProfiles[] = {
   { "X between live A lines", pShow,
-    [](uint32_t t) { if (t == 0) tx("LFA:i=solid,c=ffffff"); if (t == 50) tx("LFX"); if (t == 100) tx("LFA:i=solid,c=ffffff"); }, 170, 2 },
+    [](uint32_t t) { if (t == 0) tx("LFA:i=solid,c=ffffff"); if (t == 50) tx("LFX"); if (t == 100) tx("LFA:i=solid,c=ffffff"); }, 170, 0 },
   { "B 0/255 alternation", []() { pShow(); tx("LFA:i=solid,c=ffffff"); },
-    [](uint32_t t) { if (t == 0) tx("LFB:b=0"); if (t == 50) tx("LFB:b=255"); }, 100, 2 },
+    [](uint32_t t) { if (t == 0) tx("LFB:b=0"); if (t == 50) tx("LFB:b=255"); }, 100, 0 },
   { "P:b= alternation", []() { pShow(); tx("LFA:i=solid,c=ffffff"); },
     [](uint32_t t) { if (t == 0) tx("LFP:i=solid,c=ffffff,b=0"); if (t == 50) tx("LFP:i=solid,c=ffffff,b=255"); }, 100, 0 },
   { "meter following L 0/255", []() { pShow(); tx("LFA:i=meter,c=ffffff"); },
-    [](uint32_t t) { if (t == 0) tx("L*L:v=0"); if (t == 50) tx("L*L:v=255"); }, 100, 2 },
+    [](uint32_t t) { if (t == 0) tx("L*L:v=0"); if (t == 50) tx("L*L:v=255"); }, 100, 0 },
   { "C seeks across two scored sections", []() { pShow(); tx("LFA:i=solid,c=ffffff,at=0"); tx("LFA:i=off,at=100"); },
     [](uint32_t t) { if (t == 0) tx("L*C:bpm=120,beat=100"); if (t == 50) tx("L*C:bpm=120,beat=0"); }, 100, 0 },
   { "C:bpm= re-seed restarting the pump", []() { pShow(); tx("LFA:i=solid,c=ffffff,am=2,m=255"); },
     [](uint32_t t) { if (t == 0) tx("L*C:bpm=300"); }, 150, 0 },
   { "A cancelling an overlay, with P", []() { pShow(); tx("LFA:i=off"); },
     [](uint32_t t) { if (t == 0) tx("LFP:i=solid,c=ffffff"); if (t == 90) tx("LFA:i=off"); if (t == 260) tx("LFA:i=solid,c=ffffff");
-                     if (t == 340) tx("LFP:i=off"); if (t == 430) tx("LFA:i=solid,c=ffffff"); if (t == 600) tx("LFA:i=off"); }, 680, 2 },
+                     if (t == 340) tx("LFP:i=off"); if (t == 430) tx("LFA:i=solid,c=ffffff"); if (t == 600) tx("LFA:i=off"); }, 680, 0 },
   { "pump across section seams at 300 BPM",
     []() { pShow(); for (int b = 0; b < 32; b++) { char l[96]; snprintf(l, sizeof l, "LFA:i=solid,c=ffffff,at=%d,am=2,m=255,an=2,ap=%d", b, b % 2); tx(l); }
            tx("**C:bpm=300,ph=0,bpb=4,beat=0"); },
-    [](uint32_t t) { if (t == 0) tx("**C:bpm=300,ph=0,bpb=4,beat=0"); }, 6200, 2 },
+    [](uint32_t t) { if (t == 0) tx("**C:bpm=300,ph=0,bpb=4,beat=0"); }, 6200, 0 },
   { "X and M:v=idle alternation (dark, then the native look)", []() { tx("LFA:i=solid,c=ffffff"); },
     [](uint32_t t) { if (t == 0) tx("LFX"); if (t == 50) tx("LFM:v=idle"); }, 100, 0 },
   { "live A restarting a pulse", pShow,
     [](uint32_t t) { if (t == 0) tx("LFA:i=pulse,c=ffffff,s=255"); }, 170, 0 },
   { "live A between white and native lights-out", pShow,
-    [](uint32_t t) { if (t == 0) tx("LFA:i=solid,c=ffffff"); if (t == 50) tx("LFX"); if (t == 60) tx("LFA:i=native:14"); if (t == 120) tx("LFA:i=solid,c=ffffff"); }, 240, 2 },
+    [](uint32_t t) { if (t == 0) tx("LFA:i=solid,c=ffffff"); if (t == 50) tx("LFX"); if (t == 60) tx("LFA:i=native:14"); if (t == 120) tx("LFA:i=solid,c=ffffff"); }, 240, 0 },
   { "a scored flash section delivered again and again", []() { pShow(); tx("LFA:i=flash,c=ffffff,s=255,at=0"); tx("L*C:bpm=120"); },
-    [](uint32_t t) { if (t == 0) tx("LFA:i=flash,c=ffffff,s=255,at=0"); }, 200, 2 },
+    [](uint32_t t) { if (t == 0) tx("LFA:i=flash,c=ffffff,s=255,at=0"); }, 200, 0 },
   // ---- the 2026-11-16 re-review: what the gate could not see, and what it let through ----
   { "C seeks between a white and a blue section (the brightest channel never moves)",
     []() { pShow(); tx("LFA:i=solid,c=ffffff,at=0"); tx("LFA:i=solid,c=0000ff,at=100"); },
@@ -384,18 +384,18 @@ static const Profile kProfiles[] = {
   { "white by a colour change, X, white again by an accent (two luminance onsets, one brightness onset)",
     []() { pShow(); tx("LFA:i=solid,c=0000ff"); },
     [](uint32_t t) { if (t == 0) tx("LFA:i=solid,c=ffffff"); if (t == 10) tx("LFX"); if (t == 20) tx("LFP:c=ffffff,d=170");
-                     if (t == 200) tx("LFA:i=solid,c=0000ff"); }, 400, 2 },
+                     if (t == 200) tx("LFA:i=solid,c=0000ff"); }, 400, 0 },
   { "native:6 (it flashes by itself), X and a relight just after its own ON edge", []() { pShow(); tx("LFA:i=native:6"); press(0, 6); },
     [](uint32_t t) { if (t == 510) tx("LFX"); if (t == 520) tx("LFA:i=solid,c=ffffff"); if (t == 690) { tx("LFA:i=native:6"); press(0, 6); } }, 1205, 0 },
   { "B between 0 and 63 (under a quarter of the ceiling)", []() { pShow(); tx("LFA:i=solid,c=ffffff"); },
-    [](uint32_t t) { if (t == 0) tx("LFB:b=0"); if (t == 50) tx("LFB:b=63"); }, 100, 2 },
+    [](uint32_t t) { if (t == 0) tx("LFB:b=0"); if (t == 50) tx("LFB:b=63"); }, 100, 0 },
   { "B between 192 and 255 (the top quarter)", []() { pShow(); tx("LFA:i=solid,c=ffffff"); },
-    [](uint32_t t) { if (t == 0) tx("LFB:b=192"); if (t == 50) tx("LFB:b=255"); }, 100, 2 },
+    [](uint32_t t) { if (t == 0) tx("LFB:b=192"); if (t == 50) tx("LFB:b=255"); }, 100, 0 },
   { "the top fifth of a meter following L", []() { pShow(); tx("LFA:i=meter,c=ffffff"); tx("L*L:v=255"); },
-    [](uint32_t t) { if (t == 0) tx("L*L:v=204"); if (t == 50) tx("L*L:v=255"); }, 100, 2 },
+    [](uint32_t t) { if (t == 0) tx("L*L:v=204"); if (t == 50) tx("L*L:v=255"); }, 100, 0 },
 };
 static const int kProfileCount = (int)(sizeof kProfiles / sizeof kProfiles[0]);
-static const int kRandomExpected = 10;
+static const int kRandomExpected = 0;
 
 // What a stream broke, as bits, so each fix can be seen to clear its own.
 enum : int { BROKE_ONSETS = 1,      // (a), the wide observers: two onsets under 340 ms apart, or four in a second

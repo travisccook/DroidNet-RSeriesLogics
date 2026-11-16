@@ -408,7 +408,16 @@ static void test_s9_paths() {
   run(280); CHECK(fieldLevel(FLD) <= 40);
   run(40);  CHECK(fieldLevel(FLD) == 160);                                 // 340 ms after it last lit
   // a look that only dims a little is not a blackout, and its way back is not an onset
-  send("LFB:b=220"); run(20); send("LFB:b=255"); run(20); CHECK(fieldLevel(FLD) == 160);
+  // (the step is more than a tenth of the ceiling: 17 levels of the owner's 160)
+  send("LFB:b=240"); run(20); CHECK(fieldLevel(FLD) == 150); send("LFB:b=255"); run(20); CHECK(fieldLevel(FLD) == 160);
+  run(400);
+  send("LFB:b=220"); run(20); CHECK(fieldLevel(FLD) == 138);              // a dip of more than a step is a swing,
+  send("LFB:b=255"); run(20); CHECK(fieldLevel(FLD) == 160);              // and the way back an onset (the first in a long time)
+  send("LFB:b=220"); run(20); CHECK(fieldLevel(FLD) == 138);
+  send("LFB:b=255"); run(20);                                             // the next one waits, a step less one above the dip
+  CHECK(fieldLevel(FLD) > 138 && fieldLevel(FLD) <= 138 + 16);
+  run(260); CHECK(fieldLevel(FLD) <= 138 + 16);
+  run(60);  CHECK(fieldLevel(FLD) == 160);
 
   // P's b= is the overlay's own: it never reaches the base look, and a P the cool-down refuses changes nothing
   resetAll(); send("**M:v=show"); send("LFA:i=solid,c=ffffff"); run(500);
@@ -630,8 +639,8 @@ static void test_rereview() {
   resetAll(); send("**M:v=show"); send("LFA:i=native:24"); run(2000);
   CHECK(FLD->_fx == 24);
   send("LFX"); run(10); send("LFA:i=solid,c=ffffff"); run(20);
-  CHECK(fieldLevel(FLD) <= 40);
-  run(300); CHECK(fieldLevel(FLD) <= 40);
+  CHECK(fieldLevel(FLD) <= 16);
+  run(300); CHECK(fieldLevel(FLD) <= 16);
   run(40);  CHECK(fieldLevel(FLD) == 160);
   // ...NORMAL is the exception: an armed show begins from it at once
   resetAll(); run(1000); send("**M:v=show"); send("LFA:i=solid,c=ffffff"); run(20);
@@ -645,7 +654,7 @@ static void test_rereview() {
   CHECK(FLD->_fx == 2 && fieldLevel(FLD) == 0);                             // (the mock has FAILURE's timing)
   run(30); CHECK(FLD->_fx == 0 && fieldLevel(FLD) == 160);                  // it ran out: NORMAL again
   send("LFX"); run(10); send("LFA:i=solid,c=ffffff"); run(20);
-  CHECK(fieldLevel(FLD) <= 40);
+  CHECK(fieldLevel(FLD) <= 16);
   // FLASHCOLOR (6) is full and 50/255 by turns, every 250 ms. A contract look that takes the
   // display from it, in its dim half or just after its own flash, waits the window out too.
   resetAll(); send("LFA:i=native:6"); run(50); CHECK(FLD->_fx == 0);        // (refused)
@@ -654,8 +663,8 @@ static void test_rereview() {
   run(250); CHECK(fieldLevel(FLD) == 31);
   run(250); CHECK(fieldLevel(FLD) == 160);                                  // its own ON edge, 510 ms in
   send("LFA:i=solid,c=ffffff"); run(20);
-  CHECK(FLD->_fx == 106 && fieldLevel(FLD) <= 40);
-  run(300); CHECK(fieldLevel(FLD) <= 40);
+  CHECK(FLD->_fx == 106 && fieldLevel(FLD) <= 16);
+  run(300); CHECK(fieldLevel(FLD) <= 16);
   run(40);  CHECK(fieldLevel(FLD) == 160);
 }
 

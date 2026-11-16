@@ -765,8 +765,10 @@ struct FieldObserver {
 static uint32_t g_gateRng = 0x2545F491u;
 static uint32_t gateRnd(uint32_t n) { g_gateRng ^= g_gateRng << 13; g_gateRng ^= g_gateRng >> 17; g_gateRng ^= g_gateRng << 5; return g_gateRng % n; }
 static void test_field_gate() {
-  // the step is a quarter of the ceiling (and never 0)
-  CHECK(contractFieldStep(255) == 64 && contractFieldStep(160) == 41 && contractFieldStep(0) == 1 && contractFieldStep(3) == 1);
+  // the step is more than a tenth of the ceiling, and at least 2 levels
+  CHECK(contractFieldStep(255) == 26 && contractFieldStep(160) == 17 && contractFieldStep(0) == 2 && contractFieldStep(3) == 2);
+  CHECK(contractFieldStep(9) == 2 && contractFieldStep(10) == 2 && contractFieldStep(19) == 2 && contractFieldStep(20) == 3 && contractFieldStep(100) == 11);
+  for (int c = 0; c < 256; c++) { const int st = contractFieldStep((uint8_t)c); CHECK(st >= 2 && st * 10 > c && (st == 2 || (st - 1) * 10 <= c)); }
 
   // a first onset, well after power-on, passes untouched; so does everything while the field stays lit
   ContractUnitState s; s.ceil = 200;
@@ -777,10 +779,10 @@ static void test_field_gate() {
   // a blackout is never delayed
   CHECK(contractFieldGate(s, 0, 1040) == 0 && !s.fieldLit);
   // ...what follows it is: no more than a step less one above the trough until 340 ms after the onset
-  CHECK(contractFieldGate(s, 200, 1050) == 50);
-  CHECK(contractFieldGate(s, 40, 1100) == 40);                              // under a step: a look's own texture passes
-  CHECK(contractFieldGate(s, 51, 1200) == 50);
-  CHECK(contractFieldGate(s, 200, 1349) == 50 && !s.fieldLit);
+  CHECK(contractFieldGate(s, 200, 1050) == 20);
+  CHECK(contractFieldGate(s, 20, 1100) == 20);                              // under a step: a look's own texture passes
+  CHECK(contractFieldGate(s, 21, 1200) == 20);
+  CHECK(contractFieldGate(s, 200, 1349) == 20 && !s.fieldLit);
   CHECK(contractFieldGate(s, 200, 1350) == 200 && s.fieldLit && s.fieldOnsetMs == 1350);
   // the window runs from when the field last got BRIGHTER, not from when it began to
   CHECK(contractFieldGate(s, 0, 1700) == 0);
@@ -788,28 +790,28 @@ static void test_field_gate() {
   CHECK(contractFieldGate(s, 120, 1900) == 120 && s.fieldOnsetMs == 1900);
   CHECK(contractFieldGate(s, 200, 2100) == 200 && s.fieldOnsetMs == 2100);               // ...and ends here
   CHECK(contractFieldGate(s, 0, 2110) == 0);
-  CHECK(contractFieldGate(s, 200, 2400) == 50);                                          // 690 ms after it began, 300 after it ended
+  CHECK(contractFieldGate(s, 200, 2400) == 20);                                          // 690 ms after it began, 300 after it ended
   CHECK(contractFieldGate(s, 200, 2440) == 200);
   // a fall to a trough that is not dark, and back: the same rule, from that trough
   CHECK(contractFieldGate(s, 120, 2450) == 120 && !s.fieldLit && s.fieldRef == 120);
-  CHECK(contractFieldGate(s, 200, 2460) == 170);
+  CHECK(contractFieldGate(s, 200, 2460) == 140);
   CHECK(contractFieldGate(s, 100, 2470) == 100 && s.fieldRef == 100);                    // the trough follows the level down
-  CHECK(contractFieldGate(s, 200, 2480) == 150);
+  CHECK(contractFieldGate(s, 200, 2480) == 120);
   // the gate's state is a safety anchor: no reset clears it
   contractFieldGate(s, 200, 3000); contractFieldGate(s, 0, 3010);
-  contractOnStop(s, 200);     CHECK(contractFieldGate(s, 200, 3100) == 50);
-  contractOnIdle(s, 200);     CHECK(contractFieldGate(s, 200, 3200) == 50);
-  contractOnShow(s, 200, 0);  CHECK(contractFieldGate(s, 200, 3300) == 50);
+  contractOnStop(s, 200);     CHECK(contractFieldGate(s, 200, 3100) == 20);
+  contractOnIdle(s, 200);     CHECK(contractFieldGate(s, 200, 3200) == 20);
+  contractOnShow(s, 200, 0);  CHECK(contractFieldGate(s, 200, 3300) == 20);
   CHECK(contractFieldGate(s, 200, 3340) == 200);
   // millis() wrapping changes nothing
   ContractUnitState w; w.ceil = 255;
   CHECK(contractFieldGate(w, 255, 0xFFFFFF00u) == 255);
   CHECK(contractFieldGate(w, 0, 0xFFFFFF80u) == 0);
-  CHECK(contractFieldGate(w, 255, 0x00000010u) == 63);          // 272 ms later, across the wrap
+  CHECK(contractFieldGate(w, 255, 0x00000010u) == 25);          // 272 ms later, across the wrap
   CHECK(contractFieldGate(w, 255, 0x00000054u) == 255);         // 340 ms later
   // the first 340 ms after power-on are held (the anchor starts at 0): the fail-safe direction
   ContractUnitState boot; boot.ceil = 255;
-  CHECK(contractFieldGate(boot, 255, 100) == 63 && contractFieldGate(boot, 255, 340) == 255);
+  CHECK(contractFieldGate(boot, 255, 100) == 25 && contractFieldGate(boot, 255, 340) == 255);
 
   // a native look takes the LEDs: the fork ASKS first (no state change), and TELLS the gate when
   // the look is really on the LEDs
@@ -821,21 +823,22 @@ static void test_field_gate() {
   CHECK(contractFieldGate(n, 0, 1120) == 0);                                // the contract blacks it out
   CHECK(!contractFieldMayLight(n, 1130) && !n.fieldLit);                    // back to native now would be an onset 120 ms after the last
   CHECK(!contractFieldMayLight(n, 1349) && contractFieldMayLight(n, 1350));
-  CHECK(contractFieldAllowed(n, 160, 1349) == 40 && contractFieldAllowed(n, 160, 1350) == 160 && contractFieldAllowed(n, 40, 1130) == 40);
+  CHECK(contractFieldAllowed(n, 160, 1349) == 16 && contractFieldAllowed(n, 160, 1350) == 160);
+  CHECK(contractFieldAllowed(n, 16, 1130) == 16 && contractFieldAllowed(n, 17, 1130) == 16);
   CHECK(contractFieldGate(n, 160, 1360) == 160 && n.fieldOnsetMs == 1360);
   CHECK(contractFieldGate(n, 0, 1370) == 0 && !n.fieldLit && n.fieldRef == 0);   // a native lights-out is level 0: dark at once
-  CHECK(contractFieldGate(n, 60, 1380) == 40);                              // (dimmed, but still an onset from dark)
+  CHECK(contractFieldGate(n, 60, 1380) == 16);                              // (dimmed, but still an onset from dark)
   CHECK(contractFieldGate(n, 100, 1710) == 100 && contractFieldGate(n, 50, 1720) == 50 && !n.fieldLit);   // lit, then dimmed by a step
   CHECK(!contractFieldMayLight(n, 1800));                                   // a native look at the ceiling is an onset from there...
-  CHECK(contractFieldAllowed(n, 80, 1800) == 80);                           // ...one within a step of the trough is not
+  CHECK(contractFieldAllowed(n, 66, 1800) == 66 && contractFieldAllowed(n, 67, 1800) == 66);   // ...one within a step of the trough is not
   // light nobody asked the gate about (a button): recorded, never refused, and the contract's
   // next onset keeps 340 ms from it
   ContractUnitState f; f.ceil = 200;
   contractFieldGate(f, 200, 1000); contractFieldGate(f, 0, 1010);
-  CHECK(contractFieldGate(f, 200, 1100) == 50 && !f.fieldLit);              // the contract's own relight is held...
+  CHECK(contractFieldGate(f, 200, 1100) == 20 && !f.fieldLit);              // the contract's own relight is held...
   contractFieldForced(f, 200, 1100);
   CHECK(f.fieldLit && f.fieldRef == 200 && f.fieldOnsetMs == 1100);         // ...a button's is on the LEDs: recorded
-  CHECK(contractFieldGate(f, 0, 1110) == 0 && contractFieldGate(f, 200, 1400) == 50 && contractFieldGate(f, 200, 1440) == 200);
+  CHECK(contractFieldGate(f, 0, 1110) == 0 && contractFieldGate(f, 200, 1400) == 20 && contractFieldGate(f, 200, 1440) == 200);
   contractFieldForced(f, 200, 1500); CHECK(f.fieldOnsetMs == 1440);         // lit already, no brighter: nothing new
   contractFieldForced(f, 0, 1600);   CHECK(!f.fieldLit && f.fieldRef == 0); // a button's lights-out
   // asking is exactly the gate's answer, for any state, level and time

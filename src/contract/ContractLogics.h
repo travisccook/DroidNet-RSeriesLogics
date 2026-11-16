@@ -575,6 +575,11 @@ static inline void _draw(LogicEngineRenderer& r, const ContractUnitState& g, Con
   }
 }
 
+// A measuring build counts the frames the gate holds back (test/host/gate_held_table.cpp).
+#ifndef CONTRACT_GATE_STAT
+#define CONTRACT_GATE_STAT(unit, scale)
+#endif
+
 // ---- the single fork effect fn: renders unit u's contract state each frame ----
 inline bool ContractRender(LogicEngineRenderer& r) {
   uint8_t u = (r.getID() == 1) ? 0 : 1;
@@ -629,6 +634,7 @@ inline bool ContractRender(LogicEngineRenderer& r) {
   uint8_t level = gPxCount ? (uint8_t)(gPxSum / gPxCount) : 0;
   uint8_t lum   = gPxCount ? (uint8_t)(gPxLum / gPxCount) : 0;
   const uint8_t scale = contractFieldAsk(g, level, lum, now);
+  CONTRACT_GATE_STAT(u, scale);
   if (scale != 255) {
     gPxSum = 0; gPxLum = 0; gPxCount = 0; gPxScale = scale;
     _draw(r, g, eff, col, bri, t0, now, overlay);

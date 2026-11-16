@@ -115,6 +115,8 @@ int main(int argc, char** argv) {
   printf(",\n    \"NATIVE_GATED_FLTHY\": [");
   { bool first = true; for (int c = 0; c < 256; c++) if (nativeGatedFlthy(c)) { printf("%s%d", first ? "" : ", ", c); first = false; } }
   printf("]");
+  // S9: the gate's step is more than a tenth of the ceiling and at least 2 levels: ceil / DIV + 1.
+  printf(",\n    \"FIELD_STEP_DIV\": 10,\n    \"FIELD_STEP_MIN\": 2");
   // MORE CONSTANTS GO HERE (each starts with ",\n    ")
   printf("\n  ");
   printf("},\n  \"lines\": [");
@@ -221,12 +223,12 @@ int main(int argc, char** argv) {
   // S9, the field gate (CA1.2). STATEFUL: see gate() above and docs/CHANGING_THE_CORE.md.
   group("contractFieldGate", "\"seq\", \"ceil\", \"reset\", \"nowMs\", \"level\"",
         "\"allowed\", \"lit\", \"ref\", \"onsetMs\"");
-  // 1. The plain life of a display, ceiling 200 (step 51): dark, a first light, a dip that is
+  // 1. The plain life of a display, ceiling 200 (step 21): dark, a first light, a dip that is
   //    not a fall, a blackout (never delayed), a relight held to step - 1 above the trough until
   //    exactly 340 ms after the onset, texture under a step passing meanwhile.
   gateSeq(200);
   gate(1000, 0); gate(1010, 200); gate(1020, 180); gate(1030, 200); gate(1040, 0);
-  gate(1050, 200); gate(1100, 40); gate(1200, 51); gate(1349, 200); gate(1350, 200); gate(1360, 200);
+  gate(1050, 200); gate(1100, 20); gate(1200, 21); gate(1349, 200); gate(1350, 200); gate(1360, 200);
   //    The window runs from when the field last got BRIGHTER: a slow rise keeps moving it.
   gate(1700, 0); gate(1710, 60); gate(1900, 120); gate(2100, 200); gate(2110, 0);
   gate(2400, 200); gate(2439, 200); gate(2440, 200);
@@ -234,12 +236,12 @@ int main(int argc, char** argv) {
   //    following the level down while it is held.
   gate(2450, 120); gate(2460, 200); gate(2470, 100); gate(2480, 200); gate(2490, 30); gate(2500, 200);
   gate(2779, 200); gate(2780, 200);
-  // 2. The threshold from both sides, ceiling 200: a rise of 50 above the trough is texture and one
-  //    of 51 an onset; a fall of 50 below the peak leaves the field lit and one of 51 does not.
+  // 2. The threshold from both sides, ceiling 200: a rise of 20 above the trough is texture and one
+  //    of 21 an onset; a fall of 20 below the peak leaves the field lit and one of 21 does not.
   gateSeq(200);
-  gate(5000, 0); gate(5010, 50); gate(5020, 0); gate(5030, 51); gate(5040, 1); gate(5050, 0);
-  gate(6000, 200); gate(6010, 150); gate(6020, 200); gate(6030, 149); gate(6040, 200); gate(6400, 200);
-  gate(6410, 10); gate(6420, 60); gate(6430, 61); gate(6440, 9); gate(6450, 59); gate(6460, 60); gate(6800, 60);
+  gate(5000, 0); gate(5010, 20); gate(5020, 0); gate(5030, 21); gate(5040, 1); gate(5050, 0);
+  gate(6000, 200); gate(6010, 180); gate(6020, 200); gate(6030, 179); gate(6040, 200); gate(6400, 200);
+  gate(6410, 10); gate(6420, 30); gate(6430, 31); gate(6440, 9); gate(6450, 29); gate(6460, 30); gate(6800, 30);
   // 3. Power-on: the anchor starts at 0, so the first 340 ms are held.
   gateSeq(255);
   gate(0, 255); gate(100, 255); gate(339, 255); gate(340, 255); gate(350, 0); gate(679, 255); gate(680, 255);
@@ -253,10 +255,10 @@ int main(int argc, char** argv) {
   gate(3000, 200); gate(3010, 0); gate(3100, 200, true); gate(3200, 200, true); gate(3300, 200, true);
   gate(3339, 200); gate(3340, 200); gate(3350, 0, true); gate(3400, 100, true, 100); gate(3679, 100); gate(3680, 100);
   gate(3690, 80, true, 255); gate(3700, 255); gate(3710, 100); gate(3720, 255); gate(4059, 255); gate(4060, 255);
-  // 6. Odd ceilings. The step is ceil / 4 + 1: 1 for ceilings under 4, so every rise is an onset
-  //    there. The same script at each: light, dark, relight at once, dark, a step exactly, the hold.
-  for (int c : { 0, 1, 2, 3, 4, 20, 63, 64, 160, 200, 254, 255 }) {
-    const int step = c / 4 + 1;
+  // 6. Odd ceilings. The step is ceil / 10 + 1 and never under 2 (CA1.4; it was ceil / 4 + 1).
+  //    The same script at each: light, dark, relight at once, dark, a step exactly, the hold.
+  for (int c : { 0, 1, 2, 3, 4, 9, 10, 19, 20, 63, 64, 160, 200, 254, 255 }) {
+    const int step = contractFieldStep((uint8_t)c);
     gateSeq(c);
     gate(10000, 0); gate(10010, c); gate(10020, 0); gate(10030, c); gate(10349, c); gate(10350, c);
     gate(10360, c > step ? c - step : 0); gate(10370, c); gate(10380, c >= step ? c - step + 1 : 0); gate(10390, c);

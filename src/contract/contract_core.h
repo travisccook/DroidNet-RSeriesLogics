@@ -1061,8 +1061,8 @@ inline bool liveLookDue(ContractUnitState& s, uint32_t nowMs, ContractLookPatch&
 //     allowed = contractFieldGate(state, level, now);
 // before the frame leaves. When allowed < level it scales the frame down to `allowed`.
 //
-// The rule. A change of at least a STEP (a quarter of the unit's ceiling) is a swing; smaller
-// changes are a look's own texture and pass. The unit is either LIT or not:
+// The rule. A change of a STEP (more than a tenth of the unit's ceiling, and at least 2 levels)
+// is a swing; smaller changes are a look's own texture and pass. The unit is either LIT or not:
 //   * LIT. The gate follows the level up, and each new peak is the end of the onset so far. A
 //     fall of a step or more below the peak makes the unit not lit. A fall is never delayed: a
 //     blackout is always immediate.
@@ -1075,13 +1075,15 @@ inline bool liveLookDue(ContractUnitState& s, uint32_t nowMs, ContractLookPatch&
 // in any second. (Why "last got brighter" and not "last lit": an onset is over when the light
 // stops rising. Timing from its start would let a slow rise be followed too closely.)
 //
-// What it costs a look: nothing, unless it swings the whole field by a quarter of the ceiling
-// more often than every 340 ms. The looks that could are held to the floor already (S2, S4, S8);
-// the gate squares off the fastest of them a little (a pulse faster than about 1.8 cycles a
-// second rises in a step instead of a ramp) and never makes anything brighter.
+// What it costs a look: nothing, unless it swings the whole field by more than a tenth of the
+// ceiling more often than every 340 ms. The looks that could are held to the floor already (S2,
+// S4, S8); the gate squares off the fastest of them a little (a pulse faster than about 1.8
+// cycles a second rises in a step instead of a ramp) and never makes anything brighter. A look
+// with texture (a sparkle, a chase) moves its field mean by less than a step from frame to frame;
+// docs/CHANGING_THE_CORE.md has the measured share of frames the gate holds back, look by look.
 //
 // Sixteen bytes of state a unit, with the look gate's. It survives every reset (contractShowReset).
-inline uint8_t contractFieldStep(uint8_t ceil) { return (uint8_t)(ceil / 4u + 1u); }
+inline uint8_t contractFieldStep(uint8_t ceil) { return ceil < 10 ? (uint8_t)2 : (uint8_t)(ceil / 10u + 1u); }
 
 // TWO MEASURES, ONE GATE (core revision CA1.4). The brightest channel cannot see colour: a field
 // that goes from white to blue and back keeps its level and loses nine tenths of its light. So a
