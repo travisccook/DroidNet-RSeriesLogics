@@ -18,6 +18,7 @@
 #   2c. contract v1.3 on the RSeries layer, on the mock engine
 #   2d. the Serial1 reader: line assembler, drain loop, the section-11 burst
 #   2e. contract S9 as a property: hostile and random line streams, measured on the pixels
+#   2f. the frame fixtures Studio's preview is checked against (frames/) are what the layer draws
 #   3. line-buffer width and reader guard (serial and WiFi; the WDP contract tag)
 #   4. parser fuzz + differential (ASan/UBSan, deterministic)
 #   5. native #LEBRI brightness parser unit tests
@@ -137,6 +138,27 @@ stage 2c "contract v1.3 on the RSeries layer (mock engine)" "$CXX" -std=c++17 -W
 # dark-to-lit onsets in any second, nothing above the owner's ceiling, native after idle, dark
 # after X. Fixed seed.
 stage 2e "S9 property: hostile and random line streams, measured on the pixels" "$CXX" -std=c++17 -O1 -Wall -Wextra test_contract_property.cpp
+# The LED buffers Cantina Studio's dome preview has to reproduce, one file a case. They are
+# generated HERE, by the real layer on the mock engine (export_logics_frames.cpp), and kept in
+# frames/; Studio copies that folder (tests/fixtures/dome/frames in the Signal Booster). A change
+# to the core or the layer that moves a pixel makes this stage fail until the frames are
+# written again, and then the diff of frames/ shows what moved.
+if want 2f; then
+  echo "[2f] frame fixtures are current"
+  "$CXX" -std=c++17 -O1 -Wall -Wextra export_logics_frames.cpp -o "$OUT/export_frames"
+  src="$( (cat ../../src/contract/contract_core.h ../../src/contract/ContractLogics.h | sha256sum 2>/dev/null || cat ../../src/contract/contract_core.h ../../src/contract/ContractLogics.h | shasum -a 256) | cut -c1-12)"
+  mkdir -p "$OUT/frames"
+  "$OUT/export_frames" "$OUT/frames" "$src" > "$OUT/frames.log" || { cat "$OUT/frames.log"; echo "FAIL: the frame exporter"; exit 1; }
+  if [ "${UPDATE_FRAMES:-0}" = 1 ]; then mkdir -p frames; rm -f frames/rseries-logic.*.json; cp "$OUT"/frames/rseries-logic.*.json frames/; fi
+  if ! diff -rq "$OUT/frames" frames >/dev/null 2>&1; then
+    diff -rq "$OUT/frames" frames 2>&1 | head -20 || true
+    echo "FAIL: test/host/frames is stale. Run: UPDATE_FRAMES=1 bash test/host/run.sh"
+    echo "      then copy the folder to Studio (tests/fixtures/dome/frames in the Signal Booster)."
+    exit 1
+  fi
+  echo "OK  $(ls frames/rseries-logic.*.json | wc -l | tr -d ' ') frame files match what the layer draws (source $src)"
+  RAN="$RAN 2f"
+fi
 
 if want 3; then
 echo "[3] line-buffer width and reader guard"
