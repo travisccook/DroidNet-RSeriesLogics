@@ -44,10 +44,19 @@ What is verified is host-side, by `bash test/host/run.sh` (and by CI, `.github/w
   presses, go through the real layer, a quarter of them at the loop's own pace of 1 to 4 ms a pass; every frame
   is rendered and its pixels measured by two photometers. Asserted: no two dark-to-lit onsets of a display less
   than 340 ms apart, in the field's level (seven readings of "dark" and "lit", four of them an eighth of the
-  brightness wide) and in its Rec.709 luminance (three readings); no two changes of the field's colour less than
-  170 ms apart (five readings); no pixel above the owner's brightness; the native look after idle or the
-  watchdog; dark after `X`; a button's sequence left running. The mock engine draws a frame every 10 ms at most
-  and has the timing of the two stock sequences that flash by themselves (FLASHCOLOR and FAILURE);
+  brightness wide) and in its Rec.709 luminance (seven readings); no two changes of the field's colour less than
+  170 ms apart (six readings, one of them from 4 levels up); no pixel above the owner's brightness; the native
+  look after idle or the watchdog; dark after `X`; a button's sequence left running. The mock engine draws a
+  frame every 10 ms at most and has the timing of the two stock sequences that flash by themselves (FLASHCOLOR
+  and FAILURE). The engine draws at most one frame of a display in a pass and the pixels are read after every
+  pass, so every frame is read;
+- a part of the display, in the same stage: the whole field, its halves, its quarters and four bands of columns
+  and of rows are watched on the pixels, with the rear display at five sizes by turns. A region may go from dark
+  to lit three times in any one second. Asserted on every look by itself and on scripts made for it (a meter
+  under `L`, a comet, looks by turns); in the random streams it is measured and printed. One script is a known
+  failure: see "What is not in";
+- the frame fixtures Studio's preview is checked against (stage 2f, `test/host/frames/`) are what the layer
+  draws on the mock engine;
 - contract S10 as a test (stage 1i): a model of the stock sequences, on every display size the engine knows,
   counts each allow-listed code's onsets over the whole field and over every region of a quarter or more, at the
   speed the core starts it with. It is a model of the stock code, not a measurement of a display;
@@ -69,7 +78,8 @@ is the DroidNet layer (`git log --oneline 6bba8b1..HEAD`).
   `flash`, `pulse`, `scan`, `chase` and `wipe` use the core's shared timing, the same on all three boards:
   `flash` is 190 to 445 ms a state; `pulse` is a breathe whose cycle is never shorter than 680 ms (and a steady
   fill moved by the beat pump when one is on); a `wipe` fills and drains in 680 ms at the least; `chase` lights
-  three of the eight columns at every step; `scan` is one column sweeping back and forth. A live `A` or a section
+  three of the eight columns at every step; `scan` is one column sweeping back and forth; a `comet` laps the
+  display in 680 ms at the least (85 ms a column on the front display's eight). A live `A` or a section
   that asks for the look that is already up (the same effect, colour and speed) does not restart it.
 - **Beat clock.** One clock for both displays. `C:bpm=,ph=,bpb=,beat=` seeds it; a bare `C:ph=,beat=` re-anchors
   it (the host's drift correction); `C:bpm=0` holds the show. A tempo outside 30-300, or a `bpm=` that is not a
@@ -93,7 +103,9 @@ is the DroidNet layer (`git log --oneline 6bba8b1..HEAD`).
   though no channel got brighter. S4, the look gate: a frame that would show another look or colour than the
   field last showed is drawn 170 ms after the field's last change at the earliest, whichever path asked for it (a
   live `A`, a section reached by time or by a `C` seek, an accent, a native sequence, a look given back); the
-  frame that is up stays up meanwhile. A blackout is never held back; what follows it is. `b=` and `B` are
+  frame that is up stays up meanwhile. A frame either gate holds is not shown at all, dimmed or otherwise: the
+  frame that is up stays up. A frame whose brightest LED is under 4 levels is not a look, and is never held. A
+  blackout is never held back; what follows it is. `b=` and `B` are
   fractions of the display's own brightness, as its owner set it, and a brightness the owner sets during a show
   is the display's brightness from then on. `B` is honoured only in show mode, and a reset clears it. `b=` on a
   `P` is that pulse's alone.
@@ -102,7 +114,9 @@ is the DroidNet layer (`git log --oneline 6bba8b1..HEAD`).
   display plays on. The layer never selects over a sequence that is waiting for the engine's next frame, so a
   button pressed in the same 10 ms as a change of the contract's own is not lost; only `X` does, and `X` always
   lands.
-- **`L` feeds the contract's own `meter` look and nothing else.** No native sequence is driven by it.
+- **`L` feeds the contract's own `meter` look and nothing else.** No native sequence is driven by it. Each
+  display keeps its own level. A higher level is taken at most once in 340 ms; a level that is no higher at
+  once. A raise that comes sooner waits, the newest of them, and the show reset clears the level.
 - **Query.** `Q:r=<route>` addressed to one display is answered on Serial1 with
   `;S0!L<u>q:ver=1.3,rel=1,cap=32,n=<held>,ok=<0|1|2>,bpm=<n>` (`;W<n>,;S0...` for a remote WCB). `r` is a
   number 0 to 99; anything else gets no reply. One reply a display can wait to be written.
@@ -125,6 +139,15 @@ is the DroidNet layer (`git log --oneline 6bba8b1..HEAD`).
 - A brighter `B` or `b=` on a native sequence whose own light moves (`native:2`, `6`, `9`, `10`) while it runs.
   Nothing can tell when such a sequence next lights by itself, so it is given a brighter level only when it
   starts. A dimmer one reaches it at once.
+- A limit on a part of a display for every order of lines. No look by itself, and no meter under `L`, lights a
+  region of a quarter of a display or more than three times in a second; the property stage asserts that. A
+  comet and a full look by turns do: the comet passes a region and the full look lights it again, four onsets in one
+  second (`A:i=comet` for 510 ms, `A:i=solid` for 170 ms, repeated). The whole-field gates cannot see it. It is
+  in the property stage as a known failure, and it is an owner item: a gate that knows regions, or a comet
+  that never leaves a part of the display dark.
+- The luminance of a native sequence. The layer tells the gate one figure for a native look, its level, and the
+  gate takes its luminance to be the same. A contract look that follows at the same level and a higher
+  luminance (white after the blue of a front logic) is no onset to the gate. A bench item.
 - One limit for the two displays together. Each display has its own gates, so the front and the rear can light
   by turns, each 340 ms apart: 5.9 onsets a second between them. Not limited, and a bench item.
 - A limit on `#LEBRI`. It scales everything the board puts out, at once and as often as it is sent, outside the
@@ -264,13 +287,18 @@ state change and no reply: there is no clamp, and 0 is never applied.
   (`ContractSelectorFLD` / `ContractSelectorRLD`), and the engine calls a selector at the frame it starts a
   newly selected sequence, never otherwise. `contractEngineLatched()` is that report. It is how the layer knows a
   native look is really on the LEDs, and how it sees a sequence it did not select (L6). It selects nothing.
-- **S9: ask, then tell.** A frame effect 106 draws is measured (level and luminance), the gate is asked
-  (`contractFieldAsk()`), a frame it holds down is drawn again scaled and measured again, and the gate is told
-  what is on the LEDs (`contractFieldTell()`). Light the layer does not draw (a native look, at the brightness
+- **S9: measure, ask, draw, tell.** A frame effect 106 is about to draw is measured first, without writing a
+  LED (`_draw()` runs twice a frame: level, luminance and the brightest LED), the gate is asked
+  (`contractFieldAsk()`), and a frame it would scale is not drawn: the frame that is up stays. A frame scaled
+  down keeps the field's level legal and still lights, dimly, every part of the display the frame lights. A
+  frame the gate passes is drawn as it is, and the gate is told (`contractFieldTell()`). Light the layer does
+  not draw (a native look, at the brightness
   the contract gives it) is ASKED for before the hand-over and TOLD to the gate at the frame the engine starts
   it. The gate is never told about light that did not reach the LEDs.
-- **S4 at the output.** `ContractRender` passes every lit frame's look (effect and colour) through
-  `contractLookGate()` and leaves the frame that is up when the answer is no. A live `A` or a section that
+- **S4 at the output.** `ContractRender` asks for every frame's look (effect and colour) with
+  `contractLookAllowedAt()`, by the frame's brightest LED (under 4 levels it is not a look), and leaves the frame
+  that is up when the answer is no. The gate is taken (`contractLookGateAt()`) only by a frame that is shown,
+  so its 170 ms run from the frame in which the look could be seen. A live `A` or a section that
   changes the look (`contractLookSame()` says no: another effect, native code, colour or speed) restarts the
   look's timeline and calls `contractLookRestart()`, so the next lit frame is a change of look. One that asks
   for the look that is up leaves its timeline alone (S11): the look goes on from where it was.

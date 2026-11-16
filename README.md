@@ -64,9 +64,10 @@ build is not supported yet: it compiles, but its hardware config is unconfirmed 
 **Testing.** The source in this tree is contract v1.3 (release R1). `bash test/host/run.sh` runs the host suite:
 the shared core's unit tests and parser fuzz, the RSeries layer on a mock of the engine (every finding of the
 2026-11-15 and 2026-11-16 reviews is a regression test there), the contract's "never flash a display" rule as a
-property of hostile and random line streams measured on the rendered pixels, the Serial1 reader, and, with
-PlatformIO installed, the real ESP32 cross-compile. CI runs the same on every push. At this source state
-`pio run -e wlogicengine32` links at **1,136,893 B of flash (57.8%)** and 64,932 B of SRAM (19.8%). A link is not
+property of hostile and random line streams measured on the rendered pixels, the Serial1 reader, the frame
+fixtures Cantina Studio's preview is checked against, and, with PlatformIO installed, the real ESP32
+cross-compile. CI runs the same on every push. At this source state
+`pio run -e wlogicengine32` links at **1,136,781 B of flash (57.8%)** and 64,948 B of SRAM (19.8%). A link is not
 a run.
 
 This used to say the code had never been compiled for the ESP32 at all, and that was the honest
@@ -328,6 +329,7 @@ ONLY="1 1f 4" bash test/host/run.sh   # just those stages
 | 2c | contract v1.3 as it appears on the two displays, the 2026-11-16 review's findings and native take-over included |
 | 2d | the Serial1 reader, including a 400-byte burst of back-to-back lines, with and without the pass-through; the WiFi line helper |
 | 2e | contract S9 and S4 as a property: hostile and random line streams, and button presses, through the real layer, measured on the rendered pixels (level, luminance, colour) |
+| 2f | the frame fixtures Cantina Studio's preview is checked against (`test/host/frames/`) are what the layer draws on the mock engine |
 | 3 | the reader class, the serial and WiFi line widths, the per-display effect selectors, the WDP contract tag |
 | 4, 8 | differential fuzzers for the two parsers, under ASan and UBSan |
 | 5, 6 | the `#LEBRI` parser and action |

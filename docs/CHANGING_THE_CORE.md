@@ -469,3 +469,190 @@ fork that draws chase and wipe pays for the ring and for the stretched step: a p
 and flash on a strand is 924 B at CA1.4 and 1,018 B at CA1.5. Doing that arithmetic in 16 bits made it 1,030 B,
 and reading the 0 to 255 value once in `_applyParam` made one image 78 B smaller and two others 48 B and 106 B
 larger; neither was kept.
+
+## Core revision CA1.6 (2026-11-16): coloured fades, and a part of the field
+
+### What a fork changes
+
+Re-copy the six shared files. After that:
+
+| | What | A fork has to |
+| --- | --- | --- |
+| 1 | One rise is one onset: a coloured look that fades in is no longer held when its luminance crosses the step after its brightest channel did | nothing. One more byte of state a unit (`fieldRise`) |
+| 2 | Verb `L`: a higher level is taken at most once in 340 ms a unit | wire two calls and read one field (below). Six bytes of state a unit |
+| 3 | A comet's lap is never shorter than 680 ms | nothing. On a strand under 23 positions the comet is slower at its top speeds |
+| 4 | A frame whose brightest LED is under 4 levels is not a look | call `contractLookAllowedAt()` / `contractLookGateAt()` with the frame's brightest LED in place of the two calls without `At`. Optional: the old calls behave as before |
+| 5 | A native look can be told with two figures | pass the look's luminance too where it is well under its level (`contractNativeStarted(s, code, level, lum, now)`, `contractNativeLevel(s, level, lum, now)`). Optional |
+| 6 | The show reset assigns the show state and does not touch the anchors | nothing, unless it names `ContractUnitState`'s base: there are two now, `ContractAnchors` and `ContractShowState`. Every field is reached as before |
+| 7 | A held frame is not shown (this fork's layer, not the core) | decide (below, "A held frame") |
+
+**Verb L.** In the verb's handler, `contractLevelOffer(state, v)`. Once a pass, in the tick or just before the
+meter is drawn, `contractLevelDue(state, now)`. The meter reads `state.level` in place of the fork's own copy of
+`v`. `contractLevelDue()` returns true when `state.level` changed, for a fork that derives something from it (the
+PSI's rows). A fork that wants a fall on the LEDs before its next pass calls it right after the offer as well, as
+this fork does. The show reset clears the level and what the host last asked for; the time of the last rise is an
+anchor.
+
+### Everything that changed
+
+**API.**
+
+| Was | Is |
+| --- | --- |
+| the two measures of the field gate share one time, and each lights by itself | they still share it; `fieldRise` (an anchor): a frame in which a measure lights and none falls begins a rise, a fall ends it, and while it lasts the other measure may light without waiting. `contractFieldAsk()` reads it, `contractFieldTell()` keeps it, `contractNativeEnded(s, false, now)` clears it. `contractFieldAllowed()` does not read it: light a fork cannot hold back always waits for the window |
+| the fork keeps the level verb `L` gave it | `contractLevelOffer()`, `contractLevelDue()`; `level`, `levelWant` in the unit, `levelMs` among the anchors |
+| `fxHead()` steps every `fxStepMs(speed)` | every `fxCometStepMs(speed, N)`: a lap is never under `FX_CYCLE_MIN_MS` |
+| every lit frame is a look | `LOOK_MIN_LEVEL` (4), `contractLookAllowedAt()`, `contractLookGateAt()` |
+| `contractNativeStarted()` and `contractNativeLevel()` take one figure | they also take two (level, luminance) |
+| `ContractUnitState : ContractAnchors` | `ContractUnitState : ContractAnchors, ContractShowState` |
+
+**Constants in the vector file.** New: `NATIVE_STEADY_LOGICS` (the logics codes whose own light does not move:
+Studio need not copy the list by hand any more).
+
+**Vector groups.**
+
+| Group | Change |
+| ----- | ------ |
+| `contractFrameGate` | shape: `rise` is a ninth output. New sequences 7 to 23: coloured fades from black and back at two ceilings, the same fade begun inside the window, white by a colour change and again after a blackout, a fall ending a rise, one measure lighting as the other falls. A frame under 4 levels is `drawn` without the look gate (`contractLookGateAt`) |
+| `contractLevelHold` | new, stateful. One row is one pass of a loop: `reset` (the show reset first), `v` (an `L` line, or -1 for none), then `contractLevelDue()`. Outputs `changed`, `level`, `want`, `levelMs` |
+| `fxHead` | rows: the comet's lap |
+
+### One rise is one onset
+
+The defect, as Studio's frame parity found it: `pulse` in `22c55e` stood at `05200f` from 180 ms to 500 ms and
+then jumped to `116530`. A colour's brightest channel crosses the gate's step before its luminance does. The
+first crossing was an onset and set the shared time; the second, a few frames later, was taken for a second onset
+inside the first one's window. The held table measured in white, where the two cross together.
+
+The rule now: a frame in which either measure lights, and neither falls, begins a rise. The rise lasts until a
+measure falls (goes from lit to not lit). While it lasts, the measure that is not lit yet lights without waiting.
+A frame in which one measure lights as the other falls begins no rise, or two looks trading places could hand it
+to each other for ever.
+
+Nothing changes for an observer of either measure: two of its onsets are never under 340 ms apart. Between two
+onsets of one measure that measure fell, and the fall ended the rise. To light again inside the window it needs a
+new rise, begun after the fall by an onset of the other measure that waited for the window itself: 340 ms after
+the shared time, which is no earlier than the first measure's last peak. `test_contract_v13.cpp` holds it to
+that on frames of ten colours fading at random rates, with every observer whose dark and lit are a step apart;
+the property stage has narrow observers of luminance too, and mixed colours in its random lines.
+
+A mirror keeps one more bit, `rise`. A unit that is lit in both measures needs no value for it: the first fall
+clears it.
+
+### What the gate costs a look, in five colours
+
+`test/host/gate_held_table.cpp`, 60 s a look, both displays, frames 10 ms apart and 10 to 15 ms apart. The share
+of frames held, at the look's slowest and fastest speed:
+
+| Look | Colour | CA1.5 | CA1.6 |
+| ---- | ------ | ----- | ----- |
+| pulse | white, blue | 0 % | 0 % |
+| pulse | red | 17 to 53 % | 0 % |
+| pulse | green | 17 to 50 % | 0 % |
+| pulse | `116530` | 17 to 52 % | 0 % |
+| wipe | white, blue | 0 % | 0 % |
+| wipe | red | 7 to 51 % | 0 % |
+| wipe | green | 14 to 44 % | 0 % |
+| wipe | `116530` | 4 to 21 % | 0 % |
+| sparkle | white, red, blue | 0 to 1.7 % | 0 to 1.7 % |
+| sparkle | green | 0.7 to 4.9 % | 0 to 1.7 % |
+| sparkle | `116530` | 0 % | 0 % |
+| solid, flash, rainbow, scan, meter, comet, chase, gradient, colorcycle, twinkle | all five | 0 % | 0 % |
+| the beat pump on solid, white and `116530` | | 0 % | 0 % |
+
+Blue never showed the defect: its luminance is under a step at any level.
+
+### A part of the field
+
+The field gate measures a unit's whole field. Three things move part of it while the whole stays legal.
+
+**Verb L** (the PSI review's finding). `L:v=255` and `L:v=128` by turns lit the top half of a meter ten times a
+second. `contractLevelOffer()` / `contractLevelDue()` take a higher level at most once in 340 ms; a level that is
+no higher is taken at once.
+
+**The comet.** Its lit head and tail lap the strand, and every part of the strand goes dark and lit once a lap.
+On 8 columns at `s=255` a lap took 240 ms. A lap is now a cycle like a pulse's, 680 ms at the least
+(`fxCometStepMs`). 340 ms keeps the comet alone to three a second; 680 ms leaves room for one hand-over in that
+second.
+
+**A held frame.** The gate's answer to a frame that may not light is a scale, and a frame scaled down keeps the
+field's level under the step. It also lights every part of the field that the frame lights, dimly: a meter's top
+half that was dark and is now at six tenths has lit. This fork's layer now does not show a held frame at all: it
+measures the frame without writing a LED (the frame is drawn twice), asks, and draws only what the gate passes as
+it is. The frame that is up stays up, as it does when the look gate holds one. The look gate is taken by a frame
+that is shown, not by one that was asked about. A fork that scales held frames keeps the whole-field limit and
+not this one. `contractFieldScale()` and the scale that `contractFieldAsk()` returns are unchanged.
+
+The property stage watches regions of each display (the whole, the halves, the quarters, four bands of columns
+and of rows a quarter of the field each) on the rendered pixels: a region is lit when its level reaches an
+observer's "lit" and the pixels in it that are not dark number a quarter of the field or more, and it may light
+three times in any one second. The rear display takes five sizes by turns (8 by 10, 28 by 4, 16 by 4, 32 by 8,
+24 by 4). Asserted on every look by itself and on scripts made for it. The most often one region lit in a second,
+each look by itself at `s=255`, front and rear (28 by 4):
+
+| Look | CA1.5 | CA1.6 |
+| ---- | ----- | ----- |
+| flash | 3 / 3 | 3 / 3 |
+| pulse, wipe | 2 / 2 | 2 / 2 |
+| comet | 4 / 2 (two onsets 223 ms apart) | 2 / 2 |
+| sparkle, meter, chase | 1 / 1 | 1 / 1 |
+| scan | 0 / 0 (one column: under a quarter of the field) | 0 / 0 |
+
+**Not fixed.** A comet and a full look by turns (`A:i=comet` for 510 ms, `A:i=solid` for 170 ms, again and
+again) light a quarter of the field four times in a second: the comet passes it and the full look lights it
+again, two onsets in one 680 ms cycle. The field's level only ever rises at the full look, from a field that is
+lit, which no whole-field measure holds. The script is in the property stage as a known failure, and the random
+streams, which mix it in, are measured for regions and not asserted (at most 4 of one region in a second).
+Closing it takes a gate that knows regions, or a comet that never leaves a part of the field dark.
+
+### Three notes from the Flthy fork
+
+Its layer asks the gates where frames are latched, and a 36,000-stream soak on CA1.5 found these. All three are
+in the core's comments now.
+
+1. **A gated native look and the look gate.** A fork that asks the gates where its frames are latched does not
+   call `contractLookForced()` when a gated native look is selected. It passes the look's signature
+   (`contractLookSigNative(code)`) to `contractLookAllowedAt()` / `contractLookGateAt()` with the look's first lit
+   frame, so the 170 ms run from the frame that is on the LEDs. `contractLookForced()` at selection is for a fork
+   that cannot hold that first frame: called before the frame, it starts S4's window before the look can be seen.
+2. **One figure or two.** `contractNativeStarted()` and `contractNativeLevel()` with one figure record it for both
+   measures: right for white light, an upper bound for any other. CA1.6 adds the forms with two, and a fork with
+   colour LEDs whose stock look has a luminance well under its level passes both from a frame it measured. This
+   fork passes one: it does not know what colour the engine's sequences are, and the host mock draws them white.
+   A contract look that follows a native one at the same level and a higher luminance is therefore no onset to
+   the gate here. That is a bench item.
+3. **The frame at which a look can be seen.** A look that comes up through a few levels has not changed the
+   field's colour at its first frame. This fork had the fault too: a dim, slow pulse and another colour 171 ms
+   after its first frame changed colour twice under 170 ms apart. The rule is in the core
+   (`contractLookGateAt()`), by the frame's brightest LED and not by the field level: one full column of a
+   28-column display is a field level of 3 and a colour anyone can see.
+
+The soak's lesson for a harness: a gate that holds a frame, releases it and lets the look draw its next frame in
+the same pass gives two frames one timestamp, and a photometer that samples once a pass misses one. Here the
+engine draws at most one frame of a display in a pass (every 10 ms at most), and the property stage reads the
+pixels after every pass, so it reads every frame.
+
+### What it costs in flash
+
+The probe programs (avr-gcc 7.3, atmega32u4, link-time optimised), CA1.5 and CA1.6:
+
+| Probe | CA1.5 | CA1.6 |
+| ----- | ----- | ----- |
+| the whole core as a single-colour layer calls it | 8,700 B | 8,684 B |
+| a colour fork, the CA1.2 calls | 9,098 B | 9,086 B |
+| a colour fork, every gate call wired | 9,958 B | 9,966 B |
+| the same with verb L wired (`contractLevelOffer`, `contractLevelDue`) | | + 108 B |
+| a strand that draws a comet | 666 B | 728 B |
+
+The rise costs 34 to 58 B by itself; the show reset that no longer saves the anchors gives 56 B back. The unit's
+state is 86 bytes on AVR after the rise (85 before), and 92 with verb L's level and time.
+
+### The frame fixtures
+
+`test/host/export_logics_frames.cpp` writes the LED buffers Studio's dome preview is checked against, one file a
+case, to `test/host/frames/`: the exporter Studio wrote against this fork's mock, with its format and file names
+unchanged (the format is in the Signal Booster's `tests/fixtures/dome/frames/README.md`). Stage 2f builds it and
+compares; `UPDATE_FRAMES=1 bash test/host/run.sh` writes the folder again, and Studio copies it. `source.commit`
+holds the first twelve hex digits of the sha256 of `contract_core.h` followed by `ContractLogics.h`: a file cannot
+name the commit that will contain it. Against the frames exported at CA1.5, three files moved: `pulse-s0`,
+`pulse-s255` and `wipe`.
