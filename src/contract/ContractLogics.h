@@ -26,10 +26,18 @@
 //     a selectSequence() made from inside an effect is never noticed: effect 106 would go on
 //     running. (That was the 2026-11-16 review's finding 1: an overlay ending on a dark display
 //     left its last frame lit.)
-//   * S9: every frame effect 106 draws is measured and passed through the core's field gate
-//     (contractFieldGate) before it leaves, and so is every hand-over to a native look and
-//     every brightness the contract gives one. No line, and no order of lines, lights a display
-//     from dark more often than every 340 ms.
+//   * S9: every frame effect 106 draws is measured, by its level and by its luminance, and
+//     passed through the core's field gate before it leaves (contractFieldAsk, then
+//     contractFieldTell with what is on the LEDs). No line, and no order of lines, lights a
+//     display from dark more often than every 340 ms.
+//   * S4 for every path: a frame that would show another look or colour than the field last
+//     showed is drawn 170 ms after the field's last change at the earliest (contractLookGate);
+//     the frame that is up stays up meanwhile.
+//   * S10: a native sequence runs as stock. Its frames are not held; the gates govern its edges
+//     (contractNativeMayStart before the hand-over, contractNativeStarted at the frame it
+//     starts, contractNativeEnded when effect 106 takes the display from it), and a brightness
+//     the contract gives it goes through the field gate. A sequence that is not on the
+//     allow-list can only come from the owner's hand; its light is left alone.
 //   * contractEngineLatched() is the engine telling the layer which sequence it has just
 //     started on a display (through main.cpp's effect selectors). It is how the layer knows a
 //     native look is really on the LEDs, and how it notices a native take-over (L6).
@@ -71,6 +79,7 @@ static byte       gShownCode[2] = { 0, 0 };
 static bool       gLatched[2]   = { true, true };
 static uint16_t   gEngineSeq[2] = { 0, 0 };         // the sequence the engine last started (NORMAL at power-on)
 static bool       gRestart[2]   = { false, false }; // resetEffect() was called: the engine WILL start a sequence next frame
+static bool       gStopping     = false;            // an X line is being handled
 
 // The brightness the contract is taking a native look to (B, b=, or back to the owner's), and a
 // RISE it has written that the engine has not drawn yet. See _nativeBright().
@@ -83,6 +92,7 @@ static uint32_t   gRiseMs[2]    = { 0, 0 };
 // S6 / verb B on native looks. The engine copies its RAM default object back over the live
 // settings on every effect change (LogicEngine.h:807, :1830), so a brightness that has to last
 // is written THERE, and the owner's value is put back when the show no longer needs it.
+// gBriSaved is the owner's value as the layer last saw it, at all times (_briSync).
 static bool       gBriTouched[2] = { false, false };
 static uint8_t    gBriSaved[2]   = { 0, 0 };
 static uint8_t    gBriWritten[2] = { 0, 0 };
@@ -118,8 +128,9 @@ static inline CRGB _scaled(const ContractRGB& c, uint8_t bri) {   // apply brigh
   return CRGB((uint16_t)c.r * bri / 255, (uint16_t)c.g * bri / 255, (uint16_t)c.b * bri / 255);
 }
 // Every pixel ContractRender draws goes through _px(): it applies the field gate's scale (S9) and
-// adds the pixel to the frame's field level (the mean of each pixel's brightest channel).
-static uint32_t gPxSum = 0;
+// adds the pixel to the frame's two measures: the field level (the mean of each pixel's brightest
+// channel) and the field luminance (the mean of each pixel's Rec.709 luminance).
+static uint32_t gPxSum = 0, gPxLum = 0;
 static uint16_t gPxCount = 0;
 static uint8_t  gPxScale = 255;
 static inline void _px(LogicEngineRenderer& r, int x, int y, CRGB c) {
@@ -129,6 +140,7 @@ static inline void _px(LogicEngineRenderer& r, int x, int y, CRGB c) {
     c.b = (uint8_t)(((uint16_t)c.b * gPxScale) / 255u);
   }
   gPxSum += (c.r > c.g) ? (c.r > c.b ? c.r : c.b) : (c.g > c.b ? c.g : c.b);
+  gPxLum += contractLuminance(c.r, c.g, c.b);
   gPxCount++;
   r.setPixelRGB(x, y, c);
 }
@@ -146,6 +158,38 @@ static inline void _select(uint8_t u, byte seq) { if (u == 0) FLD_selectSequence
 static inline void _reset(uint8_t u)            { if (_engine(u)) _engine(u)->resetEffect(); }
 // The brightness the engine has now, as far as the contract set it.
 static inline uint8_t _engineBriNow(uint8_t u) { return gBriTouched[u] ? gBriWritten[u] : _ownerBri(u); }
+// Does this sequence draw at a level of its own, whatever the engine's brightness is? Leia (3)
+// sets its brightness itself every frame; 19..24 and the custom effects write their pixels
+// directly. Asked of ANY sequence the engine may be on, the owner's included, so it is not the
+// allow-list's nativeDimsLogics(): a sequence that is not known to ignore the brightness is
+// taken to follow it, and a change to it goes through the gate.
+static inline bool _ownLevel(unsigned seq) { return seq == 3 || (seq >= 19 && seq <= 24) || (seq >= 100 && seq <= 105); }
+// The field level the S9 gate takes a native sequence at: the engine's brightness, or full scale
+// for one that draws at a level of its own.
+static inline uint8_t _nativeFieldLevel(unsigned seq, uint8_t brightness) {
+  if (seq == NATIVE_LIGHTSOUT) return 0;
+  return _ownLevel(seq) ? 255 : brightness;
+}
+// N3. The owner moved the display's brightness (the web slider, the trimpot, #LEBRI): the default
+// object no longer holds what the layer last knew it to hold, which is the contract's own value
+// while one is written there (gBriWritten) and the owner's otherwise (gBriSaved). The owner's new
+// value is the display's brightness from now on: it is what goes back after the show, it is the
+// ceiling (S6: a contract line never makes a board brighter than its owner set it), and on a
+// native look it stands as it is until the host's next B or b=, which is then a fraction of it.
+// A native look that is up changes its light with the owner's hand, at the engine's next frame:
+// the S9 gate is told then, the way it is told of a rise the contract wrote (gRise).
+// Called before anything reads the owner's brightness.
+static inline void _briSync(uint8_t u) {
+  const uint8_t def = _defaults(u).fBri;
+  if (def == (gBriTouched[u] ? gBriWritten[u] : gBriSaved[u])) return;
+  ContractUnitState& g = gContract[u];
+  gBriTouched[u] = false; gBriSaved[u] = def;
+  g.ceil = def;
+  gBriGoal[u] = _level(g); gBriGoing[u] = false;
+  if (gShown[u] != SH_CONTRACT && gLatched[u]) {
+    gRise[u] = true; gRiseLevel[u] = _nativeFieldLevel(gEngineSeq[u], def); gRiseMs[u] = millis();
+  }
+}
 // Does the contract set this native look's brightness (verb B in a show, b= on a native look)?
 static inline bool _dimsNative(const ContractUnitState& g) { return g.inShow || g.base == CB_NATIVE; }
 
@@ -160,8 +204,8 @@ static inline bool _dimsNative(const ContractUnitState& g) { return g.inShow || 
 //     display inside that one frame, nobody can say whether the brighter native look was ever
 //     drawn; contractEngineLatched() then takes the safe side (it counts as an onset, now).
 // The engine's brightness is only moved when what the contract WANTS changes (gBriGoal): a
-// brightness someone else sets during the show (#LEBRI, the web UI, the trimpot) stands until
-// the host's next B.
+// brightness the owner sets during the show (#LEBRI, the web UI, the trimpot) stands until the
+// host's next B (_briSync).
 static inline void _nativeBright(uint8_t u, uint32_t now) {
   ContractUnitState& g = gContract[u];
   const bool ours = _dimsNative(g);
@@ -169,18 +213,21 @@ static inline void _nativeBright(uint8_t u, uint32_t now) {
   const uint8_t want = _level(g);                       // (no show: the ceiling, which is the owner's own value)
   if (want != gBriGoal[u]) { gBriGoal[u] = want; gBriGoing[u] = true; }
   if (!gBriGoing[u]) return;
-  if (gBriTouched[u] && _defaults(u).fBri != gBriWritten[u]) {      // someone else set it since: theirs stands
-    gBriGoing[u] = false;
-    if (!ours) gBriTouched[u] = false;
-    return;
-  }
   if (gRise[u]) return;                                 // one at a time: the last rise has not been drawn yet
+  // S10: a sequence that is not on the allow-list is the owner's own (a button), and may flash by
+  // itself: its light is not the contract's to move, up or down. It runs at the owner's
+  // brightness (contractEngineLatched); what the contract wants waits for a look it knows.
+  if (!nativeAllowedLogics((int)gEngineSeq[u])) return;
   const uint8_t cur = _engineBriNow(u);
-  if (gEngineSeq[u] == NATIVE_LIGHTSOUT) {
-    // The engine is on lights-out (the owner's own, by button): dark at any brightness
-    // (LogicEngine.h, LogicLightsOutEffect draws level 0). Nothing here is light.
+  if (gEngineSeq[u] == NATIVE_LIGHTSOUT || _ownLevel(gEngineSeq[u])) {
+    // The engine's brightness is not this sequence's light: lights-out is dark at any brightness
+    // (LogicLightsOutEffect draws level 0), and 19..24 and the custom effects draw at a level of
+    // their own. The value is kept in step for whatever sequence comes next; nothing is gated.
   } else if (want > cur) {
     if (contractFieldAllowed(g, want, now) < want) return;          // S9: held. Asked again next pass.
+    // S4: a native look that was running dark (b=0) comes out of the dark: that is the look
+    // arriving on the field, a change of look like any other.
+    if (cur == 0 && !contractLookAllowed(g, contractLookSigNative((int)gEngineSeq[u]), now)) return;
     gRise[u] = true; gRiseLevel[u] = want; gRiseMs[u] = now;
   } else if (want < cur) {
     contractFieldGate(g, want, now);
@@ -209,13 +256,33 @@ static inline void _reassert(uint8_t u) {
   if (gLatched[u] || gShown[u] == SH_ENGINE || _engine(u) == nullptr) return;
   if (!_engine(u)->hasEffectChanged()) _select(u, gShown[u] == SH_CONTRACT ? FX_CONTRACT : gShownCode[u]);
 }
+// Is a selection waiting in the engine for its next frame? The layer's own last one, or someone
+// else's (a button): the engine cannot say whose, only that one is. Then nothing else is selected
+// until it has started, one frame later at most. That way a button pressed inside that frame is
+// never replaced without a trace: it starts, and is the take-over of L6. (Not at power-on, when
+// the engine's first sequence is what is waiting; and never for X, which always lands.)
+static inline bool _selectionWaiting(uint8_t u) {
+  return _engine(u) != nullptr && _engine(u)->hasEffectChanged() && !(gLatched[u] && gRestart[u]);
+}
 // Put the unit's state on its display. Runs after every line that changes a unit, and every pass
 // from contractTick(), which is what ends an overlay and makes a hand-over the gate held.
 static inline void _present(uint8_t u, uint32_t now) {
   ContractUnitState& g = gContract[u];
+  _briSync(u);
   _reassert(u);
   if (contractOverlayUp(g, now) || g.base == CB_LOOK || g.base == CB_DARK) {   // effect 106 draws all of these
-    if (gShown[u] != SH_CONTRACT) _choose(u, SH_CONTRACT, FX_CONTRACT);
+    if (gShown[u] != SH_CONTRACT) {
+      // L6: a look can come due, or a line arrive, just after someone pressed a button, inside
+      // one engine frame. Selecting 106 now would replace the button's sequence without a trace.
+      // Only X does that.
+      if (!gStopping && _selectionWaiting(u)) return;
+      _choose(u, SH_CONTRACT, FX_CONTRACT);
+    }
+    // An X that follows a button inside one engine frame: effect 106 is the display's (running,
+    // or selected a moment ago), and another sequence may be waiting to start in its place. X is
+    // the later word and X always lands: 106 is selected again, which leaves nothing else
+    // waiting. Only for X. Otherwise a waiting sequence is the owner's take-over, and it starts (L6).
+    else if (gStopping && _engine(u) && _engine(u)->hasEffectChanged()) _choose(u, SH_CONTRACT, FX_CONTRACT);
     // Effect 106 does not go through the engine's brightness. Once it is drawing, whatever the
     // contract wrote there for a native look goes back to the owner's value: no one sees it change.
     else if (gLatched[u]) _engineBriRestore(u);
@@ -224,14 +291,13 @@ static inline void _present(uint8_t u, uint32_t now) {
   // A native look: the sequence the contract chose (CB_NATIVE), or the engine's own again (CB_NONE).
   const bool own  = g.base != CB_NATIVE;
   const byte seq  = own ? NATIVE_NORMAL : (byte)g.nativeCode;
-  const bool dark = !own && seq == NATIVE_LIGHTSOUT;
   if (own ? gShown[u] != SH_ENGINE : (gShown[u] != SH_NATIVE || gShownCode[u] != seq)) {
+    if (_selectionWaiting(u)) return;                   // L6: see above. Asked again next pass.
     if (!own && gEngineSeq[u] == seq && !gRestart[u]) {
       // The engine is on that very sequence already (the idle look taken as a native:0 look; a
       // native section the contract was about to leave and now keeps). It carries on: nothing
       // starts, so nothing will be reported, and a different brightness is a brightness change
       // on a look that is up (_nativeBright below), not part of a hand-over.
-      if (!gLatched[u]) _select(u, seq);                // withdraws a selection the engine has not started
       gShown[u] = SH_NATIVE; gShownCode[u] = seq; gLatched[u] = true;
     } else {
       // S9: handing the LEDs to a native look lights them, at the brightness it will run at.
@@ -240,8 +306,19 @@ static inline void _present(uint8_t u, uint32_t now) {
       // look gets its brightness, and the gate is TOLD, at the frame the engine starts the
       // sequence (contractEngineLatched): a selection can still be replaced before that frame,
       // and nothing may be said, or written, about light that never reached the LEDs.
-      const uint8_t level = dark ? 0 : _level(g);
-      if (contractFieldAllowed(g, level, now) < level) return;
+      // S10: the engine is on a sequence whose light is not known: one that is NOT on the
+      // allow-list (someone's button, and a line now asks for a native look), or one that draws
+      // at a level of its own. The display does not go from it straight to another look that is
+      // lit: effect 106 takes it first and holds its last frame (ContractRender), the gate takes
+      // the field as dark and just lit (contractEngineLatched), and the look follows when the
+      // window has passed.
+      if (seq != NATIVE_LIGHTSOUT && gEngineSeq[u] != FX_CONTRACT &&
+          (!nativeAllowedLogics((int)gEngineSeq[u]) || _ownLevel(gEngineSeq[u]))) {
+        if (gShown[u] != SH_CONTRACT) _choose(u, SH_CONTRACT, FX_CONTRACT);
+        return;
+      }
+      // (S4 for every path: a native look taking the display is a change of look like any other.)
+      if (!contractNativeMayStart(g, seq, _nativeFieldLevel(seq, _level(g)), now)) return;
       _choose(u, own ? SH_ENGINE : SH_NATIVE, seq);
       return;
     }
@@ -252,14 +329,17 @@ static inline void _present(uint8_t u, uint32_t now) {
 // L6, native take-over. Something other than the contract started a sequence on a display the
 // contract holds: a button on the controller (@nT...), the web page, a command through the
 // engine's own handler. The show ends on this display, as M:v=idle would end it, and the sequence
-// runs: nothing here touches the display. The owner's brightness goes back through _nativeBright().
+// runs: nothing here touches the display. The owner's brightness goes back at this very frame, before
+// the sequence draws: it is the owner's light from its first frame, and nothing is left to raise
+// later on a look whose own flashes the contract could not keep clear of.
 static inline void _stopClockIfUnused();
 static inline void _takenOver(uint8_t u) {
   ContractUnitState& g = gContract[u];
   contractOnIdle(g, _ownerBri(u));
   _stopClockIfUnused();
   gShown[u] = SH_ENGINE;
-  gBriGoal[u] = _level(g); gBriGoing[u] = gBriTouched[u];
+  _engineBriRestore(u);
+  gBriGoal[u] = _level(g); gBriGoing[u] = false;
 }
 // The engine has started sequence `seq` on display u, at this frame. Called by main.cpp's effect
 // selectors from INSIDE the engine's animate(), after it has restored its settings and before the
@@ -269,6 +349,8 @@ static inline void _takenOver(uint8_t u) {
 inline void contractEngineLatched(uint8_t u, unsigned seq) {
   ContractUnitState& g = gContract[u];
   const uint32_t now = millis();
+  const unsigned was = gEngineSeq[u];
+  _briSync(u);
   gEngineSeq[u] = (uint16_t)seq; gRestart[u] = false;
   if (gRise[u]) {
     // A brighter native look was written less than a frame ago, and something else starts now.
@@ -278,8 +360,22 @@ inline void contractEngineLatched(uint8_t u, unsigned seq) {
     // so it is told only the safe half: the field may have lit just now. The contract look that
     // follows then waits out the window if it would light the display; a blackout does not wait.
     if (seq == FX_CONTRACT) g.fieldOnsetMs = now;
-    else contractFieldGate(g, gRiseLevel[u], now);
+    else contractFieldForced(g, gRiseLevel[u], now);
     gRise[u] = false;
+  }
+  // N2 / S10. The sequence that ENDS at this frame.
+  //   * One that is not on the allow-list (someone's button: FLASHCOLOR, FAILURE, fire) is not
+  //     known to the gate at all, and one that draws at a level of its own (a scan line, plasma)
+  //     may stand anywhere between dark and full. Whatever starts now, the field is taken as
+  //     dark and just lit: the contract's next light keeps 340 ms from this frame.
+  //   * A native look the contract takes over from (effect 106 starts) was not necessarily
+  //     steady light either: PULSE breathes, COLORSWAP changes its hue. It may have lit the field
+  //     a moment ago, and nothing told the gate: the 340 ms run from this frame. NORMAL is the
+  //     exception (a steady shimmer: it is what an armed show leaves up until it begins, and a
+  //     show must be able to begin), with lights-out.
+  if (was != FX_CONTRACT) {
+    if (!nativeAllowedLogics((int)was) || _ownLevel(was)) contractNativeEnded(g, false, now);
+    else if (seq == FX_CONTRACT && was != NATIVE_NORMAL && was != NATIVE_LIGHTSOUT) contractNativeEnded(g, true, now);
   }
   if (seq == FX_CONTRACT) {                             // its frames go through the gate one by one (ContractRender)
     if (gShown[u] == SH_CONTRACT) gLatched[u] = true;
@@ -296,19 +392,29 @@ inline void contractEngineLatched(uint8_t u, unsigned seq) {
   const bool ranOut = gShown[u] == SH_NATIVE && gLatched[u] && seq == NATIVE_NORMAL;
   if (gShown[u] != SH_ENGINE && !mine && !ranOut) _takenOver(u);     // L6: a display the contract held
   gLatched[u] = true;
-  if (seq == NATIVE_LIGHTSOUT) { contractFieldGate(g, 0, now); return; }
-  if (mine || back) {
-    // S9: the look the contract selected lights the display at this frame, at the brightness it
-    // gives it: what the contract asks (b=, B; the owner's own on a display given back), as far
-    // as the gate allows right now. _nativeBright() takes it the rest of the way when it may.
-    const uint8_t want = _level(g);
-    const uint8_t allowed = contractFieldGate(g, want, now);
-    gBriGoal[u] = want; gBriGoing[u] = allowed != want;
-    if (!_dimsNative(g) && allowed == _ownerBri(u)) _engineBriRestore(u);
-    else if (allowed != _engineBriNow(u)) _engineBri(u, allowed);
-    return;
+  // S10: a native look runs as stock. Its frames are not held; the gate is TOLD it started, and
+  // at what level (contractNativeStarted): 0 for lights-out, the engine's brightness for a
+  // sequence that draws at it, full scale for one that draws at a level of its own (N4: 19..24
+  // and the custom effects; the engine's brightness is left for _nativeBright() to keep).
+  if (!nativeAllowedLogics((int)seq) && gBriTouched[u]) {           // the owner's own sequence: at the owner's brightness, from
+    _engineBriRestore(u); gBriGoing[u] = true;                      // its first frame (_nativeBright leaves it alone)
   }
-  contractFieldForced(g, _engineBriNow(u), now);        // someone else's sequence: on the LEDs, lit, whatever the gate thinks of it
+  uint8_t level = _nativeFieldLevel(seq, _engineBriNow(u));         // (someone else's sequence: at the brightness that is there)
+  if ((mine || back) && seq != NATIVE_LIGHTSOUT && !_ownLevel(seq)) {
+    // The look the contract selected lights the display at this frame, at the brightness the
+    // contract gives it: what it asks (b=, B; the owner's own on a display given back), as far
+    // as the gate allows right now. _nativeBright() takes it the rest of the way when it may.
+    // (And only if a change of look may be shown now, S4: the hand-over was asked for at the
+    // level the look had then, and a look asked for dark, b=0, is never held. If it is to be lit
+    // by now, it starts dark all the same and comes up when the look gate allows.)
+    const uint8_t want = _level(g);
+    level = contractFieldAllowed(g, want, now);
+    if (level != 0 && !contractLookAllowed(g, contractLookSigNative((int)seq), now)) level = 0;
+    gBriGoal[u] = want; gBriGoing[u] = level != want;
+    if (!_dimsNative(g) && level == _ownerBri(u)) _engineBriRestore(u);
+    else if (level != _engineBriNow(u)) _engineBri(u, level);
+  }
+  contractNativeStarted(g, (int)seq, level, now);
 }
 
 // beat-modulated brightness for sustained looks. Level math lives in contract_core's
@@ -508,18 +614,29 @@ inline bool ContractRender(LogicEngineRenderer& r) {
     bri = _beatBright(g, beatPosAt(gBeat, now));
   }
 
-  // S9: draw, measure, and pass the frame's field level through the gate. A frame the gate holds
-  // down is drawn again, scaled (the scale rounds down, so the second frame is at or under what
-  // the gate allowed).
-  gPxSum = 0; gPxCount = 0; gPxScale = 255;
+  // S4 FOR EVERY PATH: a frame that would show another look or colour than the field last showed
+  // comes at least 170 ms after the field changed to that one, whichever path asked for it (an
+  // accent between two looks, a section, a look after a native one). Until then the frame that is
+  // up stays up. Black is not a look: a blackout is never held.
+  if (eff != CE_OFF && bri != 0 && !contractLookGate(g, contractLookSig(eff, col), now)) return true;
+
+  // S9: draw, measure, and ASK the field gate, by the frame's level and by its luminance. A
+  // frame the gate holds down is drawn again, scaled (the scale rounds down, LED by LED, so the
+  // second frame is at or under what the gate allowed) and measured again: the gate is TOLD
+  // what is on the LEDs.
+  gPxSum = 0; gPxLum = 0; gPxCount = 0; gPxScale = 255;
   _draw(r, g, eff, col, bri, t0, now, overlay);
-  const uint8_t level = gPxCount ? (uint8_t)(gPxSum / gPxCount) : 0;
-  const uint8_t allowed = contractFieldGate(g, level, now);
-  if (allowed < level) {
-    gPxScale = (uint8_t)(((uint16_t)allowed * 255u) / level);
+  uint8_t level = gPxCount ? (uint8_t)(gPxSum / gPxCount) : 0;
+  uint8_t lum   = gPxCount ? (uint8_t)(gPxLum / gPxCount) : 0;
+  const uint8_t scale = contractFieldAsk(g, level, lum, now);
+  if (scale != 255) {
+    gPxSum = 0; gPxLum = 0; gPxCount = 0; gPxScale = scale;
     _draw(r, g, eff, col, bri, t0, now, overlay);
     gPxScale = 255;
+    level = gPxCount ? (uint8_t)(gPxSum / gPxCount) : 0;
+    lum   = gPxCount ? (uint8_t)(gPxLum / gPxCount) : 0;
   }
+  contractFieldTell(g, level, lum, now);
   return true;   // MUST return true (LogicEngine.h:820 reverts to NORMAL on false)
 }
 
@@ -561,6 +678,7 @@ static inline void _applyLook(uint8_t u, ContractLookPatch lp, uint32_t now) {
   if (lp.has & LP_AM)      g.accentMode = lp.accentMode;
   if (lp.has & LP_EVERY)   g.accentEvery = lp.every;
   g.startMs = now; g.pulseActive = false;
+  contractLookRestart(g);                         // S4 at the output: the look's timeline starts again
   if (lp.has & LP_EFFECT) {
     g.effect = lp.effect; g.nativeCode = lp.nativeCode;
     g.base = (lp.effect == CE_NATIVE && lp.nativeCode >= 0) ? CB_NATIVE : CB_LOOK;
@@ -629,7 +747,7 @@ inline void applyContractToUnit(uint8_t u, const ParsedContract& p, uint16_t lin
       _present(u, now);                           // a contract look takes it at its next frame; a native look through
       break;                                      // _nativeBright() (it survives restoreSettings()). Both through the S9 gate.
     case CV_STOP:
-      _boundary(u, 'x', 0);
+      gStopping = true; _boundary(u, 'x', 0); gStopping = false;
       break;
     case CV_MODE:
       if (pr.mode == 's')      _boundary(u, 's', pr.hasWd ? pr.wd : 0);
@@ -695,7 +813,8 @@ inline void contractTick() {
     ContractLookPatch lp;
     if (liveLookDue(g, now, lp)) _applyLook(u, lp, now);                      // S4: a held live look's window ended
     if (gRise[u] && (uint32_t)(now - gRiseMs[u]) >= ENGINE_FRAME_MS) {        // S9: the engine has drawn the brighter native
-      contractFieldGate(g, gRiseLevel[u], now); gRise[u] = false;             // look by now: tell the gate it lit
+      contractNativeLevel(g, gRiseLevel[u], now); gRise[u] = false;           // look by now: tell the gate it lit
+      if (gRiseLevel[u] != 0) contractLookForced(g, contractLookSigNative((int)gEngineSeq[u]), now);
     }
     _present(u, now);                             // an overlay that ended; a hand-over or a brightness the S9 gate held
   }
@@ -707,12 +826,17 @@ inline void contractTick() {
     int idx = scoreActiveIndex(gScore[u], g.scoreLen, bp.beatIndex);
     idx = scoreCursor(g.curSection, idx, g.pinForward);                       // C2
     if (idx < 0 || idx == g.curSection) continue;
+    // S4 for every path: a section is a look change like a live A, and comes 170 ms after the
+    // unit's last one at the earliest. (A C seek can put the beat in another section every few
+    // milliseconds.) A section that has to wait is taken by a later pass, if the beat is still in it.
+    if (!contractSectionMayApply(g, now)) continue;
     const ScoreEntry& s = gScore[u][idx];
     _arm(u);
     g.effect = s.effect; g.nativeCode = s.nativeCode; g.color = s.color; g.speed = s.speed;
     g.bright = s.bright;
     g.beatMod = s.beatMod; g.accentMode = s.accentMode; g.accentEvery = s.accentEvery;
     g.curSection = (int8_t)idx; g.startMs = now; g.sectionStart = s.atBeat;
+    contractLookRestart(g);
     g.sectionEnd = (idx + 1 < g.scoreLen) ? gScore[u][idx + 1].atBeat : (s.atBeat + 9999);
     g.pulseActive = false;
     g.base = (s.effect == CE_NATIVE && s.nativeCode >= 0) ? CB_NATIVE : CB_LOOK;
@@ -749,7 +873,9 @@ MARCDUINO_ACTION(Contract, !, ({
 // R2: the level feed.)
 inline void contractSetup() {
   for (uint8_t u = 0; u < 2; u++) {
-    gContract[u].fieldLit = true; gContract[u].fieldRef = _ownerBri(u);
-    gBriGoal[u] = _ownerBri(u);
+    gContract[u].fieldLit = gContract[u].fieldLitY = true;
+    gContract[u].fieldRef = gContract[u].fieldRefY = _ownerBri(u);
+    gBriGoal[u] = gBriSaved[u] = _ownerBri(u);
+    gRestart[u] = true;                           // the engine starts its first sequence at its first frame
   }
 }

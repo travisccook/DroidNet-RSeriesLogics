@@ -118,7 +118,9 @@ static void test_clock() {
   send("**C:bpm=120,ph=0,bpb=4,beat=0"); run(4100);
   CHECK(gContract[0].curSection == 1);
   send("**C:bpm=120,ph=0,bpb=4,beat=2"); run(50);                         // the user dragged the playhead back
-  CHECK(gContract[0].curSection == 0 && FLD->px(0, 0).r > 0);
+  CHECK(gContract[0].curSection == 1);                                    // S4 for every path: 170 ms from the last look change...
+  run(100);
+  CHECK(gContract[0].curSection == 0 && FLD->px(0, 0).r > 0);            // ...and then the section the beat is in
 }
 
 // ---- S6, S7: the owner's brightness is the ceiling; verb B; the native allow-list ----
@@ -278,7 +280,11 @@ static void test_score_verify_query() {
   k ^= contractCrc16("LFA:i=solid,c=0000ff,at=8"); n++;    // lost on the way
   send("**C:bpm=120,ph=0,bpb=4,beat=0"); run(50); CHECK(FLD->_seq == 106);
   sendV("F", n, k); run(50);
-  CHECK(gContract[0].loadOk == 2 && !gContract[0].inShow && gContract[0].scoreLen == 0 && FLD->_seq == 0);
+  CHECK(gContract[0].loadOk == 2 && !gContract[0].inShow && gContract[0].scoreLen == 0);
+  // (the display goes back to NORMAL when that is no onset: red to NORMAL's white is one in
+  // luminance, and the red look lit 40 ms ago, so the hand-back waits out the 340 ms)
+  CHECK(FLD->_seq == 106);
+  run(350); CHECK(FLD->_seq == 0 && FLD->_fx == 0);
   send("LFQ:r=0"); CHECK(reply(";S0!LFq:ver=1.3,rel=1,cap=32,n=0,ok=2,bpm=0\r"));
   send("**M:v=idle"); send("**X");
   send("LFQ:r=0"); CHECK(reply(";S0!LFq:ver=1.3,rel=1,cap=32,n=0,ok=2,bpm=0\r"));     // ok=2 outlives idle and X...
@@ -286,7 +292,7 @@ static void test_score_verify_query() {
   send("LFQ:r=0"); CHECK(reply(";S0!LFq:ver=1.3,rel=1,cap=32,n=0,ok=0,bpm=0\r"));     // ...until the next M:v=show
   // one display failing its check does not stop the other, or the clock it plays from
   resetAll(); send("**M:v=show"); send("L*A:i=solid,c=ff0000,at=0"); send("**C:bpm=120,ph=0,bpb=4,beat=0"); run(50);
-  send("LFV:n=9,k=0000"); run(50);
+  send("LFV:n=9,k=0000"); run(400);
   CHECK(FLD->_seq == 0 && RLD->_seq == 106 && gBeat.running);
   // a line whose bytes changed on the way is a bad load too
   resetAll(); n = 0; k = 0; send("**M:v=show");
@@ -422,9 +428,13 @@ static void test_s9_paths() {
   CHECK(fieldLevel(FLD) == 0 && FLD->_fx == 106 && gContract[0].base == CB_NONE);    // still dark, 80 ms after it last lit
   run(230); CHECK(fieldLevel(FLD) == 0);
   run(60);  CHECK(FLD->_fx == 0 && fieldLevel(FLD) == 160);                // NORMAL again, 340 ms after
-  // (X and idle in ONE pass never show a dark frame, so there is nothing to wait for)
+  // (X and idle in ONE pass never show a dark frame. The hand-back waits all the same, S10: a
+  // stock look's first light counts as an onset whatever the display shows, lit or dark, so it
+  // keeps 340 ms from when the white look came up. The frame that is up stays up meanwhile.)
   resetAll(); send("LFX"); run(500); send("LFA:i=solid,c=ffffff"); run(20); send("LFX"); send("LFM:v=idle"); run(20);
-  CHECK(FLD->_fx == 0 && fieldLevel(FLD) == 160);
+  CHECK(FLD->_fx == 106 && fieldLevel(FLD) == 160);
+  run(280); CHECK(FLD->_fx == 106 && fieldLevel(FLD) == 160);
+  run(40);  CHECK(FLD->_fx == 0 && fieldLevel(FLD) == 160);
   // ...and at once when there was no onset to wait out
   resetAll(); send("LFA:i=solid,c=ffffff"); run(500); send("LFX"); run(500); send("LFM:v=idle"); run(20);
   CHECK(FLD->_fx == 0 && fieldLevel(FLD) == 160);
@@ -506,7 +516,9 @@ static void test_native_takeover() {
   resetAll(); send("**M:v=show"); send("LFA:i=native:4,b=128"); run(300); CHECK(FLD->_fx == 4 && FLD->_liveBri == 80);
   FLD->selectSequence(5); run(20);
   CHECK(FLD->_fx == 5 && !gContract[0].inShow && gContract[0].base == CB_NONE);
-  CHECK(FLD->_liveBri == 160 && LogicEngineFLDDefault.fBri == 160 && !gBriTouched[0]);   // and the owner's brightness is back
+  // ...and the owner's brightness comes back: brighter is an onset, so 340 ms after the button's sequence started (N2)
+  run(400);
+  CHECK(FLD->_liveBri == 160 && LogicEngineFLDDefault.fBri == 160 && !gBriTouched[0]);
   resetAll(); send("LFP:c=ffffff,d=2000"); run(100); CHECK(FLD->_fx == 106);
   FLD->selectSequence(3); run(20); CHECK(FLD->_fx == 3 && !gContract[0].pulseActive);
   const int normalStarts = FLD->_restarts[0];
@@ -515,7 +527,8 @@ static void test_native_takeover() {
 
   // the owner's brightness comes back through the gate when the show had dimmed a native look to dark
   resetAll(); send("**M:v=show"); send("LFA:i=native:4,b=0"); run(500); CHECK(FLD->_liveBri == 0);
-  FLD->selectSequence(5); run(20); CHECK(FLD->_fx == 5 && FLD->_liveBri == 160);        // (nothing lit lately: at once)
+  FLD->selectSequence(5); run(20); CHECK(FLD->_fx == 5);
+  run(400); CHECK(FLD->_liveBri == 160);
 
   // NOT a take-over: a timed native section that runs out (the engine falls back to NORMAL by itself)
   resetAll(); send("**M:v=show"); send("LFA:i=native:4,at=0"); send("LFA:i=solid,c=00ff00,at=8");
@@ -553,17 +566,17 @@ static void test_rereview() {
   CHECK(LogicEngineFLDDefault.fBri == 40);
   ownerSets(80); run(200);
   send("**M:v=show"); run(600);
-  KNOWN_BUG("N3: a re-arm overwrites the brightness the owner set during the show", LogicEngineFLDDefault.fBri == 80 && FLD->_liveBri == 80);
+  CHECK(LogicEngineFLDDefault.fBri == 80 && FLD->_liveBri == 80);          // (it used to go back to 160, and stay there)
   send("LFA:i=solid,c=ffffff"); run(600);
-  KNOWN_BUG("N3: the next look's ceiling is the owner's new brightness", gContract[0].ceil == 80 && brightestPixel(FLD) == 80);
+  CHECK(gContract[0].ceil == 80 && brightestPixel(FLD) == 80);
   send("**M:v=idle"); run(600);
-  KNOWN_BUG("N3: idle leaves the owner's new brightness", LogicEngineFLDDefault.fBri == 80 && FLD->_liveBri == 80);
+  CHECK(LogicEngineFLDDefault.fBri == 80 && FLD->_liveBri == 80);
   // ...the same when the next line is a native look at b=255: 255 is the ceiling, and the ceiling is the owner's 80
   resetAll(); send("**M:v=show"); send("LFA:i=native:0,b=64"); run(500); ownerSets(80); run(200);
   send("LFA:i=native:1,b=255"); run(600);
-  KNOWN_BUG("N3: a native look at b=255 after the owner turned the display down", LogicEngineFLDDefault.fBri == 80 && FLD->_liveBri == 80);
+  CHECK(LogicEngineFLDDefault.fBri == 80 && FLD->_liveBri == 80);
   send("**M:v=idle"); run(600);
-  KNOWN_BUG("N3: ...and idle after it", LogicEngineFLDDefault.fBri == 80);
+  CHECK(LogicEngineFLDDefault.fBri == 80);
   // (while a contract look is up the engine's brightness is the owner's anyway: this always worked)
   resetAll(); send("**M:v=show"); send("LFA:i=solid,c=ffffff"); run(500); ownerSets(80); run(200); send("**M:v=show"); run(600);
   send("LFA:i=solid,c=ffffff"); run(600);
@@ -575,23 +588,75 @@ static void test_rereview() {
   send("LFB:b=255"); run(600);
   CHECK(LogicEngineFLDDefault.fBri == 80);                                  // ...b=255 of 80 is 80
   send("LFB:b=128"); run(600);
-  KNOWN_BUG("N5: every B after an owner change is ignored for the rest of the show", LogicEngineFLDDefault.fBri == 40 && FLD->_liveBri == 40);
+  CHECK(LogicEngineFLDDefault.fBri == 40 && FLD->_liveBri == 40);
 
-  // N2: a native look the contract selected is not always steady light. FAILURE (2) is dark from
-  // 8 s and ends itself at 18 s: the engine relights NORMAL then, by itself. An X and a relight
-  // straight after that is a second onset a few milliseconds after the first.
-  resetAll(); send("**M:v=show"); send("LFA:i=native:2"); run(17990);
-  CHECK(FLD->_fx == 2 && fieldLevel(FLD) == 0);                             // (the mock has FAILURE's timing)
-  run(30); CHECK(FLD->_fx == 0 && fieldLevel(FLD) == 160 && gContract[0].inShow);   // it ran out: NORMAL, and the show goes on
+  // S10, three things a second fork's property stage found, checked here too.
+  // (1) A native look's first light counts as an onset whatever the display shows: it may clear
+  //     the display and light it at once. So it takes a LIT display only 340 ms after the display
+  //     last lit, as it would a dark one, and the look that is up stays up until then.
+  resetAll(); send("**M:v=show"); send("LFX"); run(500); send("LFA:i=solid,c=ffffff"); run(20);
+  CHECK(fieldLevel(FLD) == 160);
+  send("LFA:i=native:4"); run(170);                       // (held as a live look for 170 ms: S4)
+  CHECK(FLD->_fx == 106 && fieldLevel(FLD) == 160);
+  run(140); CHECK(FLD->_fx == 106 && fieldLevel(FLD) == 160);
+  run(40);  CHECK(FLD->_fx == 4 && fieldLevel(FLD) == 160);
+  // (2) ...and so does the hand-back to the display's own look, from a lit display
+  resetAll(); send("**M:v=show"); send("LFX"); run(500); send("LFA:i=solid,c=ffffff"); run(20);
+  send("**M:v=idle"); run(300);
+  CHECK(FLD->_fx == 106 && fieldLevel(FLD) == 160);
+  run(40); CHECK(FLD->_fx == 0 && fieldLevel(FLD) == 160);
+  // (3) Verb L feeds the contract's own meter look and nothing else: a native sequence that is
+  //     up, a mic effect included, is not touched by it.
+  resetAll(); send("**M:v=show"); send("LFA:i=native:12"); run(600);
+  CHECK(FLD->_fx == 12 && fieldLevel(FLD) == 160);
+  { const int calls = FLD->_calcCalls, selects = FLD->_selects;
+    send("L*L:v=0"); run(100); send("L*L:v=255"); run(100); send("L*L:v=3"); run(100);
+    CHECK(FLD->_fx == 12 && fieldLevel(FLD) == 160 && FLD->_liveBri == 160 && FLD->_calcCalls == calls && FLD->_selects == selects); }
+
+  // An X always lands. Two of them inside one engine frame, with a button between them: the first
+  // selected effect 106, the button replaced that selection before the frame, the second is the
+  // later word. (Found by the property stage at 1 to 4 ms a pass.)
+  resetAll(); run(500);
+  send("**X"); FLD->selectSequence(4); send("**X"); run(50);
+  CHECK(FLD->_fx == 106 && fieldLevel(FLD) == 0);
+  // ...and so does one X after a button, with effect 106 running
+  resetAll(); send("**M:v=show"); send("LFA:i=solid,c=ffffff"); run(500);
+  FLD->selectSequence(4); send("LFX"); run(50);
+  CHECK(FLD->_fx == 106 && fieldLevel(FLD) == 0);
+
+  // N2 / S10: the gate does not see inside a native look, and a native look is not always steady
+  // light. So the frame a contract look takes over from one counts as the field's last
+  // brightening: an X and a relight straight after a native look wait the 340 ms out.
+  resetAll(); send("**M:v=show"); send("LFA:i=native:24"); run(2000);
+  CHECK(FLD->_fx == 24);
   send("LFX"); run(10); send("LFA:i=solid,c=ffffff"); run(20);
-  KNOWN_BUG("N2: a relight 30 ms after the engine's own relight from FAILURE", fieldLevel(FLD) <= 40);
-  // ...and FLASHCOLOR (6) is full and 50/255 by turns, every 250 ms
-  resetAll(); send("**M:v=show"); send("LFA:i=native:6"); run(20);
+  CHECK(fieldLevel(FLD) <= 40);
+  run(300); CHECK(fieldLevel(FLD) <= 40);
+  run(40);  CHECK(fieldLevel(FLD) == 160);
+  // ...NORMAL is the exception: an armed show begins from it at once
+  resetAll(); run(1000); send("**M:v=show"); send("LFA:i=solid,c=ffffff"); run(20);
+  CHECK(fieldLevel(FLD) == 160);
+  // A sequence that is not on the allow-list can only come from the owner's hand, and what it
+  // does is not known at all. FAILURE (2) is dark from its eighth second and ends itself at 18 s:
+  // the engine relights NORMAL then, by itself. The contract's next light keeps 340 ms from that.
+  resetAll(); send("**M:v=show"); send("LFA:i=native:2"); run(50);
+  CHECK(FLD->_fx == 0);                                                     // (through the contract: refused, S10)
+  FLD->selectSequence(2); run(17990);
+  CHECK(FLD->_fx == 2 && fieldLevel(FLD) == 0);                             // (the mock has FAILURE's timing)
+  run(30); CHECK(FLD->_fx == 0 && fieldLevel(FLD) == 160);                  // it ran out: NORMAL again
+  send("LFX"); run(10); send("LFA:i=solid,c=ffffff"); run(20);
+  CHECK(fieldLevel(FLD) <= 40);
+  // FLASHCOLOR (6) is full and 50/255 by turns, every 250 ms. A contract look that takes the
+  // display from it, in its dim half or just after its own flash, waits the window out too.
+  resetAll(); send("LFA:i=native:6"); run(50); CHECK(FLD->_fx == 0);        // (refused)
+  FLD->selectSequence(6); run(20);
   CHECK(FLD->_fx == 6 && fieldLevel(FLD) == 160);
   run(250); CHECK(fieldLevel(FLD) == 31);
   run(250); CHECK(fieldLevel(FLD) == 160);                                  // its own ON edge, 510 ms in
-  send("LFX"); run(10); send("LFA:i=solid,c=ffffff"); run(20);
-  KNOWN_BUG("N2: a relight 30 ms after FLASHCOLOR's own ON edge", fieldLevel(FLD) <= 40);
+  send("LFA:i=solid,c=ffffff"); run(20);
+  CHECK(FLD->_fx == 106 && fieldLevel(FLD) <= 40);
+  run(300); CHECK(fieldLevel(FLD) <= 40);
+  run(40);  CHECK(fieldLevel(FLD) == 160);
 }
 
 // ---- L2: the host-silence watchdog ----

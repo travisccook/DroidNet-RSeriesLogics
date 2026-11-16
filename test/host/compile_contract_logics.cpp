@@ -66,8 +66,8 @@ int main() {
 
   // behavioral guard: a scored NATIVE section must thread its native code into the
   // ScoreEntry (regression guard for the PSI/Flthy drift where nativeCode stayed -1).
-  contractHandleLine("LFA:i=native:104,at=64");
-  if (gContract[0].scoreLen == 0 || gScore[0][gContract[0].scoreLen - 1].nativeCode != 104
+  contractHandleLine("LFA:i=native:105,at=64");
+  if (gContract[0].scoreLen == 0 || gScore[0][gContract[0].scoreLen - 1].nativeCode != 105
       || gScore[0][gContract[0].scoreLen - 1].effect != CE_NATIVE) {
     printf("FAIL: RSeries scored native section did not thread nativeCode\n");
     return 1;

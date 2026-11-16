@@ -34,6 +34,26 @@ static void row(std::initializer_list<long long> v) {
   printf("]");
 }
 
+// CA1.4: one FRAME through both gates, as a fork that draws colour runs them. frameSeq(ceil)
+// starts a sequence; frame() is one frame: its look (effect and colour; effect 0 is a black frame,
+// which the look gate never holds), its level and its luminance as drawn.
+//   drawn = 0: the look gate refused it (the frame that is up stays up; nothing else changes)
+//   scale: contractFieldScale()'s answer, 255 when the frame was not drawn
+// and then the state after it. restart = 1: contractLookRestart() runs first (a live A or a
+// section was applied).
+static int gFrameSeq = 0;
+static ContractUnitState gFrame;
+static void frameSeq(int ceil) { gFrameSeq++; gFrame = ContractUnitState(); gFrame.ceil = (uint8_t)ceil; }
+static void frame(uint32_t nowMs, int effect, uint32_t rgb, int level, int lum, bool restart = false) {
+  if (restart) contractLookRestart(gFrame);
+  const ContractRGB c = { (uint8_t)(rgb >> 16), (uint8_t)(rgb >> 8), (uint8_t)rgb };
+  const bool drawn = effect == 0 || level == 0 || contractLookGate(gFrame, contractLookSig((ContractEffect)effect, c), nowMs);
+  const uint8_t scale = drawn ? contractFieldScale(gFrame, (uint8_t)level, (uint8_t)lum, nowMs) : 255;
+  row({ gFrameSeq, gFrame.ceil, restart ? 1 : 0, (long long)nowMs, effect, (long long)rgb, level, lum,
+        drawn ? 1 : 0, scale, gFrame.fieldLit ? 1 : 0, gFrame.fieldRef, gFrame.fieldLitY ? 1 : 0, gFrame.fieldRefY,
+        (long long)gFrame.fieldOnsetMs, (long long)gFrame.lookMs });
+}
+
 // The S9 field gate is a state machine, so its group is sequences, not independent rows.
 // gateSeq(ceil) starts one from a fresh ContractUnitState with that ceiling; gate() runs one step
 // and prints the answer and the state after it. reset = 1: the show reset (contractShowReset, with
@@ -78,6 +98,22 @@ int main(int argc, char** argv) {
   printf("]");
   printf(",\n    \"NATIVE_ALLOW_FLTHY\": [");
   { bool first = true; for (int c = 0; c < 256; c++) if (nativeAllowedFlthy(c)) { printf("%s%d", first ? "" : ", ", c); first = false; } }
+  printf("]");
+  // S6: the logics codes that take the board's brightness (b= and B reach them); the others on
+  // the list draw at a level of their own (CA1.4).
+  printf(",\n    \"NATIVE_DIMS_LOGICS\": [");
+  { bool first = true; for (int c = 0; c < 256; c++) if (nativeDimsLogics(c)) { printf("%s%d", first ? "" : ", ", c); first = false; } }
+  printf("]");
+  // S10: the allow-listed codes a fork passes through the field gate frame by frame (GATED); the
+  // rest of each list runs as stock.
+  printf(",\n    \"NATIVE_GATED_LOGICS\": [");
+  { bool first = true; for (int c = 0; c < 256; c++) if (nativeGatedLogics(c)) { printf("%s%d", first ? "" : ", ", c); first = false; } }
+  printf("]");
+  printf(",\n    \"NATIVE_GATED_PSI\": [");
+  { bool first = true; for (int c = 0; c < 256; c++) if (nativeGatedPsi(c)) { printf("%s%d", first ? "" : ", ", c); first = false; } }
+  printf("]");
+  printf(",\n    \"NATIVE_GATED_FLTHY\": [");
+  { bool first = true; for (int c = 0; c < 256; c++) if (nativeGatedFlthy(c)) { printf("%s%d", first ? "" : ", ", c); first = false; } }
   printf("]");
   // MORE CONSTANTS GO HERE (each starts with ",\n    ")
   printf("\n  ");
@@ -245,6 +281,65 @@ int main(int argc, char** argv) {
         default: break;                                              // the same level again
       }
       gate(now, level, (r >> 20) % 97 == 0);
+    }
+  }
+  // CA1.4: two measures and the look gate, a frame at a time. STATEFUL, like contractFieldGate.
+  group("contractFrameGate", "\"seq\", \"ceil\", \"restart\", \"nowMs\", \"effect\", \"rgb\", \"level\", \"lum\"",
+        "\"drawn\", \"scale\", \"lit\", \"ref\", \"litY\", \"refY\", \"onsetMs\", \"lookMs\"");
+  {
+    const int solid = (int)CE_SOLID, pulse = (int)CE_PULSE, wipe = (int)CE_WIPE;
+    const uint32_t white = 0xffffffu, blue = 0x0000ffu, red = 0xff0000u;
+    // 1. White and blue by turns at one level, every 50 ms (N1): the brightest channel never
+    //    moves. The look gate holds each change to 170 ms after the last, and white after blue is
+    //    an onset in luminance: it waits for 340 ms after the field last got brighter.
+    frameSeq(200);
+    for (uint32_t t = 1000; t < 3000; t += 10) {
+      const bool w = ((t - 1000) / 50) % 2 == 0;
+      frame(t, solid, w ? white : blue, 200, w ? 200 : 14);
+    }
+    // 2. Red and blue by turns (no luminance onset to speak of: the look gate alone).
+    frameSeq(160);
+    for (uint32_t t = 1000; t < 2500; t += 10) {
+      const bool r = ((t - 1000) / 30) % 2 == 0;
+      frame(t, solid, r ? red : blue, 160, r ? 33 : 11);
+    }
+    // 3. A look that fades in is still arriving while it gets brighter: the change that follows
+    //    keeps 170 ms from the last frame it rose in, not from its first frame.
+    frameSeq(200);
+    frame(1000, solid, white, 200, 200);
+    for (uint32_t t = 1200; t <= 1500; t += 10) frame(t, wipe, red, (int)((t - 1200) / 2), (int)((t - 1200) / 10));
+    for (uint32_t t = 1510; t < 1800; t += 10) frame(t, solid, white, 200, 200);
+    // 4. A black frame is never held, and is no look: the look after it is gated against the one before.
+    frameSeq(200);
+    frame(1000, solid, red, 200, 42); frame(1050, 0, 0, 0, 0); frame(1060, solid, blue, 200, 14);
+    frame(1160, solid, blue, 200, 14); frame(1170, solid, blue, 200, 14); frame(1400, solid, blue, 200, 14);
+    // 5. The same look applied again (its timeline restarts) is a change of look.
+    frameSeq(200);
+    frame(1000, pulse, red, 100, 21); frame(1100, pulse, red, 100, 21, true); frame(1160, pulse, red, 100, 21);
+    frame(1170, pulse, red, 100, 21); frame(1180, pulse, red, 120, 25, true); frame(1340, pulse, red, 120, 25);
+    // 6. One measure held, both recorded as shown: a frame the luminance holds down is a FALL in level.
+    frameSeq(200);
+    frame(1000, solid, white, 200, 200); frame(1050, solid, blue, 200, 14); frame(1230, solid, white, 200, 200);
+    frame(1240, solid, white, 200, 200); frame(1339, solid, white, 200, 200); frame(1340, solid, white, 200, 200);
+    // 7. A long deterministic walk at three ceilings: looks, levels and luminances from a fixed LCG.
+    for (int c : { 37, 160, 255 }) {
+      frameSeq(c);
+      uint32_t x = 0x89abcdeu + (uint32_t)c, now = 2000; int level = 0, lum = 0, fx = solid; uint32_t rgb = white;
+      for (int i = 0; i < 300; i++) {
+        x = x * 1664525u + 1013904223u;
+        const uint32_t r = x >> 8;
+        now += (r % 11 == 0) ? 10 + (r >> 4) % 300 : 10;
+        if ((r >> 10) % 7 == 0) { static const uint32_t kC[] = { 0xffffffu, 0xff0000u, 0x0000ffu, 0x00ff00u }; rgb = kC[(r >> 14) % 4]; }
+        if ((r >> 12) % 9 == 0) fx = ((r >> 16) % 3 == 0) ? 0 : ((r >> 16) % 3 == 1 ? solid : pulse);
+        switch ((r >> 18) % 5) {
+          case 0: level = 0; break;
+          case 1: level = c; break;
+          case 2: level = (int)((r >> 20) % (uint32_t)(c + 1)); break;
+          default: break;
+        }
+        lum = rgb == white ? level : (rgb == 0x00ff00u ? level * 183 / 256 : (rgb == red ? level * 54 / 256 : level * 19 / 256));
+        frame(now, fx, rgb, fx == 0 ? 0 : level, fx == 0 ? 0 : lum, (r >> 22) % 23 == 0);
+      }
     }
   }
   // CA1.3: the integer clock, piece by piece, so a mirror can be pinned on each step.

@@ -23,7 +23,11 @@
 //   * two stock effects that are NOT steady light, because the contract may select them and the
 //     S9 gate has to live with what they do by themselves: FLASHCOLOR (6) alternates full and
 //     50/255 every 250 ms (LE:2081-2091), and FAILURE (2) is dark from 8 s until it ends itself
-//     at 18 s, when the engine falls back to its default look (LE:2014-2046).
+//     at 18 s, when the engine falls back to its default look (LE:2014-2046);
+//   * the stock effects that IGNORE the brightness setting: 19 to 24 write their pixels at a
+//     value of their own (150 to 255: LE:2125-2190, 2404-2700), so do the fork's 101 to 105, and
+//     Leia (3) sets its brightness itself every frame (LE:1945-1970).
+//     Here they fill the display at 200 whatever setBrightness() was given.
 // It is still a mock. A native look is not drawn pixel by pixel: every native sequence but
 // LIGHTSOUT fills the display with its live brightness (a stand-in for "lit": the worst case for
 // a full-field measurement), and LIGHTSOUT fills it black.
@@ -65,13 +69,18 @@ struct LogicEngineRenderer {
   int width() const { return 8; }
   int height() const { return 10; }
   CRGB _px[10][8];
+  long _writes = 0;                   // setPixelRGB() calls: a frame effect 106 only HELD wrote nothing
   void setPixelRGB(int x, int y, const CRGB& c) {
+    _writes++;
     if (x >= 0 && x < 8 && y >= 0 && y < 10) _px[y][x] = c;
   }
   CRGB px(int x, int y) const { return _px[y][x]; }
   void selectSequence(byte s, int = 0, int = 0, int = 0) { _seq = s; _selects++; }
   void resetEffect() { _prevSeq = -1; }
   bool hasEffectChanged() const { return _seq != _prevSeq; }    // LE:842: a selection is waiting for the next frame
+  // fFlipFlop (LE:795-799, 941). The engine toggles it every effect delay, whatever runs; here
+  // it is FLASHCOLOR's only, and FLASHCOLOR starts on its bright half.
+  bool getEffectFlip() const { return ((uint32_t)(millis() - _fxStart) / 250u) % 2u == 0u; }
   void setBrightness(byte b) { _liveBri = b; }
   byte getBrightness() const { return _liveBri; }
   void calculateAllColors() { _calcCalls++; }
@@ -107,9 +116,10 @@ inline void mockEngineFrame(LogicEngineRenderer& r) {
     const uint32_t ran = now - r._fxStart;
     byte level = (r._fx == 14) ? 0 : r._liveBri;                // LIGHTSOUT is dark; any other native look is "lit"
     if (r._fx == 14) r._liveBri = 0;
-    if (r._fx == 6 && (ran / 250u) % 2u == 1u) level = (byte)((unsigned)r._liveBri * 50u / 255u);   // FLASHCOLOR's low half
+    if (r._fx == 6 && !r.getEffectFlip()) level = (byte)((unsigned)r._liveBri * 50u / 255u);   // FLASHCOLOR's low half
     if (r._fx == 2 && ran >= 8000u) level = 0;                  // FAILURE has faded out...
     if (r._fx == 2 && ran >= 18000u) keep = false;              // ...and ends itself: back to the default look
+    if (r._fx == 3 || (r._fx >= 19 && r._fx <= 24) || (r._fx >= 101 && r._fx <= 105)) level = 200;   // their own level
     for (int y = 0; y < 10; y++) for (int x = 0; x < 8; x++) r._px[y][x] = CRGB(level, level, level);
   }
   r._prevSeq = r._seq;                                          // fPreviousEffectVal = fDisplayEffectVal  LE:819 (AFTER the effect)

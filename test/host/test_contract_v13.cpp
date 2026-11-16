@@ -719,11 +719,22 @@ static void test_native_allow_psi_flthy() {
 static void test_native_allow_logics() {
   int allowed = 0;
   for (int c = -5; c <= 300; c++) if (nativeAllowedLogics(c)) allowed++;
-  CHECK(allowed == 14 + 6 + 5);
+  CHECK(allowed == 12 + 5 + 2);
   CHECK(!nativeAllowedLogics(3));                                    // Leia sets its own brightness, past the ceiling (S6)
-  CHECK(nativeAllowedLogics(2) && nativeAllowedLogics(4) && nativeAllowedLogics(12));
+  CHECK(nativeAllowedLogics(1) && nativeAllowedLogics(4) && nativeAllowedLogics(12));
   CHECK(nativeAllowedLogics(0) && nativeAllowedLogics(14) && nativeAllowedLogics(19) && nativeAllowedLogics(24));
   CHECK(nativeAllowedLogics(101) && nativeAllowedLogics(105));
+  // S10: a sequence whose whole field swings faster than the floor is not on it (the engine
+  // draws it, so it cannot be gated): flash colour, fire, failure's glitch, three custom effects
+  CHECK(!nativeAllowedLogics(6) && !nativeAllowedLogics(22) && !nativeAllowedLogics(2));
+  CHECK(!nativeAllowedLogics(102) && !nativeAllowedLogics(103) && !nativeAllowedLogics(104));
+  // S6: which of them take the board's brightness (b=, B)
+  for (int c = -5; c <= 300; c++) {
+    CHECK(nativeDimsLogics(c) == (nativeAllowedLogics(c) && c <= 14));
+    CHECK(!nativeGatedLogics(c) && !nativeGatedPsi(c));              // S10: neither board has a gated native look
+    CHECK(nativeGatedFlthy(c) == (c == 1));                          // the holoprojector's Leia is
+    if (nativeGatedFlthy(c)) CHECK(nativeAllowedFlthy(c));
+  }
   CHECK(!nativeAllowedLogics(15) && !nativeAllowedLogics(18));       // text effects need a message
   CHECK(!nativeAllowedLogics(25));                                   // one past the engine's effect table
   CHECK(!nativeAllowedLogics(99) && !nativeAllowedLogics(100));      // RANDOM; the SD-card bitmap
@@ -881,9 +892,141 @@ static void test_overlay_helpers() {
   s.pulseBright = 30; contractOnStop(s, 255); CHECK(s.pulseBright == 255); // a reset puts it back
 }
 
+// ---- core revision CA1.4: two measures, the look gate, native looks ----
+static void test_ca14() {
+  // Rec.709 luminance, in integers: white is itself, the three primaries add up to it within 1
+  CHECK(contractLuminance(255, 255, 255) == 255 && contractLuminance(0, 0, 0) == 0);
+  CHECK(contractLuminance(255, 0, 0) == 53 && contractLuminance(0, 255, 0) == 182 && contractLuminance(0, 0, 255) == 18);
+  CHECK(contractLuminance(160, 160, 160) == 160 && contractLuminance(1, 1, 1) == 1);
+
+  // TWO MEASURES. White to blue at one level: the brightest channel never moves, the luminance
+  // falls to a fourteenth. Blue back to white is then an ONSET, in luminance, and waits.
+  ContractUnitState s; s.ceil = 200;
+  const uint8_t st200 = contractFieldStep(200), st160 = contractFieldStep(160);
+  CHECK(contractFieldScale(s, 200, 200, 1000) == 255 && s.fieldLit && s.fieldLitY && s.fieldOnsetMs == 1000);
+  CHECK(contractFieldScale(s, 200, 14, 1050) == 255 && s.fieldLit && !s.fieldLitY && s.fieldRefY == 14);   // a fall: never delayed
+  const uint8_t held = contractFieldScale(s, 200, 200, 1100);        // white again, 100 ms after the field lit
+  CHECK(held == (uint8_t)((14 + st200 - 1) * 255 / 200));            // luminance held a step less one above its trough
+  CHECK(!s.fieldLitY && s.fieldOnsetMs == 1000);
+  // ...and BOTH measures remember what the unit showed, not what was drawn: the level is a fall
+  CHECK(!s.fieldLit && s.fieldRef == (uint8_t)(200 * held / 255));
+  CHECK(contractFieldScale(s, 200, 200, 1339) == held);
+  CHECK(contractFieldScale(s, 200, 200, 1340) == 255 && s.fieldLit && s.fieldLitY && s.fieldOnsetMs == 1340);
+  // one shared time: an onset in luminance keeps 340 ms from a brightening in level, and the
+  // other way round
+  ContractUnitState t; t.ceil = 200;
+  contractFieldScale(t, 100, 10, 1000);                              // blue, half bright: lit in level only
+  CHECK(t.fieldLit && !t.fieldLitY && t.fieldOnsetMs == 1000);
+  CHECK(contractFieldScale(t, 100, 100, 1200) < 255 && contractFieldScale(t, 100, 100, 1340) == 255);
+  // a measure at 0 does not limit, and nothing is ever scaled up
+  ContractUnitState z; z.ceil = 200;
+  CHECK(contractFieldScale(z, 0, 0, 1000) == 255 && contractFieldScale(z, 150, 0, 1010) == 255 && z.fieldRefY == 0);
+  // contractFieldGate() is the same rule with lum = level, for a fork that shows the allowed
+  // level itself: a scaled frame rounds down, so it is never above what the gate allows
+  for (int i = 0; i < 20000; i++) {
+    ContractUnitState a; a.ceil = (uint8_t)gateRnd(256); a.fieldLit = gateRnd(2) != 0; a.fieldRef = (uint8_t)gateRnd(256);
+    a.fieldLitY = gateRnd(2) != 0; a.fieldRefY = (uint8_t)gateRnd(256); a.fieldOnsetMs = gateRnd(2000);
+    ContractUnitState b = a;
+    const uint8_t level = (uint8_t)gateRnd(256); const uint32_t now = a.fieldOnsetMs + gateRnd(700);
+    const uint8_t allowed = contractFieldGate(a, level, now), scale = contractFieldScale(b, level, level, now);
+    CHECK(allowed <= level && (uint8_t)(((uint16_t)level * scale) / 255u) <= allowed);
+    CHECK(scale == 255 ? allowed == level : allowed < level);
+    if (scale == 255) CHECK(a.fieldLit == b.fieldLit && a.fieldLitY == b.fieldLitY && a.fieldOnsetMs == b.fieldOnsetMs && a.fieldRef == b.fieldRef);
+  }
+  // THE PROPERTY, on both measures: any frames at all (a level, and a luminance no higher), any
+  // times. What the unit shows is watched in level and in luminance: two onsets are never less
+  // than 340 ms apart in either, and a fall is never delayed.
+  for (int run = 0; run < 300; run++) {
+    ContractUnitState g; g.ceil = (uint8_t)(run % 4 == 0 ? 255 : 30 + gateRnd(226));
+    const uint8_t c = g.ceil, step = contractFieldStep(c);
+    FieldObserver oL[3] = { FieldObserver((uint8_t)(c / 10), (uint8_t)(c / 2)), FieldObserver(0, step), FieldObserver((uint8_t)(c - step), c) };
+    FieldObserver oY[3] = { FieldObserver((uint8_t)(c / 10), (uint8_t)(c / 2)), FieldObserver(0, step), FieldObserver((uint8_t)(c - step), c) };
+    uint32_t now = 1000u + gateRnd(5000); uint8_t level = 0, lum = 0;
+    for (int f = 0; f < 3000; f++) {
+      now += (gateRnd(20) == 0) ? 10u + gateRnd(90) : 10u;
+      if (gateRnd(3) == 0) level = (uint8_t)(gateRnd(4) ? gateRnd((uint32_t)c + 1u) : (gateRnd(2) ? c : 0));
+      if (gateRnd(3) == 0) lum = (uint8_t)gateRnd(256);
+      if (lum > level) lum = level;                                 // a field's luminance is never above its brightest channel
+      const uint8_t scale = contractFieldScale(g, level, lum, now);
+      const uint8_t outL = (uint8_t)(((uint16_t)level * scale) / 255u), outY = (uint8_t)(((uint16_t)lum * scale) / 255u);
+      for (FieldObserver& o : oL) o.see(outL, now);
+      for (FieldObserver& o : oY) o.see(outY, now);
+    }
+    for (FieldObserver& o : oL) CHECK(o.minGap >= 2 * STROBE_MIN_STATE_MS && o.worst <= 3);
+    for (FieldObserver& o : oY) CHECK(o.minGap >= 2 * STROBE_MIN_STATE_MS && o.worst <= 3);
+  }
+
+  // THE LOOK GATE. A look is its effect and its colour; a native look is its code.
+  const ContractRGB red = { 255, 0, 0 }, blue = { 0, 0, 255 };
+  const uint32_t sigRed = contractLookSig(CE_SOLID, red), sigBlue = contractLookSig(CE_SOLID, blue);
+  CHECK(sigRed != sigBlue && sigRed != contractLookSig(CE_PULSE, red) && sigRed != 0);
+  CHECK(contractLookSigNative(4) != contractLookSigNative(0) && contractLookSigNative(0) != 0);
+  ContractUnitState k; k.ceil = 200;
+  CHECK(contractLookGate(k, sigRed, 1000) && k.lookSig == sigRed && k.lookMs == 1000);
+  CHECK(contractLookGate(k, sigRed, 1010));                          // the look that is up: always
+  CHECK(!contractLookAllowed(k, sigBlue, 1169) && !contractLookGate(k, sigBlue, 1169) && k.lookSig == sigRed);
+  CHECK(contractLookAllowed(k, sigBlue, 1170) && contractLookGate(k, sigBlue, 1170) && k.lookMs == 1170);
+  // a look ARRIVES for as long as the field lights or gets brighter: a fade-in keeps the next
+  // change of look away until 170 ms after it stopped rising
+  contractFieldScale(k, 20, 2, 1180); CHECK(k.lookMs == 1170);                       // (under a step: texture, nothing new)
+  contractFieldScale(k, 60, 6, 1300); CHECK(k.fieldLit && k.lookMs == 1300);         // the field lit: the look arrives
+  contractFieldScale(k, 60, 6, 1350); CHECK(k.lookMs == 1300);                       // no brighter: nothing new
+  contractFieldScale(k, 90, 9, 1400); CHECK(k.lookMs == 1400 && k.fieldOnsetMs == 1400);   // still rising
+  CHECK(!contractLookGate(k, sigRed, 1500) && contractLookGate(k, sigRed, 1570));
+  // a look nobody asked about (a button's native sequence) is recorded, never refused
+  contractLookForced(k, contractLookSigNative(4), 1580);
+  CHECK(k.lookSig == contractLookSigNative(4) && k.lookMs == 1580);
+  contractLookForced(k, contractLookSigNative(4), 1700); CHECK(k.lookMs == 1580);    // the same one: nothing new
+  // the look gate's state is a safety anchor too
+  contractOnStop(k, 200); CHECK(k.lookSig == contractLookSigNative(4) && k.lookMs == 1580);
+  contractOnShow(k, 200, 0); contractOnIdle(k, 200); CHECK(k.lookSig == contractLookSigNative(4) && k.lookMs == 1580);
+
+  // A SECTION is applied 170 ms after the unit's last look change at the earliest, and is one
+  ContractUnitState c2;
+  CHECK(contractSectionMayApply(c2, 1000) && c2.lastApplyMs == 1000);
+  CHECK(!contractSectionMayApply(c2, 1169) && c2.lastApplyMs == 1000);
+  CHECK(contractSectionMayApply(c2, 1170) && c2.lastApplyMs == 1170);
+  ContractLookPatch lp; lp.has = LP_COLOR; lp.color = red;
+  CHECK(!liveLookOffer(c2, lp, 1200));                               // ...the same anchor a live A uses: held
+  ContractLookPatch due;
+  CHECK(!liveLookDue(c2, 1339, due) && liveLookDue(c2, 1340, due) && !contractSectionMayApply(c2, 1400));
+
+  // S10, NATIVE LOOKS THAT RUN AS STOCK: ask, tell that it started, tell its level, tell that it ended
+  ContractUnitState n; n.ceil = 160;
+  contractFieldGate(n, 160, 1000); contractFieldGate(n, 0, 1010);   // a contract look, then dark
+  CHECK(!contractNativeMayStart(n, 4, 160, 1100));                  // an onset 100 ms after the last: wait
+  CHECK(contractNativeMayStart(n, 14, 0, 1100));                    // a native blackout never waits
+  CHECK(contractNativeMayStart(n, 4, 160, 1340));
+  contractNativeStarted(n, 4, 160, 1350);
+  CHECK(n.fieldLit && n.fieldRef == 160 && n.fieldOnsetMs == 1350 && n.lookSig == contractLookSigNative(4) && n.lookMs == 1350);
+  // a native look may clear the unit and light it at once: its start is an onset whatever the
+  // unit shows now, lit or dark, and so is the hand-back to the board's own look
+  CHECK(!contractNativeMayStart(n, 9, 160, 1400) && !contractNativeMayStart(n, 9, 160, 1689));
+  CHECK(contractNativeMayStart(n, 9, 160, 1690) && contractNativeMayStart(n, 0, 160, 1690));
+  CHECK(!contractNativeMayStart(n, 4, 160, 1400) && contractNativeMayStart(n, 14, 0, 1400));
+  ContractUnitState q = n; contractLookForced(q, contractLookSigNative(7), 1600);     // a change of look that lit nothing
+  CHECK(!contractNativeMayStart(q, 9, 160, 1700) && contractNativeMayStart(q, 9, 160, 1770));   // S4 still counts
+  contractNativeLevel(n, 60, 1600); CHECK(!n.fieldLit && n.fieldRef == 60);          // the fork dimmed it: at once
+  contractNativeLevel(n, 160, 1650); CHECK(n.fieldLit && n.fieldRef == 160 && n.fieldOnsetMs == 1650);   // told, never refused
+  // it ends: the fork draws again. What it lights next keeps 340 ms from that frame...
+  contractNativeEnded(n, true, 2000);
+  CHECK(n.fieldOnsetMs == 2000 && n.fieldLit && n.fieldRef == 160);
+  CHECK(contractFieldGate(n, 160, 2010) == 160);                    // ...a look as bright as the native one is no onset
+  CHECK(contractFieldGate(n, 0, 2020) == 0 && contractFieldGate(n, 160, 2030) == st160 - 1 && contractFieldGate(n, 160, 2340) == 160);
+  // a look that is NOT on the fork's list (a button's): the field is taken as dark and just lit
+  contractNativeStarted(n, 6, 160, 3000);
+  contractNativeEnded(n, false, 3200);
+  CHECK(!n.fieldLit && n.fieldRef == 0 && n.fieldOnsetMs == 3200);
+  CHECK(contractFieldGate(n, 160, 3210) == st160 - 1 && contractFieldGate(n, 160, 3540) == 160);
+  // a native blackout tells the gate the field is dark, and changes no look
+  const uint32_t sigBefore = n.lookSig;
+  contractNativeStarted(n, 14, 0, 4000); CHECK(!n.fieldLit && n.fieldRef == 0 && n.lookSig == sigBefore);
+}
+
 int main() {
   test_integer_clock();
   test_field_gate();
+  test_ca14();
   test_overlay_helpers();
   test_saturating_params();
   test_bpm_range_and_hold();
