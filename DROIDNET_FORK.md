@@ -36,9 +36,15 @@ accents, a host-seeded beat clock, and autonomous board-side section playback โ€
 What is verified is host-side, by `bash test/host/run.sh` (and by CI, `.github/workflows/host-tests.yml`):
 
 - the shared core's unit tests, v1.2 and v1.3, and a differential fuzz of its parser under ASan/UBSan;
-- the RSeries layer on a mock of the engine that models sequence selection, `restoreSettings()` and the engine's
-  out-of-bounds effect id, including every finding of the 2026-11-15 review as a regression test;
-- the Serial1 reader, including a 400-byte burst of back-to-back lines;
+- the RSeries layer on a mock of the engine that models sequence selection in the engine's own order (the effect
+  runs, and only then is the selection recorded as seen), `restoreSettings()`, the effect selector being called
+  when a sequence starts, and the engine's out-of-bounds effect id; every finding of the 2026-11-15 review and of
+  the 2026-11-16 review of R1 is a regression test there;
+- contract S9 as a property (stage 2e): hostile scripts and random line streams, with random button presses, go
+  through the real layer; every frame is rendered and its pixels measured. Asserted: no two dark-to-lit onsets of
+  a display less than 340 ms apart, for three different readings of "dark" and "lit"; no pixel above the owner's
+  brightness; the native look after idle or the watchdog; dark after `X`; a button's sequence left running;
+- the Serial1 reader, including a 400-byte burst of back-to-back lines, with and without the pass-through;
 - the real ESP32 cross-compile (`pio run -e wlogicengine32`), which is a link, not a run.
 
 Run the suite for the current numbers; this file does not repeat them.
@@ -51,24 +57,34 @@ is the DroidNet layer (`git log --oneline 6bba8b1..HEAD`).
 - **Verbs.** `A` (animate: live, or scored with `at=`), `P` (pulse: the accent overlay), `C` (beat clock),
   `B` (brightness), `L` (level), `X` (stop), `M` (mode: `show` / `idle`), `V` (verify the load), `Q` (query).
 - **Looks.** `off`, `solid`, `flash`, `pulse`, `rainbow`, `scan`, `sparkle`, `meter`, `comet`, `chase`, `wipe`,
-  `gradient`, `colorcycle`, `twinkle`, and `native:<code>` for the codes on the allow-list (0-14, 19-24, 101-105).
+  `gradient`, `colorcycle`, `twinkle`, and `native:<code>` for the codes on the allow-list (0-2, 4-14, 19-24,
+  101-105; not 3, the stock Leia effect, which sets its own brightness past the owner's).
   `flash`, `pulse` and `scan` use the core's shared timing, the same on all three boards: `pulse` is a breathe
   whose cycle is never shorter than 340 ms (and a steady fill moved by the beat pump when one is on), `scan` one
   column sweeping back and forth.
 - **Beat clock.** One clock for both displays. `C:bpm=,ph=,bpb=,beat=` seeds it; a bare `C:ph=,beat=` re-anchors
-  it (the host's drift correction); `C:bpm=0` holds the show. A tempo outside 30-300 is ignored.
+  it (the host's drift correction); `C:bpm=0` holds the show. A tempo outside 30-300, or a `bpm=` that is not a
+  plain number, makes the whole line a no-op.
 - **Score.** 32 entries a display. Each carries its look, `b=`, `m=`, `am=`, `an=`/`ap=` (every-N accents) and an
-  optional accent (`ae=`/`ac=`/`ad=`), which the board fires itself on the section's accent beats.
+  optional accent (`ae=`/`ac=`/`ad=`), which the board fires itself on the section's accent beats. A scored `A`
+  with no `i=` is dropped. A line delivered twice changes nothing, the section that is playing included.
 - **Load check.** `V:n=,k=` compares the host's entry count and checksum with what the display holds. A display
-  that did not get its whole show goes back to its native look and reports `ok=2`.
+  that did not get its whole show goes back to its native look, reports `ok=2`, and takes no scored line until
+  the next `M:v=show`.
 - **Lifecycle.** `M:v=show[,wd=<seconds>]` arms a show without darkening the display; the show's first `C`, live
   `A` or `P` starts it. `X` blacks out. `M:v=idle` gives the display back. With `wd=`, that many seconds without
   a contract line addressed to the board is an idle.
 - **Safety.** No accent, pump swing or live look change recurs faster than the photosensitivity limits in
-  `contract_core.h`. `b=` and `B` are fractions of the display's own brightness, as its owner set it. `B` is
-  honoured only in show mode, and a reset clears it.
+  `contract_core.h`. On top of those, every frame the contract draws goes through one gate (S9): whatever lines
+  arrive, in whatever order, a display does not go from dark to lit less than 340 ms after it last did. A
+  blackout is never held back; what follows it is. `b=` and `B` are fractions of the display's own brightness, as
+  its owner set it. `B` is honoured only in show mode, and a reset clears it. `b=` on a `P` is that pulse's alone.
+- **A button always works (L6).** A native sequence started on a display the contract holds (`@nT...`, the web
+  page, the engine's own commands) ends the show on that display, as `M:v=idle` would, and runs. The other
+  display plays on.
 - **Query.** `Q:r=<route>` addressed to one display is answered on Serial1 with
-  `;S0!L<u>q:ver=1.3,rel=1,cap=32,n=<held>,ok=<0|1|2>,bpm=<n>` (`;W<n>,;S0...` for a remote WCB).
+  `;S0!L<u>q:ver=1.3,rel=1,cap=32,n=<held>,ok=<0|1|2>,bpm=<n>` (`;W<n>,;S0...` for a remote WCB). `r` is a
+  number 0 to 99; anything else gets no reply. One reply a display can wait to be written.
 
 ### What is not in
 
@@ -78,6 +94,18 @@ is the DroidNet layer (`git log --oneline 6bba8b1..HEAD`).
 - `d=` on `A` (retired in v1.3), `c=p<n>` palette colours, `sw=` and `band=`: parsed past, never acted on.
 - A pulse that interrupts a timed native sequence returns to the display's default look, not to that sequence:
   the engine has no public way to ask which sequence is running.
+- `native:3` (Leia). The stock effect sets its own brightness, 50 to 255, every frame, so it can neither be held
+  under the owner's brightness nor dimmed by `B`. It comes back with a look of the contract's own.
+- L6 on a show that is armed but has not begun. The display is the engine's own then, and the engine starts
+  sequences there by itself (RANDOM does, every few seconds), so a button cannot be told from that: it plays, and
+  the show's first `C`, `A` or `P` takes the display as usual. Likewise a button for the very sequence that is
+  already running changes nothing and cancels nothing.
+- A load longer than about 1.2 KB, sent back to back, while the serial pass-through runs slower than the input
+  (the stock Serial2 pass-through is 2400 baud). The reader never waits on the pass-through, so it can take bytes
+  no faster than the pass-through sends them, and the UART drops what its 1024-byte buffer cannot hold. `V`
+  reports such a load bad. Pace the load, raise the pass-through's baud, or turn the pass-through off.
+- A change of the whole field smaller than a quarter of the display's brightness is a look's own texture to the
+  S9 gate and is not rate-limited.
 
 ### Native brightness: `#LEBRI`
 
@@ -111,18 +139,30 @@ state change and no reply: there is no clamp, and 0 is never applied.
 | `test/host/vectors/contract_vectors.json` | fork | Generated by `gen_contract_vectors.cpp` from the real core. The Studio preview is tested against a copy of it. |
 | `scripts/core-sync.sh` | fork | Compares, and copies, the shared files across the sibling fork checkouts. |
 | `test/host/catalog_example_lines.tsv` | fork | Snapshot of every command-library example line, for `prefix_guard.cpp`. Regenerate with `refresh_catalog_examples.py <library checkout>`. |
-| `src/main.cpp` | upstream | Fork edits, each marked `DroidNet`: the contract includes and `ContractRender` in the effect table; `ContractSerial` as the Serial1 reader and a 1024-byte receive buffer; the WiFi receiver's line width and its contract dispatch; `contractSetup()`, `contractTick()` and the `Q` reply write in `mainLoop()`; the `#LEBRI` include and controller capture; the WDP init and tick; a one-character fix to a latent off-by-one in `CustomLogicEffectSelector`. |
+| `src/main.cpp` | upstream | Fork edits, each marked `DroidNet`: the contract includes and `ContractRender` in the effect table; `ContractSerial` as the Serial1 reader and a 1024-byte receive buffer; the WiFi receiver's line width, `contractWifiLine()` and its contract dispatch; one effect selector per display, reporting to `contractEngineLatched()`; `contractSetup()`, `contractTick()` and the `Q` reply write in `mainLoop()`; the `#LEBRI` include and controller capture; the WDP init and tick; a one-character fix to a latent off-by-one in `CustomLogicEffectSelector`. |
 | `lib/Reeltwo` | upstream | **Do not edit.** The contract plugs in through the public `seq >= 100` `CustomLogicEffectSelector` hook. The two `wifi/` headers carry pre-existing C2B5 modifications and an LGPL ยง2(b) notice. |
 
 ## Conventions that matter
 
-- **`ContractRender` returns `false` for exactly one reason: to hand the display back.** The engine then selects
-  its own default effect (`LogicEngine.h:818-830`). That is how a pulse outside a show returns to the native look.
-  Everywhere else it must return `true`.
+- **Nothing selects a sequence from inside the effect.** The engine runs the effect and only then records the
+  selection as seen (`LogicEngine.h:818-819`), so a `selectSequence()` made inside `ContractRender` is never
+  noticed and effect 106 goes on running. `_present()` is the one place a sequence is selected; it runs from the
+  line dispatch and from `contractTick()`. `ContractRender` returns `false` only when someone else selected
+  effect 106 by its number.
+- **The engine tells the layer when a sequence starts.** `main.cpp` gives each display its own effect selector
+  (`ContractSelectorFLD` / `ContractSelectorRLD`), and the engine calls a selector at the frame it starts a
+  newly selected sequence, never otherwise. `contractEngineLatched()` is that report. It is how the layer knows a
+  native look is really on the LEDs, and how it sees a sequence it did not select (L6). It selects nothing.
+- **S9: ask, then tell.** A frame effect 106 draws is measured and passed through `contractFieldGate()` before
+  it leaves. Light the layer does not draw (a native look, at the brightness the contract gives it) is ASKED for
+  with `contractFieldAllowed()` before the hand-over and TOLD to the gate at the frame the engine starts it.
+  The gate is never told about light that did not reach the LEDs.
 - `setPixelRGB` bypasses the engine's `fBri`, so brightness and the beat envelope are applied inside the layer.
 - **Brightness.** The ceiling is the display's own `fBri` (the RAM default object, read when a show arms or the
   first cue arrives). `b=`/`B` are fractions of it. For native looks the level is written to that default object,
-  because the engine copies it back on every effect change; every show boundary restores the owner's value.
+  because the engine copies it back on every effect change. The owner's value goes back when the show no longer
+  needs it: at once while effect 106 is drawing (nobody sees the engine's brightness then), through the S9 gate
+  when a native look is up.
 - **Show boundaries run the core's one reset** (`contractOnShow` / `contractOnStop` / `contractOnIdle`). Do not
   reset fields by hand in the layer: a field added to `ContractUnitState` is then reset everywhere.
 - The score, its accents, the watchdog and held live looks run in `contractTick()` from `mainLoop()`, **not**
@@ -145,6 +185,8 @@ state change and no reply: there is no clamp, and 0 is never applied.
 - **The Serial1 reader is `ContractSerial`, with 128-byte lines.** The library's reader takes one byte a pass,
   which is slower than 9600 baud once `FastLED.show()` is counted, and processes an over-long line truncated.
   The longest line Studio can emit is 102 characters; `test/host/run.sh` stage 3 recomputes that and checks the
-  serial and WiFi widths.
+  serial and WiFi widths. The reader never waits on the pass-through stream (`contractDrainBudget()`).
+- **A WiFi line goes through `contractWifiLine()` first.** The library's receiver frames on CR alone and cuts a
+  long line off silently; the helper skips the LF of a CR LF host and drops a contract line that was cut off.
 - **A contract line runs in the reader, not on the animation player.** `Marcduino::processCommand` queues one
   action with one command pointer, so of several lines handled in one pass only the last would run.

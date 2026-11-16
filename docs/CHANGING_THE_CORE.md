@@ -45,3 +45,27 @@ the firmware and the preview cannot disagree without a test failing. Schema 1:
   Every value is an integer. A float is carried scaled (`phase_e6` is the phase times a million, rounded).
 
 Groups are append-only: a later change adds a group, it never reshapes one.
+
+## Core revision CA1.2 (2026-11-16): what a fork has to do
+
+CA1.2 closes the findings of the 2026-11-16 review of R1. Most of it needs nothing from a fork beyond the re-copy:
+`bpm=` and `r=` are taken only as plain numbers, `at=` and `beat=` are clamped to `CONTRACT_BEAT_MAX`, a unit that
+failed its `V` takes no scored line until the next `M:v=show`, a scored line delivered twice does not move the
+section cursor, and the logics allow-list loses code 3. Three things are a fork's to wire up:
+
+1. **The field gate (S9).** After a fork has rendered a unit's frame and before the frame leaves, it measures the
+   field level (0 to 255: the mean over the unit's LEDs of each LED's brightest channel) and calls
+   `contractFieldGate(state, level, now)`. When the answer is lower than the level, the frame is scaled down to
+   it. That is the whole rule for light the fork draws. The gate's state lives in `ContractUnitState` and
+   survives every reset.
+2. **Native looks: ask, then tell.** For light the fork does not draw, ask before handing the LEDs over
+   (`contractFieldAllowed(state, level, now) >= level`, or `contractFieldMayLight()` for a native look at the
+   ceiling) and wait a pass when the answer is no. Tell the gate (`contractFieldGate`) at the moment the native
+   look is really on the LEDs, with level 0 for a native blackout. Never tell it about a look that was selected
+   and then replaced before it was shown. A look someone else started (a button) is recorded with
+   `contractFieldForced()`.
+3. **The overlay.** `contractOverlayUp(state, now)` is the one expiry rule; `state.pulseBright` is the overlay's
+   own brightness fraction. A `P` with `b=` sets it, when the accent arms, and never touches `state.bright`.
+
+Each fork also needs its own copy of the S9 property stage (`test/host/test_contract_property.cpp` here): the
+streams and the bookkeeping carry over; the part that renders a frame and measures it is the fork's.
