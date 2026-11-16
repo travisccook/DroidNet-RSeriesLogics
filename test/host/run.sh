@@ -9,6 +9,7 @@
 #   1c. wdp_announce_core.h WDP device announce unit tests (shared with the PSI and Flthy forks)
 #   1d. wdp_fork.h: this fork's real WDP identity builds its line, and the Serial1 adapter
 #   2. ContractLogics.h firmware-layer type-check against a mock of the engine API
+#   2b. the 2026-11-15 review findings as behaviour tests (known defects marked)
 #   3. Marcduino command-buffer width guard (the v1.2 accent keys push a scored line past 63)
 #   4. parser fuzz + differential (ASan/UBSan, deterministic)
 #   5. native #LEBRI brightness parser unit tests
@@ -72,6 +73,11 @@ stage 1c "wdp_announce_core WDP device announce unit tests" "$CXX" -std=c++11 -W
 # against a mock port. -std=c++11: the ESP32 core builds with gnu++11.
 stage 1d "wdp_fork RSeries WDP identity + Serial1 adapter" "$CXX" -std=c++11 -Wall -Wextra -Werror -O0 test_wdp_fork.cpp
 stage 2  "ContractLogics.h firmware type-check" "$CXX" -std=c++17 -Wall -Wextra compile_contract_logics.cpp
+# The 2026-11-15 review's findings as behaviour tests on mock_engine.h, which models sequence
+# selection, restoreSettings() and the engine's 25th-entry overrun. A finding that is not fixed
+# yet is a KNOWN_BUG line: it prints XFAIL and keeps the suite green, and FAILS the suite the
+# moment it starts passing, so the fix has to turn it into a CHECK.
+stage 2b "review regressions (known defects marked)" "$CXX" -std=c++17 -Wall -Wextra test_review_regressions.cpp
 
 if want 3; then
 echo "[3] Marcduino command-buffer width guard"
