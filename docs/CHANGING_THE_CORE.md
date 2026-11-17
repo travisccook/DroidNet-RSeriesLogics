@@ -656,3 +656,113 @@ compares; `UPDATE_FRAMES=1 bash test/host/run.sh` writes the folder again, and S
 holds the first twelve hex digits of the sha256 of `contract_core.h` followed by `ContractLogics.h`: a file cannot
 name the commit that will contain it. Against the frames exported at CA1.5, three files moved: `pulse-s0`,
 `pulse-s255` and `wipe`.
+
+## Core revision CA1.7 (2026-11-16): a part of a strand, for every look by itself
+
+### What a fork changes
+
+Re-copy the shared files; there is one more, `test/host/test_fx_regions.cpp` (it is in `core-files.txt`), and
+a fork's suite runs it. After that:
+
+| | What | A fork has to |
+| --- | --- | --- |
+| 1 | A chase steps every 130 ms at the least (`fxChaseStepMs`) | nothing |
+| 2 | A scan's lap is never under a second there and back, or 680 ms round a ring (`fxScanStepMs`) | nothing |
+| 3 | A change of colour alone recolours a look in place | where it restarts a look itself: ask `contractLookContinues(state, effect, nativeCode, speed)` in place of `contractLookSame()`, and restart (the start time, `contractLookRestart()`) only on false |
+
+`contractLookSame()` is unchanged, for a fork that wants the stricter answer.
+
+### Why
+
+The third review ran the looks with no hostile line at all. A chase at 30 ms a step lights every position for
+one step in three: each position, and each two side by side, blinked eleven times a second, and on the logics'
+front display (8 columns) the left half swung between two and four lit columns 13 times a second. A scan at
+30 ms a step took a quarter of that display from dark to half lit 6 times a second. The whole field's level
+never moves in either, so no gate saw it; and the property stage's region observers, which allowed for a small
+lit area and had wide bands, read 1 and 0.
+
+`test/host/test_fx_regions.cpp` (stage 1j) is the test that keeps it from coming back. It is pure core: every
+look the core times, alone, at every speed 0 to 255, on every strand of 6 to 28 positions, for 4 s; every run of
+neighbouring positions a quarter of the strand or longer is a window; an onset is counted as the gate counts one
+(a rise of more than a tenth of full scale above the last trough); no window may have more than three in any one
+second. The most any window had, CA1.6 and CA1.7:
+
+| Look | CA1.6 | CA1.7 |
+| ---- | ----- | ----- |
+| chase | 10 to 13 on every length | 3 |
+| scan, there and back | 8 on 6 positions, 6 on 7 and 8, 4 or 5 on 9 to 15, 3 or fewer from 16 | 2 |
+| scan, round a ring | 6 on 6 positions, 5 on 7 and 8, 4 on 9 to 11, 3 or fewer from 12 | 2 |
+| comet, pulse | 2 | 2 |
+| wipe | 2 (1 from 18 positions) | the same |
+| flash, twinkle | 3 | 3 |
+| gradient | 1 (by luminance) | 1 |
+| colorcycle | 0 | 0 |
+
+The steps at `s=255`, in ms:
+
+| Positions | 6 | 7 | 8 | 10 | 12 | 16 | 18 | 24 | 28 |
+| --------- | - | - | - | -- | -- | -- | -- | -- | -- |
+| chase (was 30) | 130 | 130 | 130 | 130 | 130 | 130 | 130 | 130 | 130 |
+| scan, there and back (was 30) | 100 | 84 | 72 | 56 | 46 | 34 | 30 | 30 | 30 |
+| scan, round a ring (was 30) | 114 | 98 | 85 | 68 | 57 | 43 | 38 | 30 | 30 |
+| comet (CA1.6) | 114 | 98 | 85 | 68 | 57 | 43 | 38 | 30 | 30 |
+
+How the floors were worked out, rather than assumed:
+
+- **Chase.** On a ring whose length is a multiple of 3 a window of two positions lights once in three steps, and
+  112 ms a step keeps that to three a second. Where it is not, one gap of the ring is short, and the gap passes
+  the window as well: a ring of 8 lights a quarter of itself three times in eight steps, so 125 ms a step is a
+  second exactly. 130 leaves room for a frame that is drawn 15 ms late. One figure for every length: a chase is
+  now 130 to 157 ms a step, and its speed setting does little.
+- **Scan, there and back.** Every window is passed twice a lap, at uneven times unless it is in the middle, so
+  four passes can fall inside little more than one lap. The least lap that keeps every window to three a second
+  is 770 ms on 6 positions and up to 880 ms on 22; a second is the round figure above that. (680 ms, as for the
+  comet, is not enough here.)
+- **Scan, round a ring.** One pass a lap: 340 ms would do, and it gets the comet's 680 ms.
+
+### A change of colour alone
+
+`contractLookContinues()`: the same effect, native code and speed in another colour is the look that is up,
+recoloured in place. Its timeline carries on, and the look gate times the change of colour as before (the colour
+is part of `contractLookSig()`). A comet or a scan restarted by a change of one bit of its colour every 170 ms
+passed the same quarter of the strand six times a second; it now laps as if nothing had been sent.
+
+### What a fork's own region test should look like, and what stays open
+
+This fork's property stage holds every look by itself to the fine observer on the rendered pixels (the whole
+display, its halves and quarters, every band of a quarter of the columns and of the rows, by level and by
+luminance), on five rear display sizes. Its own `sparkle` failed that (a new random pattern every 80 ms moved a
+quarter of the display by more than a tenth five times a second) and now draws a new pattern every 350 to
+477 ms.
+
+Scripts that alternate two looks, each of which lights a part of the field, still exceed three a second in a
+region while every whole-field limit holds. They are in the stage as known failures, with their figures:
+
+| Script | A region lit, in one second |
+| ------ | --------------------------- |
+| a scan and a chase by turns every 170 ms | 6 times |
+| a scan and a full look by turns every 170 ms | 6 times |
+| `C` seeks across sections of solid, scan, comet and wipe | 5 times |
+| a wipe with a wipe accent over it every 340 ms | 5 times |
+| a comet and a full look by turns (510 ms and 170 ms) | 4 times |
+
+A limit on them needs a gate with a state for each region.
+
+### The vector file
+
+New constants: `FX_CHASE_STEP_MIN_MS`, `FX_SCAN_LAP_MIN_MS`, `LOOK_MIN_LEVEL`. Groups: `fxChaseLit` and
+`fxScanPos` have new rows. `contractFrameGate` has a ninth argument, `peak` (the brightest LED of the frame; equal
+to `level` in every row there was), and two new sequences, 24 and 25, where the two differ: a field level of 3
+with one LED at full is a look and is held; a field level of 3 with no LED over 3 is not.
+
+### What it costs in flash
+
+| Probe (avr-gcc 7.3, atmega32u4) | CA1.6 | CA1.7 |
+| ------------------------------- | ----- | ----- |
+| the whole core as a single-colour layer calls it (it draws a scan round a ring of 10) | 8,684 B | 8,706 B |
+| a colour fork, every gate call wired, with a scan | 9,966 B | 9,988 B |
+| a scan there and back on a strand of fixed length | 394 B | 412 B |
+| the same with the length a variable | 428 B | 496 B |
+| a strand that draws chase, wipe, pulse and flash | 1,018 B | 1,036 B |
+
+A fork whose strand length is a constant pays 18 to 22 B for the scan's floor.

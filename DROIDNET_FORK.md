@@ -53,8 +53,12 @@ What is verified is host-side, by `bash test/host/run.sh` (and by CI, `.github/w
 - a part of the display, in the same stage: the whole field, its halves, its quarters and four bands of columns
   and of rows are watched on the pixels, with the rear display at five sizes by turns. A region may go from dark
   to lit three times in any one second. Asserted on every look by itself and on scripts made for it (a meter
-  under `L`, a comet, looks by turns); in the random streams it is measured and printed. One script is a known
-  failure: see "What is not in";
+  under `L`, a comet, looks by turns); in the random streams it is measured and printed. Every look by
+  itself is held to an observer as fine as the gate (a tenth of the brightness, every band of a quarter of the
+  columns and of the rows, by level and by luminance). Six scripts that alternate two looks are known failures:
+  see "What is not in";
+- the core's own looks on strands of 6 to 28 positions (stage 1j, pure core): no run of a quarter of a strand or
+  more lights more than three times a second, at any speed;
 - the frame fixtures Studio's preview is checked against (stage 2f, `test/host/frames/`) are what the layer
   draws on the mock engine;
 - contract S10 as a test (stage 1i): a model of the stock sequences, on every display size the engine knows,
@@ -78,9 +82,11 @@ is the DroidNet layer (`git log --oneline 6bba8b1..HEAD`).
   `flash`, `pulse`, `scan`, `chase` and `wipe` use the core's shared timing, the same on all three boards:
   `flash` is 190 to 445 ms a state; `pulse` is a breathe whose cycle is never shorter than 680 ms (and a steady
   fill moved by the beat pump when one is on); a `wipe` fills and drains in 680 ms at the least; `chase` lights
-  three of the eight columns at every step; `scan` is one column sweeping back and forth; a `comet` laps the
-  display in 680 ms at the least (85 ms a column on the front display's eight). A live `A` or a section
-  that asks for the look that is already up (the same effect, colour and speed) does not restart it.
+  three of the eight columns at every step, and a step is 130 ms at the least; `scan` is one column sweeping back
+  and forth, there and back in a second at the least (72 ms a column on the front display's eight); a `comet`
+  laps the display in 680 ms at the least (85 ms a column). `sparkle` draws a new pattern every 350 to 477 ms. A
+  live `A` or a section that asks for the look that is already up (the same effect and speed) does not restart
+  it, and neither does one that changes its colour alone: the look is recoloured in place.
 - **Beat clock.** One clock for both displays. `C:bpm=,ph=,bpb=,beat=` seeds it; a bare `C:ph=,beat=` re-anchors
   it (the host's drift correction); `C:bpm=0` holds the show. A tempo outside 30-300, or a `bpm=` that is not a
   plain number, makes the whole line a no-op. The clock and the accent envelope are integer arithmetic
@@ -140,14 +146,20 @@ is the DroidNet layer (`git log --oneline 6bba8b1..HEAD`).
   Nothing can tell when such a sequence next lights by itself, so it is given a brighter level only when it
   starts. A dimmer one reaches it at once.
 - A limit on a part of a display for every order of lines. No look by itself, and no meter under `L`, lights a
-  region of a quarter of a display or more than three times in a second; the property stage asserts that. A
-  comet and a full look by turns do: the comet passes a region and the full look lights it again, four onsets in one
+  region of a quarter of a display or more than three times in a second; the core's own test asserts that for
+  the looks it times, on every strand length (stage 1j), and the property stage for every look on the rendered
+  pixels, by an observer as fine as the gate. Two looks by turns do, five scripts in all, which the stage lists
+  as known failures with their figures (a scan and a chase every 170 ms: six times a second). The first found
+  was a comet and a full look: the comet passes a region and the full look lights it again, four onsets in one
   second (`A:i=comet` for 510 ms, `A:i=solid` for 170 ms, repeated). The whole-field gates cannot see it. It is
   in the property stage as a known failure, and it is an owner item: a gate that knows regions, or a comet
   that never leaves a part of the display dark.
 - The luminance of a native sequence. The layer tells the gate one figure for a native look, its level, and the
   gate takes its luminance to be the same. A contract look that follows at the same level and a higher
   luminance (white after the blue of a front logic) is no onset to the gate. A bench item.
+- Two roundings the third review measured and that are left as they are. The C1 guard ("more than 60 ms into
+  the beat") differs from the words only between 60 and 61 ms. Section progress, for the build ramp, is coarse
+  by 2 to 3 parts in 65,536 on a section longer than 65,535 beats.
 - One limit for the two displays together. Each display has its own gates, so the front and the rear can light
   by turns, each 340 ms apart: 5.9 onsets a second between them. Not limited, and a bench item.
 - A limit on `#LEBRI`. It scales everything the board puts out, at once and as often as it is sent, outside the
@@ -162,6 +174,11 @@ is the DroidNet layer (`git log --oneline 6bba8b1..HEAD`).
   reports such a load bad. Pace the load, raise the pass-through's baud, or turn the pass-through off.
 - A change of the whole field of a tenth of the display's brightness or less is a look's own texture to the
   S9 gate and is not rate-limited.
+- "By luminance" is exact in the gate's own measure: Rec.709 in whole numbers, `(54 r + 183 g + 19 b) >> 8` per
+  LED, then the mean in whole levels. The third review read it in floating point and dated an onset strictly:
+  on a gradient or a colorcycle whose luminance creeps by one level before an `X` and a relight it found pairs
+  155 to 315 ms apart. Dated from when the level came within 2 of the observer's threshold, every pair was
+  340 ms apart. It is a rounding of the measure and not a flash anyone sees.
 - A photometer that reads luminance in floating point, or on the field's mean colour, can differ from the
   gate's whole-number reading by up to 2 levels. A look that drifts across such an observer's threshold inside
   those 2 levels reads as lighting a little later than the gate timed it.
@@ -217,7 +234,9 @@ Closest two onsets, by the model:
 What the speed column changes, and why:
 
 - **March (4), speed 1.** At the engine's speed 0 its thirds flip every 150 ms, so each of them lights every
-  300 ms. At speed 1 they flip every 300 ms. (Its last 3 s run at 175 ms whatever the speed: 350 ms.)
+  300 ms. At speed 1 they flip every 300 ms. Its last 3 s run at 175 ms whatever the speed
+  (`LogicEngine.h:2004`): 350 ms, which passes with 10 to 20 ms to spare by the third review's measurement.
+  That is the narrowest margin in this table.
 - **Roaming pixel (19), speed 1.** At speed 0 it adds a pixel every 10 ms and clears the row when it is full. On
   the front display a row is a tenth of the field; on a 4-row rear display it is a quarter, and it would fill
   every 160 to 290 ms. At speed 1 it is a pixel every 50 ms.
