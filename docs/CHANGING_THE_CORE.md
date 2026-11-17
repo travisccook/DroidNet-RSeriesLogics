@@ -669,8 +669,20 @@ a fork's suite runs it. After that:
 | 1 | A chase steps every 130 ms at the least (`fxChaseStepMs`) | nothing |
 | 2 | A scan's lap is never under a second there and back, or 680 ms round a ring (`fxScanStepMs`) | nothing |
 | 3 | A change of colour alone recolours a look in place | where it restarts a look itself: ask `contractLookContinues(state, effect, nativeCode, speed)` in place of `contractLookSame()`, and restart (the start time, `contractLookRestart()`) only on false |
+| 4 | Verb `B`, and `b=` on a look, go up at most once in 340 ms, in the same window as verb `L` | write `contractBrightOffer(state, b)` wherever it wrote `state.bright = b` from a line (verb `B`, the `b=` of a live `A`, a section being applied), and call `contractHoldsDue(state, now)` once a pass in place of `contractLevelDue()` |
 
 `contractLookSame()` is unchanged, for a fork that wants the stricter answer.
+
+**Verb B.** From the PSI's re-verification: `A:i=meter`, `L:v=86`, then `B:b=0` and `B:b=200` every 30 ms lit
+the meter's lower rows 17 times a second while the whole field stayed under the gate's step. It is verb L's hole
+through another verb, and it has verb L's rule: a lower fraction at once, a higher one at most once in 340 ms,
+the newest raise waiting for the window. The two verbs share ONE window (`levelMs`): a meter's rows light when
+`L` goes up and when `B` does, and with a window each the two could take turns and light them twice in every
+340 ms. `contractHoldsDue()` moves both in one call and returns what changed (bit 0 `state.level`, bit 1
+`state.bright`); two raises due in the same pass are both taken, as one rise. `contractLevelDue()` and
+`contractBrightDue()` are the same rule one at a time, for a fork that wants a fall on the LEDs before its next
+pass. The show reset puts `bright` and `brightWant` back at the ceiling. A fork that held the `B` step itself
+(the Flthy fork) can drop its own hold.
 
 ### Why
 
@@ -750,19 +762,23 @@ A limit on them needs a gate with a state for each region.
 
 ### The vector file
 
-New constants: `FX_CHASE_STEP_MIN_MS`, `FX_SCAN_LAP_MIN_MS`, `LOOK_MIN_LEVEL`. Groups: `fxChaseLit` and
-`fxScanPos` have new rows. `contractFrameGate` has a ninth argument, `peak` (the brightest LED of the frame; equal
-to `level` in every row there was), and two new sequences, 24 and 25, where the two differ: a field level of 3
-with one LED at full is a look and is held; a field level of 3 with no LED over 3 is not.
+New constants: `FX_CHASE_STEP_MIN_MS`, `FX_SCAN_LAP_MIN_MS`, `LOOK_MIN_LEVEL`. New group, stateful:
+`contractHoldsDue` (one row is one pass: `reset`, an `L` line `v` or -1, a `B` line or `b=` as `b` or -1, then the
+call; outputs `changed`, `level`, `levelWant`, `bright`, `brightWant`, `riseMs`). `contractLevelHold` is unchanged.
+Groups: `fxChaseLit` and `fxScanPos` have new rows. `contractFrameGate` has a ninth argument, `peak` (the brightest
+LED of the frame; equal to `level` in every row there was), and two new sequences, 24 and 25, where the two differ:
+a field level of 3 with one LED at full is a look and is held; a field level of 3 with no LED over 3 is not.
 
 ### What it costs in flash
 
 | Probe (avr-gcc 7.3, atmega32u4) | CA1.6 | CA1.7 |
 | ------------------------------- | ----- | ----- |
-| the whole core as a single-colour layer calls it (it draws a scan round a ring of 10) | 8,684 B | 8,706 B |
-| a colour fork, every gate call wired, with a scan | 9,966 B | 9,988 B |
+| the whole core as a single-colour layer calls it (it draws a scan round a ring of 10) | 8,684 B | 8,716 B |
+| a colour fork, every gate call wired, with a scan | 9,966 B | 9,998 B |
 | a scan there and back on a strand of fixed length | 394 B | 412 B |
 | the same with the length a variable | 428 B | 496 B |
 | a strand that draws chase, wipe, pulse and flash | 1,018 B | 1,036 B |
 
-A fork whose strand length is a constant pays 18 to 22 B for the scan's floor.
+A fork whose strand length is a constant pays 18 to 22 B for the scan's floor. Verb B's hold, on the colour
+fork's probe with verb L wired already: 68 B more (three offers in place of three writes, and
+`contractHoldsDue()` in place of `contractLevelDue()`); 154 B over a fork that has wired neither.

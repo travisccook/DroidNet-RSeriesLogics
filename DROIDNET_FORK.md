@@ -123,6 +123,9 @@ is the DroidNet layer (`git log --oneline 6bba8b1..HEAD`).
 - **`L` feeds the contract's own `meter` look and nothing else.** No native sequence is driven by it. Each
   display keeps its own level. A higher level is taken at most once in 340 ms; a level that is no higher at
   once. A raise that comes sooner waits, the newest of them, and the show reset clears the level.
+- **`B`, and `b=` on a look, go up at most once in 340 ms** too, in the same window as `L`: a lower brightness
+  is taken at once, a higher one waits for the window, the newest of them. A look that lights part of a display
+  (a meter with one row lit) under `B:b=0` and `B:b=200` by turns lit that part as often as the lines came.
 - **Query.** `Q:r=<route>` addressed to one display is answered on Serial1 with
   `;S0!L<u>q:ver=1.3,rel=1,cap=32,n=<held>,ok=<0|1|2>,bpm=<n>` (`;W<n>,;S0...` for a remote WCB). `r` is a
   number 0 to 99; anything else gets no reply. One reply a display can wait to be written.
