@@ -989,7 +989,7 @@ struct ContractAnchors {
   uint32_t       lookSig = 0;           // the look the field last showed lit (contractLookSig); 0: none yet
   uint32_t       lookMs = 0;            // when it changed to that, or the field last lit or got brighter in it
   // ---- S9 for a region: verb L (contractLevelOffer)
-  uint32_t       levelMs = 0;           // when the unit's level last went UP
+  uint32_t       levelMs = 0;           // when the unit's level (L) or its brightness fraction (B, b=) last went UP
 };
 // What a show reset clears: everything about a unit but its anchors (CA1.6: a struct of its own,
 // so that the reset assigns this part and never has to save the other).
@@ -1029,6 +1029,7 @@ struct ContractShowState {
   // ---- verb L: the level a meter look shows (contractLevelOffer)
   uint8_t        level = 0;             // what the unit shows
   uint8_t        levelWant = 0;         // the last L. Above `level`: a raise that waits for the window (contractLevelDue)
+  uint8_t        brightWant = 255;      // the last b= / B. Above `bright`: a raise that waits (contractBrightDue)
 };
 // A unit: its anchors, and its show state. Every field is reached as before (s.base, s.fieldLit).
 struct ContractUnitState : ContractAnchors, ContractShowState {};
@@ -1125,15 +1126,49 @@ inline bool liveLookDue(ContractUnitState& s, uint32_t nowMs, ContractLookPatch&
 // from it then. A fork that wants a fall on the LEDs before its next pass calls it right after
 // the offer as well. The level and what the host wants are cleared by the show reset; the time
 // is an anchor.
-inline void contractLevelOffer(ContractUnitState& s, uint8_t v) { s.levelWant = v; }
-inline bool contractLevelDue(ContractUnitState& s, uint32_t nowMs) {
-  if (s.levelWant == s.level) return false;
-  if (s.levelWant > s.level) {
-    if (!strobeCoolDownExpired(s.levelMs, nowMs, 2 * STROBE_MIN_STATE_MS)) return false;   // a raise inside the window: it waits
-    s.levelMs = nowMs;
+// One rule for both verbs (L here, B below): `shown` goes to `want`, down at once, up at most
+// once in 340 ms. true: it changed.
+inline bool _riseDue(uint8_t& shown, uint8_t want, uint32_t& lastUpMs, uint32_t nowMs) {
+  if (want == shown) return false;
+  if (want > shown) {
+    if (!strobeCoolDownExpired(lastUpMs, nowMs, 2 * STROBE_MIN_STATE_MS)) return false;     // a raise inside the window: it waits
+    lastUpMs = nowMs;
   }
-  s.level = s.levelWant;
+  shown = want;
   return true;
+}
+inline void contractLevelOffer(ContractUnitState& s, uint8_t v) { s.levelWant = v; }
+inline bool contractLevelDue(ContractUnitState& s, uint32_t nowMs) { return _riseDue(s.level, s.levelWant, s.levelMs, nowMs); }
+// VERB B, AND b= ON A LOOK (core revision CA1.7): the same hole through another verb. A look that
+// lights part of the field (a meter at a third) under B:b=0 and B:b=200 by turns lit that part
+// 17 times a second on the PSI, with the whole field's level under the gate's step. The unit's
+// brightness fraction goes through the same rule: down at once, up at most once in 340 ms, the
+// newest raise waiting for the window. And through the same TIME as the level: a meter's rows
+// light when L goes up and when B does, so with a window each the two verbs could take turns
+// and light them twice in every 340 ms.
+// Wherever a fork wrote `state.bright = b` from a line (verb B, the b= of a live A, a section
+// being applied), it now writes
+//     contractBrightOffer(state, b);
+// and once a pass, in place of contractLevelDue() alone,
+//     contractHoldsDue(state, now);            (bit 0: state.level changed; bit 1: state.bright did)
+// It goes on reading state.bright. A fork that wants a fall on the LEDs before its next pass
+// calls contractBrightDue(state, now) right after the offer as well. The show reset puts the
+// fraction and what the host wants back at the ceiling (a reset is a blackout or a hand-back,
+// and what lights after it is the gate's business); the time is an anchor.
+inline void contractBrightOffer(ContractUnitState& s, uint8_t b) { s.brightWant = b; }
+inline bool contractBrightDue(ContractUnitState& s, uint32_t nowMs) { return _riseDue(s.bright, s.brightWant, s.levelMs, nowMs); }
+// Both in one call, with the window looked at once (the smallest form for an 8-bit fork). The
+// same as contractLevelDue() followed by contractBrightDue(), but that two raises that are
+// due in one pass are both taken: they are one rise of the light.
+inline uint8_t contractHoldsDue(ContractUnitState& s, uint32_t nowMs) {
+  const uint8_t wasL = s.level, wasB = s.bright;
+  if (s.levelWant < wasL)  s.level = s.levelWant;                      // a fall: at once
+  if (s.brightWant < wasB) s.bright = s.brightWant;
+  if ((s.levelWant != s.level || s.brightWant != s.bright) &&          // what is left is a raise, of one or of both
+      strobeCoolDownExpired(s.levelMs, nowMs, 2 * STROBE_MIN_STATE_MS)) {
+    s.level = s.levelWant; s.bright = s.brightWant; s.levelMs = nowMs;
+  }
+  return (uint8_t)((s.level != wasL ? 1 : 0) | (s.bright != wasB ? 2 : 0));
 }
 
 // ===== v1.3 S9: ONE LIMIT FOR EVERY PATH — THE FIELD GATE =====

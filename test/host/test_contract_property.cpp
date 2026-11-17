@@ -554,6 +554,16 @@ static const Profile kProfiles[] = {
     [](uint32_t t) { if (t == 0) tx("L*A:i=scan,c=ffffff,s=255"); if (t == 170) tx("L*A:i=scan,c=fffffe,s=255"); }, 340, 0, true },
   { "a wipe whose colour changes by one bit every 170 ms", pShow,
     [](uint32_t t) { if (t == 0) tx("L*A:i=wipe,c=ffffff,s=255"); if (t == 170) tx("L*A:i=wipe,c=fffffe,s=255"); }, 340, 0, true },
+  // Verb B, and b= on the look that is up, through a look that lights part of the field (the PSI's
+  // re-verification): a higher one is taken at most once in 340 ms.
+  { "a meter at a third under B at 0 and 200 by turns every 30 ms", []() { pShow(); tx("L*A:i=meter,c=ffffff"); tx("L*L:v=86"); },
+    [](uint32_t t) { if (t == 0) tx("L*B:b=0"); if (t == 30) tx("L*B:b=200"); }, 60, 0, true },
+  { "a meter with one row lit under B at 0 and 200 by turns every 30 ms", []() { pShow(); tx("L*A:i=meter,c=ffffff"); tx("L*L:v=40"); },
+    [](uint32_t t) { if (t == 0) tx("L*B:b=0"); if (t == 30) tx("L*B:b=200"); }, 60, 0, true },
+  { "a meter with one row lit and b= on the look at 0 and 200 by turns", []() { pShow(); tx("L*A:i=meter,c=ffffff"); tx("L*L:v=40"); },
+    [](uint32_t t) { if (t == 0) tx("L*A:b=0"); if (t == 30) tx("L*A:b=200"); }, 60, 0, true },
+  { "a meter under L and B by turns (each verb's rise in the other's window)", []() { pShow(); tx("L*A:i=meter,c=ffffff"); },
+    [](uint32_t t) { if (t == 0) tx("L*L:v=40"); if (t == 20) tx("L*B:b=0"); if (t == 40) tx("L*B:b=255"); if (t == 60) tx("L*L:v=0"); }, 80, 0, true },
   // KNOWN, NOT FIXED: two looks that each light a part of the field, by turns as fast as S4 lets
   // them. Every one of these keeps the whole-field limits. A limit on them needs a gate with a
   // state for each region (the spec's S12).

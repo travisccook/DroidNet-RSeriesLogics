@@ -411,7 +411,12 @@ static void test_s9_paths() {
   run(40);  CHECK(fieldLevel(FLD) == 160);                                 // 340 ms after it last lit
   // a look that only dims a little is not a blackout, and its way back is not an onset
   // (the step is more than a tenth of the ceiling: 17 levels of the owner's 160)
+  // (CA1.7: a higher B is taken at most once in 340 ms, whatever its size: contractBrightDue. So
+  // each of these comes 400 ms after the B that last went up.)
+  run(400);
   send("LFB:b=240"); run(20); CHECK(fieldLevel(FLD) == 150); send("LFB:b=255"); run(20); CHECK(fieldLevel(FLD) == 160);
+  send("LFB:b=240"); run(20); CHECK(fieldLevel(FLD) == 150); send("LFB:b=255"); run(20); CHECK(fieldLevel(FLD) == 150);   // 40 ms after it: it waits
+  run(300); CHECK(fieldLevel(FLD) == 160);
   run(400);
   send("LFB:b=220"); run(20); CHECK(fieldLevel(FLD) == 138);              // a dip of more than a step is a swing,
   send("LFB:b=255"); run(20); CHECK(fieldLevel(FLD) == 160);              // and the way back an onset (the first in a long time)
@@ -844,6 +849,44 @@ static void test_ca16() {
   }
   CHECK(!redEarly && redAt != 0 && redAt == fullAt);                          // never dimmed: a held frame is not shown
   CHECK(fullAt != 0 && fullAt - whiteAt >= 340 && fullAt - whiteAt <= 370);   // and it lights 340 ms after the white did
+
+  // VERB B MOVES PART OF THE FIELD TOO (the PSI's re-verification, CA1.7): a meter with one row
+  // lit is a tenth of the display, under the gate's step, and B:b=0 / B:b=200 every 30 ms lit
+  // that row as often as the lines came. A higher B, or a higher b= on the look that is up, is
+  // taken at most once in 340 ms; a lower one at once.
+  resetAll(); run(500);
+  send("**M:v=show"); send("LFA:i=meter,c=ffffff"); send("LFL:v=40"); run(600);
+  CHECK(FLD->px(0, 9).r == 160 && FLD->px(0, 8).r == 0);                    // one row of ten
+  { bool on = true; uint32_t lastOn = 0; int ons = 0; uint32_t closest = 0xFFFFFFFFu;
+    for (uint32_t t = 0; t < 5000; t += 10) {
+      if (t % 30 == 0) send((t / 30) % 2 ? "LFB:b=200" : "LFB:b=0");
+      _mock_millis += 10; frame();
+      const bool now = FLD->px(3, 9).r != 0;
+      if (now && !on) { if (ons && _mock_millis - lastOn < closest) closest = _mock_millis - lastOn; lastOn = _mock_millis; ons++; }
+      on = now;
+    }
+    CHECK(ons >= 10 && ons <= 15 && closest >= 340); }                      // (it was 80 in these 5 s)
+  resetAll(); run(500);
+  send("**M:v=show"); send("LFA:i=meter,c=ffffff"); send("LFL:v=40"); run(600);
+  { bool on = true; uint32_t lastOn = 0; int ons = 0; uint32_t closest = 0xFFFFFFFFu;
+    for (uint32_t t = 0; t < 5000; t += 10) {
+      if (t % 30 == 0) send((t / 30) % 2 ? "LFA:b=200" : "LFA:b=0");        // the same through b= on the look that is up
+      _mock_millis += 10; frame();
+      const bool now = FLD->px(3, 9).r != 0;
+      if (now && !on) { if (ons && _mock_millis - lastOn < closest) closest = _mock_millis - lastOn; lastOn = _mock_millis; ons++; }
+      on = now;
+    }
+    CHECK(ons >= 5 && ons <= 15 && closest >= 340); }
+  // a lower B is at once, the newest raise is the one that lands, and X is not a way round it
+  resetAll(); run(500);
+  send("**M:v=show"); send("LFA:i=solid,c=ffffff"); run(600);
+  send("LFB:b=128"); run(20); CHECK(fieldLevel(FLD) == 80 && gContract[0].bright == 128);
+  send("LFB:b=255"); run(20); CHECK(gContract[0].bright == 255);            // the first raise in a long time
+  send("LFB:b=64"); run(20);  CHECK(gContract[0].bright == 64);
+  send("LFB:b=255"); run(10); send("LFB:b=200"); run(100);
+  CHECK(gContract[0].bright == 64 && gContract[0].brightWant == 200);       // waits, and the newer one replaces it
+  run(250); CHECK(gContract[0].bright == 200);
+  send("LFX"); CHECK(gContract[0].bright == 255 && gContract[0].brightWant == 255);   // the reset puts it back at the ceiling
 
   // VERB L MOVES PART OF THE FIELD (the PSI review's finding, the same on this board): a meter
   // with L:v=255 and L:v=128 by turns every 50 ms blinked its top half ten times a second, and

@@ -708,7 +708,7 @@ static inline void _applyLook(uint8_t u, ContractLookPatch lp, uint32_t now) {
   const ContractUnitState was = g;
   if (lp.has & LP_COLOR)   g.color = lp.color;
   if (lp.has & LP_SPEED)   g.speed = lp.speed;
-  if (lp.has & LP_BRIGHT)  g.bright = lp.bright;  // a fraction of the ceiling (S6)
+  if (lp.has & LP_BRIGHT)  { contractBrightOffer(g, lp.bright); contractHoldsDue(g, now); }   // a fraction of the ceiling (S6); a raise at most once in 340 ms
   if (lp.has & LP_BEATMOD) g.beatMod = lp.beatMod;
   if (lp.has & LP_AM)      g.accentMode = lp.accentMode;
   if (lp.has & LP_EVERY)   g.accentEvery = lp.every;
@@ -779,12 +779,16 @@ inline void applyContractToUnit(uint8_t u, const ParsedContract& p, uint16_t lin
     case CV_LEVEL:
       // Drives the meter look. A higher level is taken at most once in 340 ms (S9 for a part of
       // the field: contractLevelDue); one that has to wait is taken by contractTick().
-      if (pr.hasLevel) { contractLevelOffer(g, pr.level); contractLevelDue(g, now); }
+      if (pr.hasLevel) { contractLevelOffer(g, pr.level); contractHoldsDue(g, now); }
       break;
     case CV_BRIGHT:
       if (!contractBrightHonoured(g)) break;      // S6: only in show mode (a host sends B after M:v=show);
                                                   // every reset clears it, so a B never outlives its show
-      g.bright = pr.hasBright ? pr.bright : (pr.hasLevel ? pr.level : g.bright);   // a fraction of the ceiling
+      // A fraction of the ceiling. Down at once; up at most once in 340 ms, the unit's level
+      // (verb L) and this sharing the one window (contractHoldsDue: a raise that has to wait is
+      // taken by contractTick()).
+      contractBrightOffer(g, pr.hasBright ? pr.bright : (pr.hasLevel ? pr.level : g.brightWant));
+      contractHoldsDue(g, now);
       _present(u, now);                           // a contract look takes it at its next frame; a native look through
       break;                                      // _nativeBright() (it survives restoreSettings()). Both through the S9 gate.
     case CV_STOP:
@@ -853,7 +857,7 @@ inline void contractTick() {
     if (contractWatchdogExpired(g, gLastLineMs, now)) _boundary(u, 'i', 0);   // L2: the host went away
     ContractLookPatch lp;
     if (liveLookDue(g, now, lp)) _applyLook(u, lp, now);                      // S4: a held live look's window ended
-    contractLevelDue(g, now);                                                 // S9: a held raise of the meter's level
+    contractHoldsDue(g, now);                                                 // S9: a held raise of the meter's level (L) or of the brightness (B, b=)
     if (gRise[u] && (uint32_t)(now - gRiseMs[u]) >= ENGINE_FRAME_MS) {        // S9: the engine has drawn the brighter native
       contractNativeLevel(g, gRiseLevel[u], now); gRise[u] = false;           // look by now: tell the gate it lit
       if (gRiseLevel[u] != 0) contractLookForced(g, contractLookSigNative((int)gEngineSeq[u]), now);
@@ -876,7 +880,7 @@ inline void contractTick() {
     _arm(u);
     if (!contractLookContinues(g, s.effect, s.nativeCode, s.speed)) { g.startMs = now; contractLookRestart(g); }   // S11
     g.effect = s.effect; g.nativeCode = s.nativeCode; g.color = s.color; g.speed = s.speed;
-    g.bright = s.bright;
+    contractBrightOffer(g, s.bright); contractHoldsDue(g, now);
     g.beatMod = s.beatMod; g.accentMode = s.accentMode; g.accentEvery = s.accentEvery;
     g.curSection = (int8_t)idx; g.sectionStart = s.atBeat;
     g.sectionEnd = (idx + 1 < g.scoreLen) ? gScore[u][idx + 1].atBeat : (s.atBeat + 9999);

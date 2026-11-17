@@ -1237,6 +1237,43 @@ static void test_level_hold() {
         was = 0;
       }
     } }
+  // CA1.7: verb B and b= go through the same rule, and through the same window as the level
+  { ContractUnitState b;
+    CHECK(b.bright == 255 && b.brightWant == 255 && !contractBrightDue(b, 1000) && contractHoldsDue(b, 1000) == 0);
+    contractBrightOffer(b, 0);   CHECK(b.bright == 255 && contractBrightDue(b, 1000) && b.bright == 0 && b.levelMs == 0);   // down: at once
+    contractBrightOffer(b, 200); CHECK(contractBrightDue(b, 1010) && b.bright == 200 && b.levelMs == 1010);                 // up: the first
+    contractBrightOffer(b, 0);   CHECK(contractBrightDue(b, 1040) && b.bright == 0);
+    contractBrightOffer(b, 200); CHECK(!contractBrightDue(b, 1070) && b.bright == 0 && !contractBrightDue(b, 1349));          // up again: it waits
+    contractBrightOffer(b, 90);  CHECK(!contractBrightDue(b, 1100) && contractBrightDue(b, 1350) && b.bright == 90 && b.levelMs == 1350);   // the newest
+    // ONE window for both: L may not go up 10 ms after B did, nor B after L
+    contractLevelOffer(b, 255);  CHECK(!contractLevelDue(b, 1360) && b.level == 0 && contractLevelDue(b, 1690) && b.levelMs == 1690);
+    contractBrightOffer(b, 255); CHECK(!contractBrightDue(b, 1700) && contractHoldsDue(b, 2029) == 0 && contractHoldsDue(b, 2030) == 2 && b.bright == 255);
+    // contractHoldsDue(): both in one call. Falls at once, each by itself; two raises due in one pass are both taken
+    contractLevelOffer(b, 10); contractBrightOffer(b, 20);
+    CHECK(contractHoldsDue(b, 2040) == 3 && b.level == 10 && b.bright == 20 && b.levelMs == 2030);
+    contractLevelOffer(b, 200); contractBrightOffer(b, 5);
+    CHECK(contractHoldsDue(b, 2050) == 2 && b.level == 10 && b.bright == 5);          // B fell; L waits
+    contractBrightOffer(b, 250);
+    CHECK(contractHoldsDue(b, 2369) == 0 && contractHoldsDue(b, 2370) == 3 && b.level == 200 && b.bright == 250 && b.levelMs == 2370);
+    CHECK(contractHoldsDue(b, 2371) == 0);
+    const uint32_t ms = b.levelMs; contractBrightOffer(b, 7); contractHoldsDue(b, 2400); contractOnStop(b, 255);
+    CHECK(b.bright == 255 && b.brightWant == 255 && b.level == 0 && b.levelMs == ms);   // the reset: back at the ceiling, the time kept
+    // a storm of L and B at any times: what a meter's rows show (level and brightness) goes up at
+    // most once in 340 ms, by either verb, and a fall of either is never held
+    uint32_t now = 5000, lastUp = 0; bool any = false; uint8_t wasB = b.bright, wasL = b.level;
+    for (int i = 0; i < 200000; i++) {
+      now += 1u + gateRnd(gateRnd(5) ? 40 : 700);
+      if (gateRnd(3)) contractBrightOffer(b, (uint8_t)(gateRnd(3) ? gateRnd(256) : (gateRnd(2) ? 255 : 0)));
+      if (gateRnd(3) == 0) contractLevelOffer(b, (uint8_t)(gateRnd(3) ? gateRnd(256) : (gateRnd(2) ? 255 : 0)));
+      const uint8_t beforeB = b.bright, beforeL = b.level;
+      const uint8_t changed = (i % 3 == 0) ? (uint8_t)((contractLevelDue(b, now) ? 1 : 0) | (contractBrightDue(b, now) ? 2 : 0)) : contractHoldsDue(b, now);
+      CHECK(((changed & 1) != 0) == (b.level != beforeL) && ((changed & 2) != 0) == (b.bright != beforeB));
+      CHECK(b.brightWant >= b.bright && b.levelWant >= b.level);
+      if (b.brightWant < beforeB) CHECK(b.bright == b.brightWant);
+      if (b.levelWant < beforeL) CHECK(b.level == b.levelWant);
+      if (b.bright > wasB || b.level > wasL) { if (any) CHECK(now - lastUp >= 2 * STROBE_MIN_STATE_MS); lastUp = now; any = true; }
+      wasB = b.bright; wasL = b.level;
+    } }
   // the reset is not a way round it: X, then the same raise again
   ContractUnitState x;
   levelLine(x, 255, 1000); contractOnStop(x, 255);

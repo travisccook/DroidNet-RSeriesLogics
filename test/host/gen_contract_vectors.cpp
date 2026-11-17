@@ -91,6 +91,18 @@ static void levelPass(uint32_t nowMs, int v, bool reset = false) {
   row({ gLevelSeq, reset ? 1 : 0, (long long)nowMs, v, changed ? 1 : 0, gLevelUnit.level, gLevelUnit.levelWant, (long long)gLevelUnit.levelMs });
 }
 
+// Verb L and verb B together (CA1.7: contractHoldsDue, one window for both). One row is one pass:
+// reset = 1 runs the show reset first; v >= 0 is an L line, b >= 0 a B line or a b= (-1: none);
+// then contractHoldsDue(). `changed`: what it returned (bit 0 the level, bit 1 the brightness).
+static void holdsPass(uint32_t nowMs, int v, int b, bool reset = false) {
+  if (reset) contractShowReset(gLevelUnit, 255);
+  if (v >= 0) contractLevelOffer(gLevelUnit, (uint8_t)v);
+  if (b >= 0) contractBrightOffer(gLevelUnit, (uint8_t)b);
+  const uint8_t changed = contractHoldsDue(gLevelUnit, nowMs);
+  row({ gLevelSeq, reset ? 1 : 0, (long long)nowMs, v, b, changed, gLevelUnit.level, gLevelUnit.levelWant, gLevelUnit.bright, gLevelUnit.brightWant,
+        (long long)gLevelUnit.levelMs });
+}
+
 // A C line with all four keys, received at seedMs.
 static void seedClock(BeatClock& bc, int bpm, uint32_t ph, int bpb, long beat, uint32_t seedMs) {
   ContractParams pr;
@@ -461,6 +473,40 @@ int main(int argc, char** argv) {
       levelPass(now, v, (r >> 20) % 61 == 0);
     }
   }
+  // CA1.7: verb L and verb B (and b=) through one window. STATEFUL. A unit starts with its
+  // brightness at the ceiling (255) and its level at 0, and the show reset puts both back.
+  group("contractHoldsDue", "\"seq\", \"reset\", \"nowMs\", \"v\", \"b\"",
+        "\"changed\", \"level\", \"levelWant\", \"bright\", \"brightWant\", \"riseMs\"");
+  // 1. b=0 and b=200 by turns every 30 ms (the PSI's finding), a pass every 10 ms.
+  levelSeq();
+  for (uint32_t t = 1000; t < 3000; t += 10) holdsPass(t, -1, t % 30 == 0 ? ((t / 30) % 2 ? 200 : 0) : -1);
+  // 2. A raise that waits, a newer one, a fall that cancels it, the window's edges, the reset.
+  levelSeq();
+  holdsPass(1000, -1, 0); holdsPass(1010, -1, 200); holdsPass(1040, -1, 0); holdsPass(1070, -1, 200); holdsPass(1100, -1, 90);
+  holdsPass(1349, -1, -1); holdsPass(1350, -1, -1); holdsPass(1351, -1, -1); holdsPass(1400, -1, 255); holdsPass(1420, -1, 60);
+  holdsPass(1689, -1, 61); holdsPass(1690, -1, -1); holdsPass(1700, -1, 255, true); holdsPass(1710, -1, 0); holdsPass(1720, -1, 255);
+  holdsPass(2029, -1, -1); holdsPass(2030, -1, -1);
+  // 3. L and B by turns: one window for both, so the two verbs cannot take turns inside it.
+  levelSeq();
+  for (uint32_t t = 1000; t < 3000; t += 10) {
+    const uint32_t k = (t / 20) % 4;
+    holdsPass(t, t % 20 == 0 && (k == 0 || k == 2) ? (k == 0 ? 255 : 0) : -1, t % 20 == 0 && (k == 1 || k == 3) ? (k == 1 ? 0 : 255) : -1);
+  }
+  // 4. Two raises due in one pass are both taken; a fall of one while the other waits.
+  levelSeq();
+  holdsPass(1000, 100, 100); holdsPass(1010, 50, 50); holdsPass(1020, 200, 200); holdsPass(1339, -1, -1); holdsPass(1340, -1, -1);
+  holdsPass(1350, 250, 20); holdsPass(1679, -1, 30); holdsPass(1680, -1, -1); holdsPass(1690, 0, 255); holdsPass(2020, -1, -1);
+  // 5. A walk.
+  levelSeq();
+  { uint32_t x = 0x7654321u, now = 9000;
+    for (int i = 0; i < 500; i++) {
+      x = x * 1664525u + 1013904223u;
+      const uint32_t r = x >> 8;
+      now += (r % 7 == 0) ? 10 + (r >> 4) % 500 : 10 + (r >> 4) % 40;
+      const int b = (r >> 12) % 3 == 0 ? -1 : ((r >> 14) % 5 == 0 ? 255 : ((r >> 14) % 5 == 1 ? 0 : (int)((r >> 17) % 256)));
+      const int v = (r >> 9) % 4 != 0 ? -1 : (int)((r >> 3) % 256);
+      holdsPass(now, v, b, (r >> 20) % 61 == 0);
+    } }
   // CA1.3: the integer clock, piece by piece, so a mirror can be pinned on each step.
   // The clock position long after the seed, where a float clock drifted: the same C line as
   // beatPosAt, read up to 24 days later and across the millis() wrap. `units` is the exact
