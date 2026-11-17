@@ -633,9 +633,13 @@ static void test_v1_effect_timing() {
   for (int sp = 0; sp <= 255; sp += 5)              // every period, odd ones included: never past 255
     for (uint32_t t = 0; t < 2100; t++) CHECK(fxPulseBright(t, (uint8_t)sp) <= 255);
   const int want[] = { 0, 1, 2, 3, 2, 1, 0, 1 };     // ping-pong on N=4, one step per 30 ms
-  for (int i = 0; i < 8; i++) CHECK(fxScanPos(30u * (uint32_t)i, 255, 4, false) == want[i]);
-  CHECK(fxScanPos(29, 255, 4, false) == 0 && fxScanPos(30, 255, 4, false) == 1);
-  CHECK(fxScanPos(30u * 7u, 255, 6, true) == 1 && fxScanPos(30u * 5u, 255, 6, true) == 5);   // a ring wraps
+  // CA1.7: a lap there and back is never under a second (4 positions: 6 steps of 167 ms), and
+  // round a ring never under FX_CYCLE_MIN_MS (6 positions: 6 steps of 114 ms)
+  CHECK(FX_SCAN_LAP_MIN_MS == 1000 && fxScanStepMs(255, 4, false) == 167 && fxScanStepMs(255, 6, true) == 114 && fxScanStepMs(255, 28, false) == 30);
+  for (int i = 0; i < 8; i++) CHECK(fxScanPos(167u * (uint32_t)i, 255, 4, false) == want[i]);
+  CHECK(fxScanPos(166, 255, 4, false) == 0 && fxScanPos(167, 255, 4, false) == 1);
+  CHECK(fxScanPos(114u * 7u, 255, 6, true) == 1 && fxScanPos(114u * 5u, 255, 6, true) == 5);   // a ring wraps
+  CHECK(fxScanPos(30u * 3u, 255, 28, false) == 3 && fxScanPos(30u * 54u, 255, 28, false) == 0);   // a long strand steps as before
   CHECK(fxScanPos(157u * 3u, 0, 8, false) == 3);     // s=0: 157 ms a step
   CHECK(fxScanPos(999, 255, 1, false) == 0 && fxScanPos(999, 255, 0, true) == 0 && fxScanPos(999, 255, 2, false) <= 1);
   for (uint32_t t = 0; t < 4000; t += 7) {
@@ -1118,6 +1122,14 @@ static void test_ca14() {
     CHECK(contractFieldAsk(two, 100, 100, 1250) < 255 && contractFieldAsk(two, 100, 100, 1340) == 255);   // white at that level: an onset in luminance
     ContractUnitState dark; dark.ceil = 255;
     contractNativeStarted(dark, 14, 0, 0, 1000); CHECK(dark.lookSig == 0 && dark.fieldOnsetMs == 0); }
+
+  // CA1.7: a change of colour alone does not restart a look either: it is recoloured in place
+  { ContractUnitState k2; k2.base = CB_LOOK; k2.effect = CE_SCAN; k2.color = red; k2.speed = 90;
+    CHECK(contractLookContinues(k2, CE_SCAN, -1, 90) && contractLookSame(k2, CE_SCAN, -1, red, 90) && !contractLookSame(k2, CE_SCAN, -1, blue, 90));
+    CHECK(!contractLookContinues(k2, CE_SCAN, -1, 91) && !contractLookContinues(k2, CE_COMET, -1, 90) && !contractLookContinues(k2, CE_NATIVE, 4, 90));
+    k2.base = CB_DARK; CHECK(!contractLookContinues(k2, CE_SCAN, -1, 90));
+    k2.base = CB_NATIVE; k2.effect = CE_NATIVE; k2.nativeCode = 4;
+    CHECK(contractLookContinues(k2, CE_NATIVE, 4, 90) && !contractLookContinues(k2, CE_NATIVE, 7, 90) && !contractLookContinues(k2, CE_SCAN, -1, 90)); }
 
   // S11: re-applying the same look does not restart it
   ContractUnitState same; same.base = CB_LOOK; same.effect = CE_GRADIENT; same.color = red; same.speed = 90;

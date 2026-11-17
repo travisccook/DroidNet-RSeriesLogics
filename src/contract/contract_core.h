@@ -846,10 +846,22 @@ inline uint8_t fxCometBright(int p, int head, int N) {
 // third position of the line, which lights 3, 3, then 2 of 8: the field mean moved by an eighth
 // of the ceiling at every step, more than the S9 gate's tenth. Where N is not a multiple of 3
 // one gap of the ring is shorter than the others, and it travels with the rest.
+// A STEP IS NEVER SHORTER THAN 130 ms (CA1.7). Every position of a chase is lit for one step in
+// three, so at 30 ms a step each of them blinked eleven times a second, and so did any two of
+// them side by side: a quarter of a strand of eight. The whole field's level never moves, so
+// no gate saw it. Three steps in 334 ms would do for a ring whose length is a multiple of 3;
+// where it is not, the ring's short gap passes a region as well, and a ring of 8 lights a
+// quarter of itself three times in eight steps: 125 ms a step is a second exactly, and 130
+// leaves room for a frame that is drawn late (test/host/test_fx_regions.cpp works it out for
+// 6 to 28 positions).
+static const uint32_t FX_CHASE_STEP_MIN_MS = 130u;
+inline uint32_t fxChaseStepMs(uint8_t speed) {
+  const uint32_t s = fxStepMs(speed);
+  return s < FX_CHASE_STEP_MIN_MS ? FX_CHASE_STEP_MIN_MS : s;
+}
 inline bool fxChaseLit(int p, uint32_t elapsed, uint8_t speed, int N) {
   if (N <= 0) return false;
-  uint32_t s = fxStepMs(speed); if (!s) s = 1;
-  return ((((uint32_t)p + elapsed / s) % (uint32_t)N) % 3u) == 0u;
+  return ((((uint32_t)p + elapsed / fxChaseStepMs(speed)) % (uint32_t)N) % 3u) == 0u;
 }
 // A ping-pong wipe: fill 0 -> N-1, then DRAIN BACK from the far end. The drain half used to
 // read `p > (ph - N)`, which empties from position 0 upward — i.e. the erase head travelled
@@ -1360,6 +1372,17 @@ inline bool contractLookSame(const ContractUnitState& s, ContractEffect effect, 
          s.effect == effect && s.nativeCode == nativeCode && s.speed == speed &&
          s.color.r == c.r && s.color.g == c.g && s.color.b == c.b;
 }
+// CA1.7: A CHANGE OF COLOUR ALONE DOES NOT RESTART A LOOK EITHER. The same effect, native code
+// and speed in another colour is the look that is up, recoloured in place: its timeline carries
+// on (a scan goes on from where it is, in the new colour). The look gate still times the
+// change of colour (the colour is part of contractLookSig), so the fork asks THIS, not
+// contractLookSame(), before it writes a live A or a section, and restarts the look (its start
+// time, contractLookRestart()) only on false. Restarted by a change of one bit of its colour
+// every 170 ms, a comet or a scan passed the same quarter of the strand six times a second.
+inline bool contractLookContinues(const ContractUnitState& s, ContractEffect effect, int nativeCode, uint8_t speed) {
+  return (s.base == CB_LOOK || s.base == CB_NATIVE) && s.base == ((effect == CE_NATIVE && nativeCode >= 0) ? CB_NATIVE : CB_LOOK) &&
+         s.effect == effect && s.nativeCode == nativeCode && s.speed == speed;
+}
 inline void contractLookRestart(ContractUnitState& s) { s.lookSig = 0; }
 // A look nobody asked the gate about is on the LEDs (a native look that started; a button).
 inline void contractLookForced(ContractUnitState& s, uint32_t sig, uint32_t nowMs) {
@@ -1580,13 +1603,28 @@ inline uint8_t fxPulseBright(uint32_t elapsed, uint8_t speed) {
   const uint32_t tri = (ph < period / 2u) ? (ph * 510u / period) : ((period - ph) * 510u / period);
   return (uint8_t)(tri > 255u ? 255u : tri);         // an odd period's midpoint computes 256
 }
-// scan: ONE lit position on a strand of N, one step per fxStepMs(speed). wrap=false ping-pongs
-// 0..N-1..0 (a panel); wrap=true goes round (a ring).
+// scan: ONE lit position on a strand of N. wrap=false ping-pongs 0..N-1..0 (a panel); wrap=true
+// goes round (a ring).
+// A LAP IS NEVER SHORTER THAN A SECOND there and back, or than FX_CYCLE_MIN_MS round a ring
+// (CA1.7). One position of eight is half of a quarter of the strand, and the quarter it passes
+// goes from dark to half lit: at 30 ms a step, six times a second. There and back every part is
+// passed twice a lap, at uneven times unless it is in the middle, so four passes can fall
+// inside little more than one lap: 770 to 880 ms is the least that keeps every quarter to three
+// a second on 6 to 22 positions (test/host/test_fx_regions.cpp), and a second is the round
+// figure above that. Round a ring every part is passed once a lap, as by a comet.
+static const uint32_t FX_SCAN_LAP_MIN_MS = 1000u;
+inline uint32_t fxScanStepMs(uint8_t speed, int N, bool wrap) {
+  uint32_t s = fxStepMs(speed);
+  if (N <= 1) return s;
+  const uint32_t steps = wrap ? (uint32_t)N : ((uint32_t)N - 1u) * 2u;      // widened: 2*N wraps a 16-bit int past 16383
+  const uint32_t least = ((wrap ? FX_CYCLE_MIN_MS : FX_SCAN_LAP_MIN_MS) + steps - 1u) / steps;
+  return s < least ? least : s;
+}
 inline int fxScanPos(uint32_t elapsed, uint8_t speed, int N, bool wrap) {
   if (N <= 1) return 0;
-  const uint32_t step = elapsed / fxStepMs(speed);
+  const uint32_t step = elapsed / fxScanStepMs(speed, N, wrap);
   if (wrap) return (int)(step % (uint32_t)N);
-  const uint32_t span = ((uint32_t)N - 1u) * 2u;     // widened: 2*N wraps a 16-bit int past 16383
+  const uint32_t span = ((uint32_t)N - 1u) * 2u;
   const uint32_t k = step % span;
   return (k < (uint32_t)N) ? (int)k : (int)(span - k);
 }

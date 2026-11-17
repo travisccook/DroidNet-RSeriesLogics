@@ -509,7 +509,12 @@ static inline void _draw(LogicEngineRenderer& r, const ContractUnitState& g, Con
       break;
     }
     case CE_SPARKLE: {
-      uint32_t blk = now / (uint32_t)(80 + (255 - g.speed) / 2);
+      // A new pattern every 350 to 477 ms (CA1.7: it was 80 to 207 ms). Every pattern is drawn
+      // afresh, so a quarter of the display, some twenty LEDs, changes its level by more than a
+      // tenth from one pattern to the next: at 80 ms that was five onsets a second in one
+      // region by a fine observer, with the whole field's level almost still. No more than
+      // three patterns begin in any one second now.
+      uint32_t blk = now / (uint32_t)(350 + (255 - g.speed) / 2);
       uint32_t density = 20u + (uint32_t)g.speed / 4u;                   // ~20..84 % lit
       CRGB c = _scaled(col, bri);
       for (int y = 0; y < H; y++)
@@ -712,7 +717,7 @@ static inline void _applyLook(uint8_t u, ContractLookPatch lp, uint32_t now) {
   // again, which is a change of look at the output.
   const ContractEffect effect = (lp.has & LP_EFFECT) ? lp.effect : g.effect;
   const int nativeCode = (lp.has & LP_EFFECT) ? lp.nativeCode : g.nativeCode;
-  if (!contractLookSame(was, effect, nativeCode, g.color, g.speed)) { g.startMs = now; contractLookRestart(g); }
+  if (!contractLookContinues(was, effect, nativeCode, g.speed)) { g.startMs = now; contractLookRestart(g); }
   if (lp.has & LP_EFFECT) {
     g.effect = lp.effect; g.nativeCode = lp.nativeCode;
     g.base = (lp.effect == CE_NATIVE && lp.nativeCode >= 0) ? CB_NATIVE : CB_LOOK;
@@ -869,7 +874,7 @@ inline void contractTick() {
     if (!contractSectionMayApply(g, now)) continue;
     const ScoreEntry& s = gScore[u][idx];
     _arm(u);
-    if (!contractLookSame(g, s.effect, s.nativeCode, s.color, s.speed)) { g.startMs = now; contractLookRestart(g); }   // S11
+    if (!contractLookContinues(g, s.effect, s.nativeCode, s.speed)) { g.startMs = now; contractLookRestart(g); }   // S11
     g.effect = s.effect; g.nativeCode = s.nativeCode; g.color = s.color; g.speed = s.speed;
     g.bright = s.bright;
     g.beatMod = s.beatMod; g.accentMode = s.accentMode; g.accentEvery = s.accentEvery;

@@ -44,12 +44,15 @@ static void row(std::initializer_list<long long> v) {
 static int gFrameSeq = 0;
 static ContractUnitState gFrame;
 static void frameSeq(int ceil) { gFrameSeq++; gFrame = ContractUnitState(); gFrame.ceil = (uint8_t)ceil; }
-static void frame(uint32_t nowMs, int effect, uint32_t rgb, int level, int lum, bool restart = false) {
+// `peak`: the brightest channel of the frame's brightest LED (CA1.7: an argument of its own; a
+// frame that is the same on every LED has peak = level, which is what -1 asks for).
+static void frame(uint32_t nowMs, int effect, uint32_t rgb, int level, int lum, bool restart = false, int peak = -1) {
   if (restart) contractLookRestart(gFrame);
+  if (peak < 0) peak = level;
   const ContractRGB c = { (uint8_t)(rgb >> 16), (uint8_t)(rgb >> 8), (uint8_t)rgb };
-  const bool drawn = effect == 0 || contractLookGateAt(gFrame, contractLookSig((ContractEffect)effect, c), (uint8_t)level, nowMs);
+  const bool drawn = effect == 0 || contractLookGateAt(gFrame, contractLookSig((ContractEffect)effect, c), (uint8_t)peak, nowMs);
   const uint8_t scale = drawn ? contractFieldScale(gFrame, (uint8_t)level, (uint8_t)lum, nowMs) : 255;
-  row({ gFrameSeq, gFrame.ceil, restart ? 1 : 0, (long long)nowMs, effect, (long long)rgb, level, lum,
+  row({ gFrameSeq, gFrame.ceil, restart ? 1 : 0, (long long)nowMs, effect, (long long)rgb, level, lum, peak,
         drawn ? 1 : 0, scale, gFrame.fieldLit ? 1 : 0, gFrame.fieldRef, gFrame.fieldLitY ? 1 : 0, gFrame.fieldRefY,
         (long long)gFrame.fieldOnsetMs, (long long)gFrame.lookMs, gFrame.fieldRise ? 1 : 0 });
 }
@@ -146,6 +149,10 @@ int main(int argc, char** argv) {
   printf(",\n    \"NATIVE_STEADY_LOGICS\": [");
   { bool first = true; for (int c = 0; c < 256; c++) if (nativeSteadyLogics(c)) { printf("%s%d", first ? "" : ", ", c); first = false; } }
   printf("]");
+  // CA1.7: the shortest step of a chase, the shortest lap of a scan there and back (round a ring
+  // it is FX_CYCLE_MIN_MS, as a comet's), and the level under which a frame is not a look.
+  printf(",\n    \"FX_CHASE_STEP_MIN_MS\": %lu,\n    \"FX_SCAN_LAP_MIN_MS\": %lu,\n    \"LOOK_MIN_LEVEL\": %u",
+         (unsigned long)FX_CHASE_STEP_MIN_MS, (unsigned long)FX_SCAN_LAP_MIN_MS, (unsigned)LOOK_MIN_LEVEL);
   // CA1.5, the shared timing: the shortest cycle of pulse and of wipe, and flash's shortest state.
   printf(",\n    \"FX_CYCLE_MIN_MS\": %lu,\n    \"FX_FLASH_MIN_STATE_MS\": %lu", (unsigned long)FX_CYCLE_MIN_MS, (unsigned long)FX_FLASH_MIN_STATE_MS);
   // S9: the gate's step is more than a tenth of the ceiling and at least 2 levels: ceil / DIV + 1.
@@ -321,7 +328,7 @@ int main(int argc, char** argv) {
     }
   }
   // CA1.4: two measures and the look gate, a frame at a time. STATEFUL, like contractFieldGate.
-  group("contractFrameGate", "\"seq\", \"ceil\", \"restart\", \"nowMs\", \"effect\", \"rgb\", \"level\", \"lum\"",
+  group("contractFrameGate", "\"seq\", \"ceil\", \"restart\", \"nowMs\", \"effect\", \"rgb\", \"level\", \"lum\", \"peak\"",
         "\"drawn\", \"scale\", \"lit\", \"ref\", \"litY\", \"refY\", \"onsetMs\", \"lookMs\", \"rise\"");
   {
     const int solid = (int)CE_SOLID, pulse = (int)CE_PULSE, wipe = (int)CE_WIPE;
@@ -395,6 +402,18 @@ int main(int argc, char** argv) {
     frameSeq(255);
     frame(1000, grad, 0xffe500u, 255, 217); frame(2000, grad, 0xffe500u, 229, 212); frame(3000, grad, 0xffe500u, 255, 182);
     for (uint32_t t = 3200; t <= 3350; t += 10) frame(t, grad, 0xffe500u, 255, 217);
+    // 13. CA1.7: the look gate goes by the frame's BRIGHTEST LED, not by its field level. One
+    //     full column of a 28-column panel is a field level of 9 at most, and here of 3: under
+    //     LOOK_MIN_LEVEL, and a colour anyone can see. Red is up; a blue frame of that kind
+    //     60 ms later is held (not drawn), and drawn from 170 ms. The same field level with no
+    //     LED over 3 is no look: it is drawn at once and does not take the gate.
+    frameSeq(255);
+    frame(1000, solid, red, 200, 42);
+    for (uint32_t t = 1060; t <= 1180; t += 10) frame(t, wipe, blue, 3, 0, false, 255);
+    frameSeq(255);
+    frame(1000, solid, red, 200, 42);
+    for (uint32_t t = 1060; t <= 1100; t += 10) frame(t, pulse, blue, 3, 0, false, 3);
+    frame(1110, pulse, blue, 6, 0, false, 6); frame(1170, pulse, blue, 12, 0, false, 12);
     // 7. A long deterministic walk at three ceilings: looks, levels and luminances from a fixed LCG.
     for (int c : { 37, 160, 255 }) {
       frameSeq(c);

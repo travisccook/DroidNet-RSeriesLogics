@@ -364,8 +364,10 @@ static void test_review_r1_core() {
   const uint32_t started = gContract[0].startMs;
   send("LFA:i=wipe,c=ffffff,at=0"); run(300);
   CHECK(gContract[0].startMs == started && gContract[0].bright == 64 && gContract[0].curSection == 0);
-  send("LFA:i=wipe,c=ff0000,at=0"); run(50);               // a DIFFERENT line for that beat does replace it
-  CHECK(gContract[0].startMs != started && gContract[0].color.g == 0);
+  send("LFA:i=wipe,c=ff0000,at=0"); run(50);               // a DIFFERENT line for that beat does replace it:
+  CHECK(gContract[0].startMs == started && gContract[0].color.g == 0);     // another colour recolours the wipe in place (CA1.7),
+  send("LFA:i=chase,c=ff0000,at=0"); run(200);
+  CHECK(gContract[0].startMs != started && gContract[0].effect == CE_CHASE);   // another look starts it again
 
   // 6: beat indices at the ends of the int32 range are clamped at parse (the sanitized fuzz stage
   // proves the arithmetic; this is the layer taking such lines without harm)
@@ -692,7 +694,16 @@ static void test_rereview() {
     send("LFA:c=ffffff"); run(300);                 CHECK(gContract[0].startMs == t0);
     send("LFA:s=91"); run(300);                     CHECK(gContract[0].startMs != t0);
     const uint32_t t1 = gContract[0].startMs;
-    send("LFA:c=ff0000"); run(300);                 CHECK(gContract[0].startMs != t1); }
+    send("LFA:c=ff0000"); run(300);                 CHECK(gContract[0].startMs == t1 && gContract[0].color.g == 0);   // CA1.7: recoloured in place
+    send("LFA:i=scan"); run(300);                   CHECK(gContract[0].startMs != t1); }
+  // CA1.7: a scan in another colour goes on from where it is. The lit column does not jump back
+  // to the first one, and the new colour comes when the look gate lets it (170 ms after the last).
+  { resetAll(); send("**M:v=show"); send("LFA:i=scan,c=ff0000,s=255"); run(400);
+    int before = -1; for (int x = 0; x < 8; x++) if (FLD->px(x, 0).r > 0) before = x;
+    CHECK(before >= 4);                                                    // 72 ms a column: five columns in
+    send("LFA:i=scan,c=0000ff,s=255"); run(80);
+    int after = -1; for (int x = 0; x < 8; x++) if (FLD->px(x, 0).b > 0) after = x;
+    CHECK(after >= before && FLD->px(after < 0 ? 0 : after, 0).r == 0); }  // on its way still, in blue
   // ...and neither does a section that carries on the look of the one before it
   resetAll(); send("**M:v=show");
   send("LFA:i=gradient,c=ffffff,s=90,at=0"); send("LFA:i=gradient,c=ffffff,s=90,b=128,at=4"); send("LFA:i=solid,c=ffffff,at=8");
@@ -754,11 +765,14 @@ static void test_shared_effect_timing() {
   resetAll(); send("LFA:i=pulse,c=ffffff,s=255,m=255,am=2"); send("**C:bpm=60,ph=0,bpb=4,beat=0");
   levelSwings(30, 120, 10000, gap); CHECK(gap >= 990 && gap <= 1010);      // one swing a beat: the breathe is not added on top
 
-  // scan: one lit column, ping-pong, one step per fxStepMs (30 ms at s=255) on the 8-wide mock panel
+  // scan: one lit column, ping-pong, on the 8-wide mock panel. A lap there and back is never
+  // under a second (CA1.7): 72 ms a step at s=255 (it was 30, and a quarter of the display went
+  // from dark to half lit six times a second).
   resetAll(); send("LFA:i=scan,c=ffffff,s=255");
   int col[16];
   for (int step = 0; step < 16; step++) {
-    _mock_millis += (step == 0) ? 10 : 30; frame();
+    if (step == 0) { _mock_millis += 10; frame(); }
+    else for (int k = 0; k < 9; k++) { _mock_millis += 8; frame(); }
     int lit = -1, count = 0;
     for (int x = 0; x < 8; x++) if (FLD->px(x, 0).r > 0) { lit = x; count++; }
     CHECK(count == 1);

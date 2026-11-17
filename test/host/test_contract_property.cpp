@@ -89,6 +89,11 @@ struct Onsets {
 struct Region {
   int x0, x1, y0, y1;                              // [x0, x1) by [y0, y1)
   bool lit[3] = { false, false, false }; uint32_t at[3][4]; int n[3] = { 0, 0, 0 };   // the last onsets, per observer
+  // THE FINE OBSERVER (CA1.7), for a look running by itself: the gate's own rule on the
+  // region's level and on its luminance (a rise of a step above the last trough is an onset,
+  // a fall of a step under the last peak ends it), with no allowance for a small lit area. It
+  // is what test_fx_regions.cpp holds the core's strand looks to, here on the rendered pixels.
+  bool fLit[2] = { false, false }, fStarted[2] = { false, false }; int fRef[2] = { 0, 0 }; uint32_t fAt[2][16]; int fN[2] = { 0, 0 };
 };
 static const int kRegionBands[3][2] = { { 10, 50 }, { 19, 75 }, { 4, 31 } };   // dark at or below, lit from (% of the ceiling)
 
@@ -106,7 +111,8 @@ struct Watch {
   struct Colour { int darkPct = 10, litPct = 50; bool lit = false; int chroma[3] = { 0, 0, 0 }; long top = 1; bool known = false; uint32_t at = 0; bool any = false; };
   Colour colour[6];              // (the sixth reads a colour from 4 levels up, whatever the ceiling: see reset())
   uint32_t colourMinGap = 0xFFFFFFFFu; long colourChanges = 0;
-  Region regions[17]; int nRegions = 0;            // (h)
+  Region regions[48]; int nRegions = 0;            // (h)
+  int fineMost = 0; uint32_t fineMinGap = 0xFFFFFFFFu; int fineWorst = -1;
   uint32_t regionMinGap = 0xFFFFFFFFu; long regionOnsets = 0; int regionWorst = -1, regionMost = 0;   // most onsets of one region in a second
   int overCeiling = 0;           // (b) frames with a pixel above the ceiling that effect 106 drew
   long writesSeen = 0;           // ...the mock's count of pixel writes, to tell a drawn frame from a held one
@@ -135,8 +141,8 @@ struct Watch {
     add(0, W, 0, H);
     add(0, W / 2, 0, H); add(W / 2, W, 0, H); add(0, W, 0, H / 2); add(0, W, H / 2, H);
     add(0, W / 2, 0, H / 2); add(W / 2, W, 0, H / 2); add(0, W / 2, H / 2, H); add(W / 2, W, H / 2, H);
-    for (int i = 0; i < 4; i++) { const int x0 = (i * (W - cw) + 1) / 3; add(x0, x0 + cw, 0, H); }
-    for (int i = 0; i < 4; i++) { const int y0 = (i * (H - rh) + 1) / 3; add(0, W, y0, y0 + rh); }
+    for (int x0 = 0; x0 + cw <= W; x0++) add(x0, x0 + cw, 0, H);        // every band of a quarter of the columns,
+    for (int y0 = 0; y0 + rh <= H; y0++) add(0, W, y0, y0 + rh);        // and of the rows
   }
   void native(uint32_t now) { if (!expectNative) nativeFrom = now; expectNative = true; expectDark = false; }
   void dark(uint32_t now)   { darkFrom = now; expectDark = true; expectNative = false; expectButton = -1; }
@@ -147,7 +153,7 @@ struct Watch {
     for (Onsets& o : lum) o.n = 0;
     for (Onsets& o : lumNarrow) o.n = 0;
     for (Colour& c : colour) c.known = c.any = false;   // ...nor the contract's change of look
-    for (int i = 0; i < nRegions; i++) for (int b = 0; b < 3; b++) regions[i].n[b] = 0;
+    for (int i = 0; i < nRegions; i++) { for (int b = 0; b < 3; b++) regions[i].n[b] = 0; regions[i].fN[0] = regions[i].fN[1] = 0; }
     expectDark = false;
     if (seq == 14) { ownerDark = true; ownerDarkUp = false; }   // (any other press ends it when the engine starts that one)
     expectButton = held ? seq : -1; buttonFrom = now;
@@ -203,14 +209,15 @@ struct Watch {
     }
     // (h): the regions
     {
-      long sumV[11][33]; int cnt[3][11][33];       // sums over the pixels above and left of (x, y)
-      for (int x = 0; x <= W; x++) { sumV[0][x] = 0; for (int b = 0; b < 3; b++) cnt[b][0][x] = 0; }
+      long sumV[11][33], sumY[11][33]; int cnt[3][11][33];       // sums over the pixels above and left of (x, y)
+      for (int x = 0; x <= W; x++) { sumV[0][x] = sumY[0][x] = 0; for (int b = 0; b < 3; b++) cnt[b][0][x] = 0; }
       for (int y = 0; y < H; y++) {
-        sumV[y + 1][0] = 0; for (int b = 0; b < 3; b++) cnt[b][y + 1][0] = 0;
+        sumV[y + 1][0] = sumY[y + 1][0] = 0; for (int b = 0; b < 3; b++) cnt[b][y + 1][0] = 0;
         for (int x = 0; x < W; x++) {
           const CRGB c = r->px(x, y);
           const int v = c.r > c.g ? (c.r > c.b ? c.r : c.b) : (c.g > c.b ? c.g : c.b);
           sumV[y + 1][x + 1] = sumV[y][x + 1] + sumV[y + 1][x] - sumV[y][x] + v;
+          sumY[y + 1][x + 1] = sumY[y][x + 1] + sumY[y + 1][x] - sumY[y][x] + ((54 * c.r + 183 * c.g + 19 * c.b) >> 8);
           for (int b = 0; b < 3; b++) cnt[b][y + 1][x + 1] = cnt[b][y][x + 1] + cnt[b][y + 1][x] - cnt[b][y][x] + (v * 100 > ceil * kRegionBands[b][0] ? 1 : 0);
         }
       }
@@ -227,6 +234,22 @@ struct Watch {
             int w = 0; for (int k = 0; k < 4 && k < g.n[b]; k++) if (now - g.at[b][(g.n[b] - 1 - k) & 3] < 1000) w++;
             if (w > regionMost) { regionMost = w; regionWorst = i; }
           } else if (g.lit[b] && mean * 100 <= (long)ceil * kRegionBands[b][0]) g.lit[b] = false;
+        }
+        // the fine observer: level, then luminance
+        const int fstep = ceil / 10 + 1;
+        for (int m = 0; m < 2; m++) {
+          const long (*sm)[33] = m ? sumY : sumV;
+          const int x = (int)((sm[g.y1][g.x1] - sm[g.y0][g.x1] - sm[g.y1][g.x0] + sm[g.y0][g.x0]) / area);
+          if (!g.fStarted[m]) { g.fStarted[m] = true; g.fRef[m] = x; g.fLit[m] = x >= fstep; continue; }
+          if (g.fLit[m]) { if (x > g.fRef[m]) g.fRef[m] = x; else if (g.fRef[m] - x >= fstep) { g.fLit[m] = false; g.fRef[m] = x; } }
+          else if (x < g.fRef[m]) g.fRef[m] = x;
+          else if (x - g.fRef[m] >= fstep) {
+            g.fLit[m] = true; g.fRef[m] = x;
+            if (g.fN[m] > 0 && now - g.fAt[m][(g.fN[m] - 1) & 15] < fineMinGap) fineMinGap = now - g.fAt[m][(g.fN[m] - 1) & 15];
+            g.fAt[m][g.fN[m]++ & 15] = now;
+            int w = 0; for (int k = 0; k < 16 && k < g.fN[m]; k++) if (now - g.fAt[m][(g.fN[m] - 1 - k) & 15] < 1000) w++;
+            if (w > fineMost) { fineMost = w; fineWorst = i; }
+          }
         }
       }
     }
@@ -422,9 +445,10 @@ enum : int { BROKE_ONSETS = 1,      // (a), the wide observers: two onsets under
              BROKE_LUMINANCE = 4,   // (f)
              BROKE_COLOUR = 8,      // (g)
              BROKE_OTHER = 16,      // (b) to (e)
-             BROKE_REGION = 32 };   // (h)
+             BROKE_REGION = 32,     // (h)
+             BROKE_FINE = 64 };     // (h), by the fine observer: asserted where a script asks for it
 // ---- the hostile profiles: the rows of the review's table, and three more of the same kind ----
-struct Profile { const char* name; void (*setup)(); void (*at)(uint32_t t); uint32_t period; int expected; };
+struct Profile { const char* name; void (*setup)(); void (*at)(uint32_t t); uint32_t period; int expected; bool fine = false; };
 static void pShow() { tx("**M:v=show"); }
 static const Profile kProfiles[] = {
   { "X between live A lines", pShow,
@@ -521,6 +545,29 @@ static const Profile kProfiles[] = {
   // showed it dimmed, six tenths of a full look lit the half that was dark: four times a second).
   { "a meter at half and a full look by turns, with L going up in between", []() { pShow(); tx("L*L:v=128"); },
     [](uint32_t t) { if (t == 0) tx("L*A:i=meter,c=ffffff"); if (t == 20) tx("L*L:v=255"); if (t == 40) tx("L*L:v=128"); if (t == 170) tx("L*A:i=solid,c=ffffff"); }, 340, 0 },
+  // ---- CA1.7, from the third review: the fine observer on scripts that light a part of the field ----
+  // Recoloured in place: a change of colour alone does not start a look again, so a comet or a
+  // scan whose colour changes by one bit every 170 ms laps as if nothing had been sent.
+  { "a comet whose colour changes by one bit every 170 ms", pShow,
+    [](uint32_t t) { if (t == 0) tx("L*A:i=comet,c=ffffff,s=255"); if (t == 170) tx("L*A:i=comet,c=fffffe,s=255"); }, 340, 0, true },
+  { "a scan whose colour changes by one bit every 170 ms", pShow,
+    [](uint32_t t) { if (t == 0) tx("L*A:i=scan,c=ffffff,s=255"); if (t == 170) tx("L*A:i=scan,c=fffffe,s=255"); }, 340, 0, true },
+  { "a wipe whose colour changes by one bit every 170 ms", pShow,
+    [](uint32_t t) { if (t == 0) tx("L*A:i=wipe,c=ffffff,s=255"); if (t == 170) tx("L*A:i=wipe,c=fffffe,s=255"); }, 340, 0, true },
+  // KNOWN, NOT FIXED: two looks that each light a part of the field, by turns as fast as S4 lets
+  // them. Every one of these keeps the whole-field limits. A limit on them needs a gate with a
+  // state for each region (the spec's S12).
+  { "a scan and a chase by turns every 170 ms", pShow,
+    [](uint32_t t) { if (t == 0) tx("L*A:i=scan,c=ffffff,s=255"); if (t == 170) tx("L*A:i=chase,c=ffffff,s=255"); }, 340, BROKE_FINE, true },
+  { "a scan and a full look by turns every 170 ms", pShow,
+    [](uint32_t t) { if (t == 0) tx("L*A:i=scan,c=ffffff,s=255"); if (t == 170) tx("L*A:i=solid,c=ffffff"); }, 340, BROKE_FINE, true },
+  { "C seeks across sections of solid, scan, comet and wipe",
+    []() { pShow(); tx("L*A:i=solid,c=ffffff,at=0"); tx("L*A:i=scan,c=ffffff,s=255,at=1"); tx("L*A:i=comet,c=ffffff,s=255,at=2"); tx("L*A:i=wipe,c=ffffff,s=255,at=3"); },
+    [](uint32_t t) { if (t % 60 == 0) { char l[40]; snprintf(l, sizeof l, "**C:bpm=120,beat=%d", (int)((t / 60) % 4)); tx(l); } }, 240, BROKE_FINE, true },
+  { "a wipe with a wipe accent over it every 340 ms", []() { pShow(); tx("L*A:i=wipe,c=ffffff,s=255"); },
+    [](uint32_t t) { if (t == 0) tx("L*P:i=wipe,c=ffffff,d=170"); }, 340, BROKE_FINE, true },
+  { "a comet and a full look by turns (510 ms and 170 ms), by the fine observer", pShow,
+    [](uint32_t t) { if (t == 0) tx("L*A:i=comet,c=ffffff,s=255"); if (t == 510) tx("L*A:i=solid,c=ffffff"); }, 680, BROKE_FINE, true },
 };
 static const int kProfileCount = (int)(sizeof kProfiles / sizeof kProfiles[0]);
 static const int kRandomExpected = 0;
@@ -528,6 +575,7 @@ static const int kRandomExpected = 0;
 struct Result {
   int worst = 0; uint32_t minGap = 0xFFFFFFFFu, narrowGap = 0xFFFFFFFFu, lumGap = 0xFFFFFFFFu, colourGap = 0xFFFFFFFFu, regionGap = 0xFFFFFFFFu;
   long regionOnsets = 0; int regionMost = 0;
+  int fineMost = 0; uint32_t fineGap = 0xFFFFFFFFu; bool fine = false;   // the fine observer, and whether this script is held to it
   int overCeiling = 0, notNative = 0, notDark = 0, wdLate = 0;
   long onsets = 0, darkChecked = 0, nativeChecked = 0, contractFrames = 0, lines = 0;   // how much was looked at
   long presses = 0, buttonChecked = 0, colourChanges = 0, lumOnsets = 0; int notButton = 0;
@@ -540,6 +588,8 @@ struct Result {
       if (gW[u].colourMinGap < colourGap) colourGap = gW[u].colourMinGap;
       if (gW[u].regionMinGap < regionGap) regionGap = gW[u].regionMinGap;
       regionOnsets += gW[u].regionOnsets; if (gW[u].regionMost > regionMost) regionMost = gW[u].regionMost;
+      if (gW[u].fineMost > fineMost) fineMost = gW[u].fineMost;
+      if (gW[u].fineMinGap < fineGap) fineGap = gW[u].fineMinGap;
       overCeiling += gW[u].overCeiling; notNative += gW[u].notNative; notDark += gW[u].notDark;
       onsets += gW[u].obs[0].total; darkChecked += gW[u].darkChecked; nativeChecked += gW[u].nativeChecked; contractFrames += gW[u].contractFrames;
       notButton += gW[u].notButton; buttonChecked += gW[u].buttonChecked;
@@ -557,6 +607,7 @@ struct Result {
     if (o.colourGap < colourGap) colourGap = o.colourGap;
     if (o.regionGap < regionGap) regionGap = o.regionGap;
     regionOnsets += o.regionOnsets; if (o.regionMost > regionMost) regionMost = o.regionMost;
+    if (o.fine) { fine = true; if (o.fineMost > fineMost) fineMost = o.fineMost; if (o.fineGap < fineGap) fineGap = o.fineGap; }
     overCeiling += o.overCeiling; notNative += o.notNative; notDark += o.notDark; wdLate += o.wdLate;
     onsets += o.onsets; darkChecked += o.darkChecked; nativeChecked += o.nativeChecked; contractFrames += o.contractFrames; lines += o.lines;
     notButton += o.notButton; presses += o.presses; buttonChecked += o.buttonChecked;
@@ -570,6 +621,7 @@ struct Result {
          | (lumGap < 2 * STROBE_MIN_STATE_MS ? BROKE_LUMINANCE : 0)
          | (colourGap < STROBE_MIN_STATE_MS ? BROKE_COLOUR : 0)
          | (regionMost > 3 ? BROKE_REGION : 0)
+         | (fine && fineMost > 3 ? BROKE_FINE : 0)
          | (overCeiling || notNative || notDark || wdLate || notButton ? BROKE_OTHER : 0);
   }
   void print(const char* verdict, const char* name) const {
@@ -581,6 +633,7 @@ struct Result {
     if (b & BROKE_LUMINANCE) printf(" luminance onsets %u ms apart;", lumGap);
     if (b & BROKE_COLOUR)    printf(" colour changes %u ms apart;", colourGap);
     if (b & BROKE_REGION)    printf(" a region of a quarter of the field or more lit %d times in one second (the closest two %u ms apart);", regionMost, regionGap);
+    if (b & BROKE_FINE)      printf(" by the fine observer a region lit %d times in one second (the closest two %u ms apart);", fineMost, fineGap);
     if (notDark)     printf(" %d frames lit after X;", notDark);
     if (notNative)   printf(" %d frames not native after idle;", notNative);
     if (overCeiling) printf(" %d frames over the ceiling;", overCeiling);
@@ -607,6 +660,18 @@ static Result runProfile(const Profile& p, int rounds) {
     }
     res.take();
   }
+  res.fine = p.fine;
+  return res;
+}
+// A LOOK BY ITSELF, held to the fine observer (CA1.7): no line but the one that starts it.
+static Result runAlone(const char* look, int speed, int round) {
+  mockEngineSize(1, kRearSizes[round % 5][0], kRearSizes[round % 5][1]);
+  begin(); tx("**M:v=show"); tx("L*L:v=160");
+  char l[64]; snprintf(l, sizeof l, "L*A:i=%s,c=ffffff,s=%d", look, speed); tx(l);
+  for (int i = 0; i < 60; i++) step();
+  for (int u = 0; u < 2; u++) { gW[u].fineMost = 0; gW[u].fineMinGap = 0xFFFFFFFFu; for (int i = 0; i < gW[u].nRegions; i++) gW[u].regions[i].fN[0] = gW[u].regions[i].fN[1] = 0; }
+  for (uint32_t t = 0; t < 8000; ) { const uint32_t dt = (round & 1) ? 10 + rnd(6) : 10; step(dt); t += dt; }
+  Result res; res.take(); res.fine = true;
   return res;
 }
 static Result runRandom(int streams) {
@@ -648,11 +713,15 @@ static Result runRandom(int streams) {
 // fixes it clears the bits; a stream that breaks anything else than expected, or that no longer
 // breaks what it is marked for, fails the suite (as KNOWN_BUG does).
 static void verdict(const char* name, const Result& res, int expected) {
-  const int b = res.broke();
+  int b = res.broke();
+  // A script that is a known failure by the fine observer may or may not break the coarse one
+  // too, by where its onsets happen to fall: that bit is not part of what is expected of it.
+  if (expected & BROKE_FINE) b &= ~BROKE_REGION;
   if (getenv("PROPERTY_DISCOVER")) { printf("%2d  %s\n", b, name); return; }
   if (b == expected) { if (b) { res.print("XFAIL", name); gKnown++; } return; }
+  (void)0;
   res.print((b & ~expected) ? "FAIL " : "XPASS", name);
-  printf("      expected to break %d, broke %d (1 onsets, 2 narrow-band onsets, 4 luminance, 8 colour changes, 16 other, 32 regions)\n", expected, b);
+  printf("      expected to break %d, broke %d (1 onsets, 2 narrow-band onsets, 4 luminance, 8 colour changes, 16 other, 32 regions, 64 regions by the fine observer)\n", expected, b);
   gFails++;
 }
 
@@ -674,6 +743,15 @@ int main() {
 
   Result all;
   for (int i = 0; i < kProfileCount; i++) { const Result r = runProfile(kProfiles[i], 10); verdict(kProfiles[i].name, r, kProfiles[i].expected); all.add(r); }
+  // every look by itself, at four speeds, on every display size: the fine observer
+  static const char* const kAlone[] = { "solid", "flash", "pulse", "rainbow", "scan", "sparkle", "meter", "comet", "chase", "wipe",
+                                        "gradient", "colorcycle", "twinkle" };
+  for (const char* look : kAlone) {
+    Result r;
+    for (int sp : { 255, 200, 128, 0 }) for (int round = 0; round < 10; round++) r.add(runAlone(look, sp, round));
+    char name[64]; snprintf(name, sizeof name, "%s by itself", look);
+    verdict(name, r, 0); all.add(r);
+  }
   Result rr = runRandom(streams);
   // (h) is ASSERTED on the profiles above: every look by itself, and the scripts that light a
   // part of the field. In the random streams it is measured and printed, not asserted: they mix

@@ -9,6 +9,8 @@
 #   1g. the same, built with stand-ins for an AVR fork's flash-string hooks
 #   1h. no floating point in the core or in the per-frame layer
 #   1i. S10: the native allow-list and its speeds against a model of the stock sequences
+#   1j. every shared look by itself, on strands of 6 to 28 positions: no part of a strand lights
+#       more than three times a second (pure core)
 #   1b. wifi_connect_core.h FSM unit tests
 #   1c. wdp_announce_core.h WDP device announce unit tests (shared with the PSI and Flthy forks)
 #   1d. wdp_fork.h: this fork's real WDP identity builds its line, and the Serial1 adapter
@@ -122,6 +124,10 @@ fi
 # test, and is confirmed at the bench". This is the test: every code on the core's logics list
 # must pass S9's own onset count at the speed the core starts it with, by the model.
 stage 1i "S10: the native allow-list against a model of the stock sequences" "$CXX" -std=c++17 -Wall -Wextra -O2 test_native_s10.cpp
+# CA1.7: the gate measures a whole field, and a look that moves its light along the strand can
+# blink every part of it with the field's level standing still. The shared timing has to keep
+# clear of that by itself: every look alone, every speed, every strand length from 6 to 28.
+stage 1j "every shared look by itself: no part of a strand lights more than three times a second" "$CXX" -std=c++11 -Wall -Wextra -O2 test_fx_regions.cpp
 stage 2  "ContractLogics.h firmware type-check" "$CXX" -std=c++17 -Wall -Wextra compile_contract_logics.cpp
 # The 2026-11-15 review's findings as behaviour tests on mock_engine.h, which models sequence
 # selection, restoreSettings() and the engine's 25th-entry overrun. A finding that is not fixed
