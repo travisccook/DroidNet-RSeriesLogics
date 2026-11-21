@@ -31,6 +31,7 @@
 #   7. Marcduino prefix-collision guard (registered actions + library catalog snapshot)
 #   8. native #LEBRI brightness parser fuzz + differential (ASan/UBSan, deterministic)
 #   9. REAL cross-compile for the ESP32 (optional; needs PlatformIO)
+#   R2rev. REVIEW FINDINGS (2026-11-21): logic's light against v1.4 section 9; fails while the defects are in
 #
 # How it runs:
 #   * Any C++17 compiler: clang++ if present, else g++ (override with CXX=...).
@@ -336,6 +337,12 @@ else
   SKIPPED="$SKIPPED 9(no-PlatformIO)"
 fi
 fi
+
+# REVIEW FINDINGS (2026-11-21, an independent review of fe1c8ad..8174454). LAST on purpose: it FAILS
+# while the defects it names are in the code, and a failing stage ends the run (set -e), so every
+# stage above has run and passed by the time it does. ONLY="1 2g ... 9" leaves it out. Each check
+# in it is a finding: keep it (it passes once fixed) or turn it into a KNOWN_BUG entry.
+stage R2rev "REVIEW FINDINGS: logic's light against v1.4 section 9 on the real layer (fails while the defects are in)" "$CXX" -std=c++17 -O1 -Wall -Wextra test_review_r2_findings.cpp
 
 echo
 echo "stages run:$RAN"
