@@ -1,10 +1,11 @@
 # Changing the shared contract core
 
-Six files are byte-identical in the three DroidNet board forks (RSeries Logics, PSI Pro, Flthy HPs). They are
+Seven files are byte-identical in the three DroidNet board forks (RSeries Logics, PSI Pro, Flthy HPs). They are
 listed in `test/host/core-files.txt`:
 
 - `src/contract/contract_core.h`: the wire parser, the beat clock, the safety limits, the score, the effect math.
-- `test/host/test_contract_core.cpp`, `test/host/test_contract_v13.cpp`, `test/host/fuzz_parsers.cpp`: its tests.
+- `test/host/test_contract_core.cpp`, `test/host/test_contract_v13.cpp`, `test/host/fuzz_parsers.cpp`,
+  `test/host/test_fx_regions.cpp`: its tests.
 - `src/wdp/wdp_announce_core.h`, `test/host/test_wdp_announce_core.cpp`: the WDP device announce and its tests.
 
 **RSeries is where they are edited.** A copy in the PSI or Flthy fork is never edited by hand.
@@ -782,3 +783,143 @@ a field level of 3 with one LED at full is a look and is held; a field level of 
 A fork whose strand length is a constant pays 18 to 22 B for the scan's floor. Verb B's hold, on the colour
 fork's probe with verb L wired already: 68 B more (three offers in place of three writes, and
 `contractHoldsDue()` in place of `contractLevelDue()`); 154 B over a fork that has wired neither.
+
+## Core revision CA2 (2026-11-21): contract v1.4, the ids `logic`, `projector` and `vu`
+
+The core of contract v1.4 (spec `2026-11-21-driveable-animation-contract-v1.4-design.md` in the Signal Booster):
+`CONTRACT_VERSION "1.4"`, `CONTRACT_RELEASE 2`, three effect ids and the math two of them need. No key, verb, accent,
+score-entry field, `ContractParams` field or `ContractUnitState` field is new, and no existing function behaves
+differently. Everything here is host-tested and cross-compiled; nothing has run on a board.
+
+### What changed
+
+| | What | Where |
+| --- | --- | --- |
+| 1 | `CE_LOGIC` (16), `CE_PROJECTOR` (17), `CE_VU` (18), appended, and their names in the effect table | `_effectFromName()` |
+| 2 | none of the three is an accent: `ae=` naming one is no accent (the default of `accentEffectAllowed()`, now a test) | |
+| 3 | `logic`'s colour (N1): `fxLogicOwn(c)`, `fxLogicHue(c)`; `FX_LOGIC_GREY` 32, `FX_LOGIC_HUE_BASE` 170 | |
+| 4 | `logic`'s pace (N2): `fxLogicPace(s, x, floor)`; `FX_LOGIC_FADE_MIN` 1, `FX_LOGIC_DELAY_MIN` 10 | the region model kept them |
+| 5 | `logic`'s pump: `fxLogicPumpFires()`, `fxLogicPumpAmount()`; `FX_LOGIC_PUMP_MIN_MS` 400 | not in the spec: below |
+| 6 | `projector`'s row and its crumbling rule (N6, N7): `fxProjectorSlot(c, slot)`, `fxProjectorTake(cur, cand)`; `FX_PROJECTOR_STEP_MIN_MS` 50, `FX_PROJECTOR_STEP_MAX_MS` 149, `FX_PROJECTOR_BRIGHT_MS` 340 | |
+| 7 | `vu` (N10): no function of its own. While pumped it offers `envBright(255, m, beatAccentAmount(...))` to the level hold | vector group `vuLevel` |
+| 8 | the query reply says `ver=1.4,rel=2` | `contractFormatQuery()` |
+
+Tests, first: `test_contract_v13.cpp` holds each function on its edges (a grey 31 and 32 apart, every anchor of the
+hue wheel and one plain hue each side, `s` 0, 127, 128, 129 and 255 against fades 0, 1, 3, 255 and delays 0, 10, 40,
+255, the ten slots of nine rows, `fxProjectorTake()` for every pair of the blue row, the pump against S2's choice at
+every tempo), the three names and the new reply. The expected values were worked out from the spec's words by a model
+written apart from the core. `fuzz_parsers.cpp`'s own name tables have the names, by hand. `test_fx_regions.cpp`
+(stage 1j) holds `projector`'s step rule to three onsets a second in every window of a jewel (below). And a new
+fork-local stage, 1k, `test/host/test_logic_regions.cpp`: the measure of the spec's section 9 for `logic`, on a model
+of the walk.
+
+### What a fork has to do
+
+Re-copy the seven shared files (`core-files.txt`; `test_logic_regions.cpp` is not one of them). Then:
+
+| Fork | What | A fork has to |
+| --- | --- | --- |
+| all | three new ids parse; a v1.3 line means what it meant | draw its own row of v1.4's table for each id (below), and say `contract.1.4` in its WDP caps (PSI: `contract.1.4s`) |
+| PSI, Flthy | the stand-ins | PSI: `logic` and `projector` draw as `sparkle`, `vu` as `meter` wherever `CE_METER` is tested. Flthy: `logic` draws `twinkle`, `projector` its own look (Task F4; `sparkle` until then), `vu` `meter`; `FLTHY_FX_MAX` and the LED function range take the three codes |
+| logics | `logic` and `vu` (Task F2) | pump `logic` with `fxLogicPumpAmount()` where every other look uses `beatAccentAmount()`; give the engine the level, not a fraction of 255 (below) |
+| Flthy | `projector` (Task F4) | the step rule of N7 as `test_fx_regions.cpp` models it: the brightening step waits `FX_PROJECTOR_BRIGHT_MS` after the last one and after `levelMs`, and sets `levelMs` |
+| all | the tests and scenario files that spell `ver=1.3,rel=1` or `contract.1.3` | spell `ver=1.4,rel=2` and `contract.1.4` |
+
+This fork, at CA2, has the stand-ins only (`logic` draws `twinkle`, `projector` `sparkle`, `vu` `meter`).
+
+### Readings of the spec, and one rule it did not have
+
+Where the spec could be read more than one way, or turned out short, the safe reading was taken. Each is written down
+here, with its section.
+
+1. **`logic`'s pump rises at most every 400 ms, not every 340 (v1.4 N3, N4 and section 9).** N4 says "the pump's own
+   floor (S2) keeps its rises 340 ms apart". That is true of the level the layer asks for. It is not true of the light:
+   N3 has the level reach each LED at that LED's next step, so the field takes each beat's level 0 to about 130 ms
+   after the beat (a step of the walk is `fade + 1` frames; an LED in a key pause is later still), and by a different
+   amount each beat. The model of the walk put four onsets into one second whenever the beats were 341 to about 380 ms
+   apart: in a region by the fine reading on every display, and over the whole field by the gate's own count at the
+   owner's brightness 255. It happened at every pace, the stock one included, and worse at the slowest, so section 9's
+   lever, the floor of N2, cannot move it. The safe reading of section 9's rule ("three onsets or fewer") is to keep it:
+   `fxLogicPumpFires()` is `beatAccentFires()` with the rate floor at `FX_LOGIC_PUMP_MIN_MS`. It never fires on a beat
+   S2 would not, and in the tempo range 30 to 300 it differs only where a group is one beat (`am=2` with no `an=`,
+   `am=3`, a downbeat mode with `bpb=1`) from 151 to 176 BPM, where it keeps every other beat. In a scan of 100 to
+   300 BPM at both brightnesses and three paces, 360 ms failed and 380 ms passed (fades 1, 3 and 10); 400 ms passed
+   that scan on four seeds, and with owners' fades up to 40 and delays up to 100. 400 leaves room for a frame drawn
+   late. `fxLogicPumpAmount()` is `beatAccentAmount()` on the beats it fires, else 0.
+   A consequence for the logics layer: a scored accent (`ae=`) over a `logic` section fires on S2's beats, the pump on
+   these. From 151 to 176 BPM the accent can come on a beat the pump skips. The overlay is a look the layer draws and
+   the gate measures, so this is a matter of looks, not of safety; the layer may choose to fire it on the pump's beats.
+2. **"Measured the gate's way" (section 9), for a look drawn far under its ceiling.** The S9 gate counts a rise of a
+   tenth of the ceiling. The stock blink at the front display's brightness 160 puts out no channel above 17 (the
+   palette's value is scaled by the brightness when it is baked, again by `updateDisplay(fBri)`, and the rainbow
+   conversion squares it), so by the gate's count it can never flash at all. The model holds `logic` to the gate's
+   rule with the look's own full scale (its brightest LED, by each measure) in place of the ceiling, which is stricter,
+   and to the gate's own count as well. A tenth of each series' own peak, stage 1i's reading, was tried and dropped: on
+   a region whose peak is under two levels it counts quarter-level noise.
+3. **`logic` reaches the engine as `updateDisplay(level)`, the level under the ceiling (N3).** The stock blink is
+   `updateDisplay()`, which is `updateDisplay(fBri)`, so `logic` at `b=255` (level = ceiling = `fBri`) is the light
+   of `native:0` exactly, as N1 and section 9 say. The plan's Task F2 has the engine's argument as `(level * 255) /
+   ceil`, 255 at the ceiling: that draws the palette unscaled, brighter than `native:0` by the ratio of 255 to the
+   display's brightness before the squaring, an onset at every hand-over from the idle blink. The model follows the
+   spec; Task F2 should too.
+4. **`fxLogicHue()` of a colour with no spread (section 5).** The formula divides by `max - min`. Such a colour is the
+   display's own (`fxLogicOwn()`), and a layer never asks its hue; the function gives 0 rather than divide by 0.
+5. **A slot past 9 (N6)** is dark, like 7 to 9.
+6. **`vuLevel`** is a plain group (the level offered, from the clock), as `accentAt` is. The hold it is offered to is
+   pinned already by `contractHoldsDue` and `contractLevelHold`.
+
+### The region model (stage 1k)
+
+`test/host/test_logic_regions.cpp` is a model, not a measurement: the palette as `calculateAllColors()` bakes it, every
+LED walking it with its pauses drawn from FastLED's `random8()`, `hsv2rgb_rainbow`, a frame every 10 ms, the pace from
+`fxLogicPace()`, the level from the core's clock through `envBright()` and `fxLogicPumpAmount()`, each LED taking it at
+its next step. Every display size the engine knows (front 8 by 10; rear 16 by 4, 24 by 4, 28 by 4, 32 by 8), at the
+display's own brightness and at 255, the own pace, the slowest and the fastest, the own palette and two colours,
+steady and pumped (`am=2`, `m=255`) at 30, 120, 176, 177 and 300 BPM, 60 s a case. It counts the worst second (the
+most onsets inside any 1,000 ms) over the whole field and over every band of rows, every band of columns and the four
+quarters, by brightness and by luminance, and fails when a pace on offer has more than three where the display's own
+stock blink has fewer. It also runs 146 to 180 BPM with S2's floor alone and with `logic`'s own, and fails unless the
+second has none over three. `DROIDNET_FORK.md` has its table. It follows `test_native_s10.cpp`'s FastLED (`scale8`
+without `FASTLED_SCALE8_FIXED`); built with `-DLOGIC_SCALE8_FIXED`, as the vendored FastLED 3.5 is configured, every
+verdict is the same.
+
+What it found: steady, no pace on offer lights any part of any display more than twice in a second, so the floors of
+N2 stay at 1 and 10 (the fastest pace is the front's own; on the rear it takes the delay to 20 and the fade to 1).
+Pumped, the 400 ms floor above.
+
+### `projector`'s step rule (stage 1j)
+
+`test_fx_regions.cpp` runs N7 on a jewel of seven (the centre and a ring of six) with seeded dice, 30 minutes a case:
+five colours, the level steady and under `B`/`b=` raised and dropped as fast as lines come (through the core's own
+hold, sharing `levelMs` with the brightening steps). The windows are every pair of pixels, both halves of the ring,
+the centre with each half, and the whole jewel, by brightness and by luminance, counted the gate's way. In every case
+the most is three onsets in a second, the closest two brightening steps are 340 ms apart, and a crumbling step never
+lights a pixel. Under the storms the brightening steps are rare (about one in three seconds), because each raise of
+the level takes the window they share.
+
+### The vector file
+
+New constants: `FX_LOGIC_GREY`, `FX_LOGIC_HUE_BASE`, `FX_LOGIC_FADE_MIN`, `FX_LOGIC_DELAY_MIN`,
+`FX_PROJECTOR_STEP_MIN_MS`, `FX_PROJECTOR_STEP_MAX_MS`, `FX_PROJECTOR_BRIGHT_MS`, `FX_LOGIC_PUMP_MIN_MS`. Changed:
+`CONTRACT_RELEASE` (2) and `contract_version` (`1.4`). New lines, one for each id:
+`LFA:i=logic,c=116530,s=200,at=16,am=2,m=255`, `HTA:i=projector,c=ff0000,b=200,at=32`, `PFA:i=vu,am=2,m=200,at=8`.
+New groups, all pure:
+
+| Group | args | out |
+| ----- | ---- | --- |
+| `fxLogicOwn` | `r`, `g`, `b` | `own` |
+| `fxLogicHue` | `r`, `g`, `b` | `hue` |
+| `fxLogicPace` | `s`, `x`, `floor` | `y` |
+| `fxProjectorSlot` | `rgb`, `slot` | `r`, `g`, `b` |
+| `fxProjectorTake` | `cur`, `cand` (each `0xRRGGBB`) | `take` |
+| `vuLevel` | `bpm`, `ph`, `bpb`, `beat`, `seedMs`, `nowMs`, `am`, `m`, `an`, `ap` | `fires`, `amt`, `level` (= `envBright(255, m, amt)`) |
+| `fxLogicPump` | the same as `vuLevel` | `fires` (`fxLogicPumpFires`), `amt` (`fxLogicPumpAmount`, progress from a section 0 to 16) |
+
+No row of an existing group, no line and no constant but the release changed.
+
+### What it costs
+
+The ESP32 image of this fork (`pio run -e wlogicengine32`), CA1.7 and CA2 with the stand-ins: 1,136,881 B and
+1,136,937 B of flash (+56 B), 64,948 B of static RAM both. On the PSI the plan's prototype priced the names and the
+version at +16 B; the PSI's own figure is Task F3's to measure. The new functions are inline and used by no PSI code,
+so they cost it nothing.

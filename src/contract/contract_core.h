@@ -1803,9 +1803,9 @@ inline uint8_t fxLogicPace(uint8_t s, uint8_t x, uint8_t floor) {
 // part of the display, and at the owner's full brightness the whole of it by the gate's own
 // count, four times into one second: on every display size, at every pace, the stock one
 // included (test/host/test_logic_regions.cpp, a model of the walk; DROIDNET_FORK.md has its
-// table). No floor of the pace can help, so the pump has one of its own. 380 ms was the least
-// that passed every case of the model, owner fades up to 40 and delays up to 100 included; 400
-// leaves room for a frame drawn late.
+// table). No floor of the pace can help, so the pump has one of its own. In the model 360 ms
+// failed and 380 ms passed; 400 passed every case run, owners' fades up to 40 and delays up to
+// 100 included, and leaves room for a frame drawn late.
 // fxLogicPumpFires() is beatAccentFires() with the rate floor taken at FX_LOGIC_PUMP_MIN_MS. It
 // never fires on a beat S2 would not, and in the contract's tempo range (30..300) it differs
 // only where a group is one beat (am=2 with no an=, am=3, a downbeat mode with bpb=1) between
