@@ -20,6 +20,7 @@
 #   2. ContractLogics.h firmware-layer type-check against a mock of the engine API
 #   2b. the 2026-11-15 review findings as behaviour tests (known defects marked)
 #   2c. contract v1.3 on the RSeries layer, on the mock engine
+#   2g. contract v1.4 logic and vu on the RSeries layer, on the mock engine (its walk held to stage 1k's model)
 #   2d. the Serial1 reader: line assembler, drain loop, the section-11 burst
 #   2e. contract S9 as a property: hostile and random line streams, measured on the pixels
 #   2f. the frame fixtures Studio's preview is checked against (frames/) are what the layer draws
@@ -147,6 +148,11 @@ stage 2b "review regressions (known defects marked)" "$CXX" -std=c++17 -Wall -We
 stage 2d "Serial1 reader: line assembler, drain loop, burst" "$CXX" -std=c++17 -Wall -Wextra test_contract_line.cpp
 # Contract v1.3 as it appears on the two logic displays (lifecycle, clock, brightness, score, query).
 stage 2c "contract v1.3 on the RSeries layer (mock engine)" "$CXX" -std=c++17 -Wall -Wextra test_contract_logics_v13.cpp
+# Contract v1.4 (CA2): logic, the engine's own walk at the look's hue, pace and level, and vu, the
+# meter on the pump. The mock's walk is held to stage 1k's model LED for LED, and the layer's LEDs
+# under the pump to the model's; the hand-over from the idle blink moves no LED; the owner's
+# settings are back after every way out. A mock of the engine, not a display.
+stage 2g "contract v1.4 logic and vu on the RSeries layer (mock engine)" "$CXX" -std=c++17 -O1 -Wall -Wextra test_contract_logics_r2.cpp
 # Contract S9 as a property of the real layer: hostile and random line streams go in, the mock
 # engine renders every frame, and the full-field level of each display is measured. At most three
 # dark-to-lit onsets in any second, nothing above the owner's ceiling, native after idle, dark
@@ -217,22 +223,22 @@ if [ "$WIDTH" -lt "$need" ]; then
   exit 1
 fi
 CODE=$(sed 's://.*::' "$MAIN")     # comments stripped: they name these classes too
-if ! printf '%s\n' "$CODE" | grep -Eq 'ContractSerial[[:space:]]+marcduinoSerial[[:space:]]*\('; then
+if ! grep -Eq 'ContractSerial[[:space:]]+marcduinoSerial[[:space:]]*\(' <<<"$CODE"; then
   echo "FAIL: $MAIN does not instantiate ContractSerial as the Serial1 reader"; exit 1
 fi
-if printf '%s\n' "$CODE" | grep -Eq 'MarcduinoSerial[[:space:]]*<[^>]*>[[:space:]]*[A-Za-z_]'; then
+if grep -Eq 'MarcduinoSerial[[:space:]]*<[^>]*>[[:space:]]*[A-Za-z_]' <<<"$CODE"; then
   echo "FAIL: $MAIN still instantiates the library's MarcduinoSerial<>, which processes an over-long"
   echo "      line truncated and reads one byte a pass"; exit 1
 fi
-if ! printf '%s\n' "$CODE" | grep -Eq 'WifiMarcduinoReceiverBase[[:space:]]*<[[:space:]]*1[[:space:]]*,[[:space:]]*CONTRACT_LINE_BUF[[:space:]]*>'; then
+if ! grep -Eq 'WifiMarcduinoReceiverBase[[:space:]]*<[[:space:]]*1[[:space:]]*,[[:space:]]*CONTRACT_LINE_BUF[[:space:]]*>' <<<"$CODE"; then
   echo "FAIL: the WiFi Marcduino receiver in $MAIN is not WifiMarcduinoReceiverBase<1, CONTRACT_LINE_BUF>"
   echo "      (the library default is a 64-byte line, which truncates a contract line silently)"; exit 1
 fi
-if ! printf '%s\n' "$CODE" | grep -Eq 'contractWifiLine[[:space:]]*\([[:space:]]*cmd[[:space:]]*,[[:space:]]*CONTRACT_LINE_BUF[[:space:]]*\)'; then
+if ! grep -Eq 'contractWifiLine[[:space:]]*\([[:space:]]*cmd[[:space:]]*,[[:space:]]*CONTRACT_LINE_BUF[[:space:]]*\)' <<<"$CODE"; then
   echo "FAIL: the WiFi command handler in $MAIN does not pass its line through contractWifiLine(cmd, CONTRACT_LINE_BUF)"
   echo "      (a CR LF host loses every contract line after the first; a cut-off contract line is processed)"; exit 1
 fi
-if ! printf '%s\n' "$CODE" | grep -q 'setRxBufferSize'; then
+if ! grep -q 'setRxBufferSize' <<<"$CODE"; then
   echo "FAIL: $MAIN does not size Serial1's receive buffer (Serial1.setRxBufferSize before begin)"; exit 1
 fi
 echo "reader: ContractSerial; line buffer $WIDTH >= $need (worst v1.3 scored line ${#worst} chars), serial and WiFi OK"
@@ -244,7 +250,7 @@ for want in 'FLD_setLogicEffectSelector[[:space:]]*\([[:space:]]*ContractSelecto
             'RLD_setLogicEffectSelector[[:space:]]*\([[:space:]]*ContractSelectorRLD[[:space:]]*\)' \
             'contractEngineLatched[[:space:]]*\([[:space:]]*0[[:space:]]*,' \
             'contractEngineLatched[[:space:]]*\([[:space:]]*1[[:space:]]*,'; do
-  if ! printf '%s\n' "$CODE" | grep -Eq "$want"; then
+  if ! grep -Eq "$want" <<<"$CODE"; then
     echo "FAIL: $MAIN: no match for /$want/ (each display's effect selector must report to contractEngineLatched)"; exit 1
   fi
 done

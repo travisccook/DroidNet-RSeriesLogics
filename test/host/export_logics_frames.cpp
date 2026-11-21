@@ -22,6 +22,10 @@
 // What it cannot export, because the mock does not model it:
 //   * native:<n> looks: the mock engine draws nothing for a native sequence.
 //   * i=rainbow: the mock's CHSV keeps the level only, not FastLED's hue conversion.
+//   * i=logic (v1.4): its pixels are the engine's own walk, whose pauses are the engine's dice
+//     (FastLED's random8()), so no preview can draw them LED for LED. What can be pinned is pinned
+//     elsewhere: the palette, hue, pace and level the layer gives the engine (test_contract_logics_r2.cpp),
+//     and the walk itself against the region model (stage 1k).
 #include "logics_harness.h"
 #include <string>
 #include <vector>
@@ -111,6 +115,17 @@ static int exportCase(const Case& c, const char* dir, const char* commit) {
   return 0;
 }
 
+// vu under a C seek every 50 ms: each seek puts the beat back at its start, so the pump offers its
+// top every 50 ms and the level hold takes a raise at most once in 340 ms.
+static std::vector<Line> vuSeek() {
+  static std::vector<std::string> text;
+  std::vector<Line> v;
+  if (text.empty()) for (uint32_t t = 0; t < 3000; t += 50) { char l[48]; snprintf(l, sizeof l, "L*C:bpm=120,ph=0,bpb=4,beat=%u", (unsigned)((t / 50) % 4)); text.push_back(l); }
+  v.push_back({ 0, "LFA:i=vu,c=22c55e,am=2,m=255" });
+  for (size_t i = 0; i < text.size(); i++) v.push_back({ (uint32_t)(i * 50), text[i].c_str() });
+  return v;
+}
+
 int main(int argc, char** argv) {
   if (argc < 3) { fprintf(stderr, "usage: %s <out dir> <source id>\n", argv[0]); return 2; }
   const std::vector<Case> cases = {
@@ -138,6 +153,10 @@ int main(int argc, char** argv) {
                                                    { 1200, "LFP:c=ff0000,d=180" }, { 1340, "LFP:c=ff0000,d=180" } } },
     // R1: no overlay on a native look. The display stays on the native sequence throughout.
     { "accent-over-native", 2000, 10, "elapsed", { { 0, "LFA:i=native:0" }, { 1000, "LFP:c=ff0000,d=400" } } },
+    // ---- v1.4 vu: the meter on the pump (N10): its level rides the beat through the level hold, its
+    // brightness stays at b=. At 120 BPM, and under a C seek every 50 ms (N11) ----
+    { "vu-120",      4000, 10, "elapsed", { { 0, "LFA:i=vu,c=22c55e,am=2,m=255" }, { 0, "L*C:bpm=120,ph=0,bpb=4,beat=0" } } },
+    { "vu-seek",     3000, 10, "elapsed", vuSeek() },
   };
   int bad = 0;
   for (const Case& c : cases) bad += exportCase(c, argv[1], argv[2]);
