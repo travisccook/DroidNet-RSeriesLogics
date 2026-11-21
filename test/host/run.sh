@@ -223,22 +223,22 @@ if [ "$WIDTH" -lt "$need" ]; then
   exit 1
 fi
 CODE=$(sed 's://.*::' "$MAIN")     # comments stripped: they name these classes too
-if ! printf '%s\n' "$CODE" | grep -Eq 'ContractSerial[[:space:]]+marcduinoSerial[[:space:]]*\('; then
+if ! grep -Eq 'ContractSerial[[:space:]]+marcduinoSerial[[:space:]]*\(' <<<"$CODE"; then
   echo "FAIL: $MAIN does not instantiate ContractSerial as the Serial1 reader"; exit 1
 fi
-if printf '%s\n' "$CODE" | grep -Eq 'MarcduinoSerial[[:space:]]*<[^>]*>[[:space:]]*[A-Za-z_]'; then
+if grep -Eq 'MarcduinoSerial[[:space:]]*<[^>]*>[[:space:]]*[A-Za-z_]' <<<"$CODE"; then
   echo "FAIL: $MAIN still instantiates the library's MarcduinoSerial<>, which processes an over-long"
   echo "      line truncated and reads one byte a pass"; exit 1
 fi
-if ! printf '%s\n' "$CODE" | grep -Eq 'WifiMarcduinoReceiverBase[[:space:]]*<[[:space:]]*1[[:space:]]*,[[:space:]]*CONTRACT_LINE_BUF[[:space:]]*>'; then
+if ! grep -Eq 'WifiMarcduinoReceiverBase[[:space:]]*<[[:space:]]*1[[:space:]]*,[[:space:]]*CONTRACT_LINE_BUF[[:space:]]*>' <<<"$CODE"; then
   echo "FAIL: the WiFi Marcduino receiver in $MAIN is not WifiMarcduinoReceiverBase<1, CONTRACT_LINE_BUF>"
   echo "      (the library default is a 64-byte line, which truncates a contract line silently)"; exit 1
 fi
-if ! printf '%s\n' "$CODE" | grep -Eq 'contractWifiLine[[:space:]]*\([[:space:]]*cmd[[:space:]]*,[[:space:]]*CONTRACT_LINE_BUF[[:space:]]*\)'; then
+if ! grep -Eq 'contractWifiLine[[:space:]]*\([[:space:]]*cmd[[:space:]]*,[[:space:]]*CONTRACT_LINE_BUF[[:space:]]*\)' <<<"$CODE"; then
   echo "FAIL: the WiFi command handler in $MAIN does not pass its line through contractWifiLine(cmd, CONTRACT_LINE_BUF)"
   echo "      (a CR LF host loses every contract line after the first; a cut-off contract line is processed)"; exit 1
 fi
-if ! printf '%s\n' "$CODE" | grep -q 'setRxBufferSize'; then
+if ! grep -q 'setRxBufferSize' <<<"$CODE"; then
   echo "FAIL: $MAIN does not size Serial1's receive buffer (Serial1.setRxBufferSize before begin)"; exit 1
 fi
 echo "reader: ContractSerial; line buffer $WIDTH >= $need (worst v1.3 scored line ${#worst} chars), serial and WiFi OK"
@@ -250,7 +250,7 @@ for want in 'FLD_setLogicEffectSelector[[:space:]]*\([[:space:]]*ContractSelecto
             'RLD_setLogicEffectSelector[[:space:]]*\([[:space:]]*ContractSelectorRLD[[:space:]]*\)' \
             'contractEngineLatched[[:space:]]*\([[:space:]]*0[[:space:]]*,' \
             'contractEngineLatched[[:space:]]*\([[:space:]]*1[[:space:]]*,'; do
-  if ! printf '%s\n' "$CODE" | grep -Eq "$want"; then
+  if ! grep -Eq "$want" <<<"$CODE"; then
     echo "FAIL: $MAIN: no match for /$want/ (each display's effect selector must report to contractEngineLatched)"; exit 1
   fi
 done
