@@ -17,7 +17,7 @@ static int g_fail = 0, g_total = 0;
 
 static const char kLine[] =
     "@WDP1 {\"type\":\"R-Series Logics\",\"fw\":\"abcdef0-dirty\","
-    "\"caps\":[\"droidnet.contract\",\"contract.1.3\",\"led.logic\"]}\n";
+    "\"caps\":[\"droidnet.contract\",\"contract.1.4\",\"led.logic\"]}\n";
 
 // HardwareSerial's two calls the adapter uses: availableForWrite() and write(buf, n).
 struct MockPort {
@@ -100,7 +100,7 @@ static void test_it_repeats_every_25_to_30_seconds() {
 
 // The contract's Q reply shares Serial1 with the announce. wdpForkWriteLine() writes it whole,
 // and only between announces.
-static const char kReply[] = ";S0!LFq:ver=1.3,rel=1,cap=32,n=5,ok=1,bpm=120\r";
+static const char kReply[] = ";S0!LFq:ver=1.4,rel=2,cap=32,n=5,ok=1,bpm=120\r";
 static void test_a_reply_is_written_whole_between_announces() {
   const uint8_t n = (uint8_t)(sizeof(kReply) - 1);
   MockPort port(128);

@@ -11,6 +11,8 @@
 #   1i. S10: the native allow-list and its speeds against a model of the stock sequences
 #   1j. every shared look by itself, on strands of 6 to 28 positions: no part of a strand lights
 #       more than three times a second (pure core)
+#   1k. v1.4 section 9 for logic: a model of the walk decides the core's floors for its pace and
+#       its pump (no engine, no layer)
 #   1b. wifi_connect_core.h FSM unit tests
 #   1c. wdp_announce_core.h WDP device announce unit tests (shared with the PSI and Flthy forks)
 #   1d. wdp_fork.h: this fork's real WDP identity builds its line, and the Serial1 adapter
@@ -128,6 +130,12 @@ stage 1i "S10: the native allow-list against a model of the stock sequences" "$C
 # blink every part of it with the field's level standing still. The shared timing has to keep
 # clear of that by itself: every look alone, every speed, every strand length from 6 to 28.
 stage 1j "every shared look by itself: no part of a strand lights more than three times a second" "$CXX" -std=c++11 -Wall -Wextra -O2 test_fx_regions.cpp
+# CA2: logic is the engine's own walk at a pace, a hue and a level. A MODEL of the walk (the palette
+# as calculateAllColors() bakes it, the pauses, FastLED's rainbow conversion) on every display size,
+# steady and pumped: no part of a display lights more than three times a second, at any pace on
+# offer. It decides FX_LOGIC_FADE_MIN, FX_LOGIC_DELAY_MIN and FX_LOGIC_PUMP_MIN_MS, and it runs
+# here, before the core is copied to the other forks. DROIDNET_FORK.md has the table it prints.
+stage 1k "logic: a model of the walk, every display, every pace, steady and pumped" "$CXX" -std=c++17 -Wall -Wextra -O2 test_logic_regions.cpp
 stage 2  "ContractLogics.h firmware type-check" "$CXX" -std=c++17 -Wall -Wextra compile_contract_logics.cpp
 # The 2026-11-15 review's findings as behaviour tests on mock_engine.h, which models sequence
 # selection, restoreSettings() and the engine's 25th-entry overrun. A finding that is not fixed

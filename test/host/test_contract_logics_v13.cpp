@@ -255,14 +255,14 @@ static void test_score_verify_query() {
   send("**M:v=show,wd=15");
   sendScored("LFA:i=solid,c=ff0000,b=128,at=0", n, k);
   sendScored("LFA:i=native:4,at=8,am=2,m=200,ae=flash", n, k);
-  send("LFQ:r=0"); CHECK(reply(";S0!LFq:ver=1.3,rel=1,cap=32,n=2,ok=0,bpm=0\r"));     // loaded, not checked yet
+  send("LFQ:r=0"); CHECK(reply(";S0!LFq:ver=1.4,rel=2,cap=32,n=2,ok=0,bpm=0\r"));     // loaded, not checked yet
   sendV("F", n, k);
   CHECK(gContract[0].loadOk == 1 && gContract[0].scoreLen == 2 && gContract[0].wdSec == 15);
   run(300); CHECK(FLD->_seq == 0);                         // armed: the native idle look, no clock yet (C3)
   send("**C:bpm=120,ph=0,bpb=4,beat=0"); run(50);
   CHECK(FLD->_seq == 106 && FLD->px(0, 0).r == 80);        // the scored b=128 under the 160 ceiling
-  send("LFQ:r=0"); CHECK(reply(";S0!LFq:ver=1.3,rel=1,cap=32,n=2,ok=1,bpm=120\r"));
-  send("LRQ:r=2"); CHECK(reply(";W2,;S0!LRq:ver=1.3,rel=1,cap=32,n=0,ok=0,bpm=120\r"));   // routed via WCB 2
+  send("LFQ:r=0"); CHECK(reply(";S0!LFq:ver=1.4,rel=2,cap=32,n=2,ok=1,bpm=120\r"));
+  send("LRQ:r=2"); CHECK(reply(";W2,;S0!LRq:ver=1.4,rel=2,cap=32,n=0,ok=0,bpm=120\r"));   // routed via WCB 2
   send("LFQ");     CHECK(!contractReplyPending(q, qn));    // no r=: not answered
   send("L*Q:r=0"); CHECK(!contractReplyPending(q, qn));    // a wildcard is never answered
   send("**Q:r=0"); CHECK(!contractReplyPending(q, qn));
@@ -285,11 +285,11 @@ static void test_score_verify_query() {
   // luminance, and the red look lit 40 ms ago, so the hand-back waits out the 340 ms)
   CHECK(FLD->_seq == 106);
   run(350); CHECK(FLD->_seq == 0 && FLD->_fx == 0);
-  send("LFQ:r=0"); CHECK(reply(";S0!LFq:ver=1.3,rel=1,cap=32,n=0,ok=2,bpm=0\r"));
+  send("LFQ:r=0"); CHECK(reply(";S0!LFq:ver=1.4,rel=2,cap=32,n=0,ok=2,bpm=0\r"));
   send("**M:v=idle"); send("**X");
-  send("LFQ:r=0"); CHECK(reply(";S0!LFq:ver=1.3,rel=1,cap=32,n=0,ok=2,bpm=0\r"));     // ok=2 outlives idle and X...
+  send("LFQ:r=0"); CHECK(reply(";S0!LFq:ver=1.4,rel=2,cap=32,n=0,ok=2,bpm=0\r"));     // ok=2 outlives idle and X...
   send("**M:v=show");
-  send("LFQ:r=0"); CHECK(reply(";S0!LFq:ver=1.3,rel=1,cap=32,n=0,ok=0,bpm=0\r"));     // ...until the next M:v=show
+  send("LFQ:r=0"); CHECK(reply(";S0!LFq:ver=1.4,rel=2,cap=32,n=0,ok=0,bpm=0\r"));     // ...until the next M:v=show
   // one display failing its check does not stop the other, or the clock it plays from
   resetAll(); send("**M:v=show"); send("L*A:i=solid,c=ff0000,at=0"); send("**C:bpm=120,ph=0,bpb=4,beat=0"); run(50);
   send("LFV:n=9,k=0000"); run(400);
