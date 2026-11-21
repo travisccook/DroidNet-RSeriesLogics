@@ -27,8 +27,9 @@ accents, a host-seeded beat clock, and autonomous board-side section playback â€
 
 **Contract v1.3, release R1, in source. Not on hardware.** On the R2 line (`lighting-r2`), the shared core is at
 revision CA2: contract v1.4, release 2, with the ids `logic`, `projector` and `vu` (see "Core revision CA2" in
-[docs/CHANGING_THE_CORE.md](docs/CHANGING_THE_CORE.md)). This fork's layer draws them with stand-ins for now:
-`logic` as `twinkle`, `projector` as `sparkle`, `vu` as `meter`. `logic` and `vu` of their own are Task F2's.
+[docs/CHANGING_THE_CORE.md](docs/CHANGING_THE_CORE.md)). This fork's layer draws `logic` and `vu` itself (Task F2,
+"What is in (contract v1.4, R2)" below) and `projector` as `sparkle`, as v1.4's table has it. Host-tested and
+cross-compiled; nothing of it has run on a board. The bench list for R2 is [docs/BENCH_R2.md](docs/BENCH_R2.md).
 
 - The prebuilt classic ESP32 image in `firmware/` (`f7bd207`, 2026-10-16) runs on the C2-B5 dome's R-Series board;
   it was flashed over WiFi through the board's own Reflash page. That image predates contract v1.3.
@@ -71,6 +72,11 @@ What is verified is host-side, by `bash test/host/run.sh` (and by CI, `.github/w
   own, slowest and fastest pace, steady and pumped, counts the worst second over the whole field and over every region
   of a quarter or more. It decides the core's floors for `logic`'s pace and pump (below). A model, not a measurement;
 - `projector`'s step rule (contract v1.4 N7) on a jewel of seven with seeded dice (stage 1j, pure core);
+- `logic` and `vu` on the layer (stage 2g, `test/host/test_contract_logics_r2.cpp`), on a mock engine whose walk is
+  held LED for LED to a copy of stage 1k's model: what the look sets on the engine, the level it gives it every frame,
+  the gates, the hand-over from the idle blink (no LED differs from `native:0` with the same seed and brightness), the
+  owner's settings after every way out, and the layer's LEDs under the pump against the model's (none apart in 100
+  cases); `vu`'s rows at five tempos and under a seek every 50 ms. The property stage (2e) has both in its streams;
 - the Serial1 reader, including a 400-byte burst of back-to-back lines, with and without the pass-through;
 - the real ESP32 cross-compile (`pio run -e wlogicengine32`), which is a link, not a run.
 
@@ -138,11 +144,68 @@ is the DroidNet layer (`git log --oneline 6bba8b1..HEAD`).
   with the core at CA2, `ver=1.4,rel=2`. `r` is a
   number 0 to 99; anything else gets no reply. One reply a display can wait to be written.
 
+### What is in (contract v1.4, R2)
+
+On the R2 line only (`lighting-r2`; `main` is R1). Spec: `2026-11-21-driveable-animation-contract-v1.4-design.md` in
+the Signal Booster. The query reply says `ver=1.4,rel=2`; the WDP caps say `contract.1.4`.
+
+- **`logic`** (N1 to N5) is the engine's own walk, the stock blink, run by the engine's own code and state. It is the
+  one look effect 106 does not draw pixel by pixel (`_logicFrame()` in `ContractLogics.h`).
+  - *What is set.* Every frame the look's settings are compared with the engine's live ones and set where they
+    differ (`_logicApply()`): the palette and hue (no `c=`, or a colour with no hue, is the display's own; any other
+    is `setPaletteHue(0, fxLogicHue(c) - 170)`), the fade and delay (`fxLogicPace()` on the display's own), and the
+    live brightness the palette is baked at, which is the ceiling. So a change of colour or speed, the owner moving
+    the brightness or the pace, and the engine restoring its own settings at an effect change all come out right at
+    the next frame. The RAM default object (`LogicEngineFLDDefault`/`RLDDefault`) is never written for it.
+  - *The level.* `updateDisplay(level)` once a frame, the level itself under the ceiling (not a fraction of 255), so
+    the look at `b=255` with no pump is `updateDisplay(fBri)`, which is what the idle blink draws. The pump is the
+    core's `fxLogicPumpAmount()`: rises 400 ms apart at the least, so from 151 to 176 BPM an every-beat pump takes
+    every other beat. Each LED takes the level at its next step (N3), which is what stage 1k models; stage 2g holds the
+    layer's LEDs to the model's frame for frame.
+  - *The gates.* Not measured (N4): the look gate and the field gate are asked with the level for both measures (a
+    peak of 255 when it is not 0), and told what was drawn. While the look is up, a frame the field gate holds is
+    drawn at the last level shown (the walk goes on), and one the look gate holds keeps the walk going in its old
+    colours. A frame held as the look enters leaves the frame that is up.
+  - *The hand-over.* From the idle blink nothing changes on the LEDs: the walk is the same walk. Going back
+    (`M:v=idle`, the watchdog), the walk goes on while the hand-back waits for the gates, and the idle blink takes it
+    over. From anything else (a contract look, an accent, X's dark, another native sequence) the display is cleared
+    first and the walk comes in as its LEDs step.
+  - *Leaving it.* When effect 106 draws anything else, the owner's settings go back (`restoreSettings()`), and the
+    walk's light is taken as not known to the gate (`contractNativeEnded(known=false)`): the next lit frame waits 340
+    ms, the walk's last frame up. See "What is not in" for why, and what it costs.
+- **`vu`** (N10 to N12) is `meter`, with the pump moving its level: while it is pumped (the clock runs, `am=` and `m=`
+  are not 0) the tick offers `envBright(255, m, beatAccentAmount(...))` to the level hold every pass, the meter's
+  brightness is the look's level (never pumped), and verb `L` is not shown. Not pumped it is `meter`, frame for frame.
+- **`projector`** draws as `sparkle` here (v1.4's table).
+- `logic`, `projector` and `vu` are no accent (`ae=` naming one is no accent), and an accent may run over each.
+- What it costs the ESP32 image (`pio run -e wlogicengine32`): 1,138,617 B of flash and 64,948 B of static RAM, where
+  CA2 with the stand-ins was 1,136,937 B and 64,948 B (+1,680 B of flash).
+
 ### What is not in
 
 - Any hardware validation of the contract layer (see Status).
-- Release R2: the `logic` look, the `kick` accent (so a `native:` section takes no accent in R1), the level feed
-  to the native mic-reactive effects (`contractSetup()` is still a no-op).
+- The `kick` accent (withdrawn in v1.4: the pump is the kick; so a `native:` section takes no accent), the level feed
+  to the native mic-reactive effects (deferred in v1.4; `contractSetup()` is still a no-op).
+- **`logic`: the gate does not know the walk's light.** v1.4 N4 has the layer take the look at the level it asks
+  for, as it takes the idle blink, and the walk's own light is far under that level: at the front display's
+  brightness 160 no channel passes 17 (CA2 reading 2). A look that follows `logic` lights the display for anyone
+  watching while, to the gate, nothing rose. The property stage found it as soon as `logic` was in its streams: a white
+  look, `X` and the white look again were two onsets 170 ms apart, and with the window alone started again at the
+  hand-over, a follower that ramps up (a pumped pulse) still gave onsets 200 to 300 ms apart. So the walk's light is
+  taken as unknown when effect 106 stops drawing it (the layer's rule for a native sequence it cannot see), and a lit
+  frame after `logic` waits 340 ms. What that costs: a look after `logic` comes 340 ms late, and an accent over `logic`
+  shorter than 340 ms is not shown at all. Going between `logic` and `native:0` is not affected. The same thing is
+  true of the idle blink in R1 (a white look after it is no onset to the gate: "The luminance of a native sequence"
+  below), and the property stage does not see it there because its mock draws the idle look as a fill at its
+  brightness; only `logic` is drawn by the mock's model of the walk.
+- **`logic`'s pump on the rear display** is softer than on the front: a level reaches an LED at its next step, up to
+  400 ms later on the rear's own settings (v1.4 open question 2). Stage 1k cannot say how soft it looks.
+- **A scored accent over a `logic` section** fires on S2's beats (`beatAccentFires()`), the pump on `logic`'s own. From
+  151 to 176 BPM the accent can come on a beat the pump skips (CA2 reading 1 left it to the layer; it was left as it
+  is, and the leave rule above holds such an accent shorter than 340 ms back anyway).
+- **An LED in a pause keeps what it showed** until its next step (the engine's walk). After the owner turns a display
+  down, the idle blink takes the new level LED by LED, as it does stock, and `logic` entered within one key pause of
+  that does the same.
 - `d=` on `A` (retired in v1.3), `c=p<n>` palette colours, `sw=` and `band=`: parsed past, never acted on.
 - A pulse that interrupts a timed native sequence returns to the display's default look, not to that sequence:
   the engine has no public way to ask which sequence is running.
@@ -279,7 +342,9 @@ display's own stock blink does. `test/host/test_logic_regions.cpp` (stage 1k) is
 walk: the palette as `calculateAllColors()` bakes it, every LED walking it with its pauses from FastLED's `random8()`,
 `hsv2rgb_rainbow`, a frame every 10 ms, the pace from `fxLogicPace()`, and the level from the core's clock reaching
 each LED at its next step (`updateDisplay(level)`). No engine and no layer is in it, and nothing in it has been seen on
-a display. `docs/CHANGING_THE_CORE.md` ("Core revision CA2") says how it counts and why.
+a display. `docs/CHANGING_THE_CORE.md` ("Core revision CA2") says how it counts and why. The layer is held to it by
+stage 2g: the mock engine's walk against a copy of the model's, and the LEDs the layer draws under the pump against the
+model's, frame for frame, at the tempos and paces below (Task F2).
 
 The worst second, by the stage's fine reading (the gate's rule on the look's own full scale), whole field / any region,
 own palette (two colours, `116530` and `ff0000`, are in the stage as well and are never worse); the pump is `am=2`,
@@ -366,8 +431,9 @@ state change and no reply: there is no clamp, and 0 is never applied.
   (`ContractSelectorFLD` / `ContractSelectorRLD`), and the engine calls a selector at the frame it starts a
   newly selected sequence, never otherwise. `contractEngineLatched()` is that report. It is how the layer knows a
   native look is really on the LEDs, and how it sees a sequence it did not select (L6). It selects nothing.
-- **S9: measure, ask, draw, tell.** A frame effect 106 is about to draw is measured first, without writing a
-  LED (`_draw()` runs twice a frame: level, luminance and the brightest LED), the gate is asked
+- **S9: measure, ask, draw, tell.** (v1.4 `logic` is the exception: the engine draws it, and the gates take it at its
+  level, unmeasured. "What is in (contract v1.4, R2)".) A frame effect 106 is about to draw is measured first,
+  without writing a LED (`_draw()` runs twice a frame: level, luminance and the brightest LED), the gate is asked
   (`contractFieldAsk()`), and a frame it would scale is not drawn: the frame that is up stays. A frame scaled
   down keeps the field's level legal and still lights, dimly, every part of the display the frame lights. A
   frame the gate passes is drawn as it is, and the gate is told (`contractFieldTell()`). Light the layer does
@@ -395,7 +461,10 @@ state change and no reply: there is no clamp, and 0 is never applied.
   does not reach them.
 - **The contract selects a native sequence at the core's speed** (`nativeSpeedLogics()`: 1 for march, roaming
   pixel and fire, 2 for the horizontal scan line, 0 for the rest). `_select()` is the one place that does it.
-- `setPixelRGB` bypasses the engine's `fBri`, so brightness and the beat envelope are applied inside the layer.
+- `setPixelRGB` bypasses the engine's `fBri`, so brightness and the beat envelope are applied inside the layer. v1.4
+  `logic` does not use it: the walk is the engine's palette, baked at the live brightness, which the layer sets to the
+  ceiling while the look is up (the RAM default object stays the owner's), and the level goes in as
+  `updateDisplay(level)`.
 - **Brightness.** The ceiling is the display's own `fBri` (the RAM default object, read when a show arms or the
   first cue arrives). `b=`/`B` are fractions of it. For native looks the level is written to that default object,
   because the engine copies it back on every effect change. The owner's value goes back when the show no longer
