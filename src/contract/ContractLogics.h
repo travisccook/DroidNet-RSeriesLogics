@@ -3,8 +3,9 @@
 // SPDX-License-Identifier: LGPL-2.1-only
 //
 // src/contract/ContractLogics.h — RSeries Logic firmware layer for the
-// Driveable-Animation Contract v1.3. Live cues, the beat clock, and the autonomous
-// board-side score. ZERO edits to lib/Reeltwo.
+// Driveable-Animation Contract v1.3, and v1.4 on the R2 line (core revision CA2: the looks
+// logic and vu). Live cues, the beat clock, and the autonomous board-side score. ZERO edits to
+// lib/Reeltwo.
 //
 // INCLUDE ORDER (main.cpp): included AFTER ReelTwo / LogicEngine.h / FastLED and the
 // global engine pointers FLD/RLD + FLD_/RLD_selectSequence, and BEFORE
@@ -41,6 +42,10 @@
 //   * contractEngineLatched() is the engine telling the layer which sequence it has just
 //     started on a display (through main.cpp's effect selectors). It is how the layer knows a
 //     native look is really on the LEDs, and how it notices a native take-over (L6).
+//   * v1.4 logic is the one look effect 106 does not draw pixel by pixel: it is the engine's own
+//     walk (updateDisplay(level), LogicEngine.h:1149), with the look's palette, hue and pace set
+//     through the engine's public setters while it is up, and the owner's put back when it ends
+//     (_logicFrame, _logicLeave). Its frames are not measured: the gates take it at its level.
 //   * contractHandleLine() is the single entry point for a contract line.
 //   * contractTick() runs from mainLoop() every pass: the score and its accents, the watchdog,
 //     held live looks, and _present().
@@ -95,6 +100,20 @@ static uint32_t   gRiseMs[2]    = { 0, 0 };
 static bool       gBriTouched[2] = { false, false };
 static uint8_t    gBriSaved[2]   = { 0, 0 };
 static uint8_t    gBriWritten[2] = { 0, 0 };
+
+// v1.4 logic (spec N1 to N5). While a display shows the look, the engine's LIVE settings are the
+// look's: the palette and hue (N1), the fade and delay (N2), and the brightness the palette is
+// baked at, which is the ceiling (N3). The RAM default object, which the engine restores its
+// settings from at every effect change (LogicEngine.h:807, :1829), is never written for it: it
+// stays the owner's. gLogicUp: the last frame effect 106 drew on the display was the walk, with
+// the look's settings in the engine. gLogicShown: the level the walk was last drawn at.
+static bool       gLogicUp[2]    = { false, false };
+static uint8_t    gLogicShown[2] = { 0, 0 };
+// The engine's walk takes a level, or a colour, only at an LED's next step; an LED in a pause keeps
+// whatever was written there last (LogicEngine.h:1493-1519). gLedsWalk: the LEDs hold the walk
+// (the idle blink's, NORMAL, or logic's), so logic can take them over as they are. Anything else
+// effect 106 or another sequence drew is cleared first.
+static bool       gLedsWalk[2]   = { true, true };
 
 // ---------------------------------------------------------------- helpers ----
 static inline LogicEngineRenderer* _engine(uint8_t u) { return u == 0 ? FLD : RLD; }
@@ -359,6 +378,8 @@ inline void contractEngineLatched(uint8_t u, unsigned seq) {
   const unsigned was = gEngineSeq[u];
   _briSync(u);
   gEngineSeq[u] = (uint16_t)seq; gRestart[u] = false;
+  gLogicUp[u] = false;                                  // v1.4: the engine has just restored the owner's settings (LogicEngine.h:807)
+  if (seq != FX_CONTRACT) gLedsWalk[u] = seq == NATIVE_NORMAL;
   if (gRise[u]) {
     // A brighter native look was written less than a frame ago, and something else starts now.
     // Another native sequence starts AT that brightness, so it is on the LEDs: tell the gate.
@@ -438,11 +459,24 @@ inline void contractEngineLatched(uint8_t u, unsigned seq) {
 // envBright() — the SHARED envelope all three boards render through (the look's level is the
 // ceiling of the pump, m= is the dip depth). Do not reintroduce a board-local floor here: it
 // desyncs the Logics from the PSIs/HPs on every cue.
+// v1.4: vu's pump moves its meter's LEVEL, never its brightness (N10), so its brightness is the
+// look's level. logic's pump is the core's fxLogicPumpAmount(), whose rises are
+// FX_LOGIC_PUMP_MIN_MS (400 ms) apart, not S2's 340: the level reaches each LED at that LED's next
+// step, and the region model of the walk (test_logic_regions.cpp) found four onsets in a second
+// with rises 341 to 380 ms apart (core revision CA2, reading 1). From 151 to 176 BPM it pumps
+// every other beat.
 static inline uint8_t _beatBright(const ContractUnitState& g, const BeatPos& bp) {
   const uint8_t level = _level(g);
-  if (g.accentMode == 0 || g.beatMod == 0 || !gBeat.running) return level;
+  if (g.effect == CE_VU || g.accentMode == 0 || g.beatMod == 0 || !gBeat.running) return level;
   const uint32_t prog = beatSectionProgress16(bp.beatIndex, g.sectionStart, g.sectionEnd);   // Q16 (no float in the frame path)
-  return envBright(level, g.beatMod, beatAccentAmount(g.accentMode, bp, g.beatMod, prog, gBeat, g.accentEvery));
+  const uint8_t amt = (g.effect == CE_LOGIC) ? fxLogicPumpAmount(g.accentMode, bp, g.beatMod, prog, gBeat, g.accentEvery)
+                                             : beatAccentAmount(g.accentMode, bp, g.beatMod, prog, gBeat, g.accentEvery);
+  return envBright(level, g.beatMod, amt);
+}
+// v1.4 N10: a vu look is PUMPED while the clock runs and it has a pump (am=, m=). Every pass it
+// then offers the envelope's level to the core's level hold, and an L is not shown (N12).
+static inline bool _vuPumped(const ContractUnitState& g) {
+  return g.base == CB_LOOK && g.effect == CE_VU && g.accentMode != 0 && g.beatMod != 0 && gBeat.running;
 }
 
 // THE single overlay-arming path. Verb P (live) and the board-side score accent (autonomous)
@@ -509,7 +543,7 @@ static inline void _draw(LogicEngineRenderer& r, const ContractUnitState& g, Con
       break;
     }
     case CE_SPARKLE:
-    case CE_PROJECTOR: {                                 // v1.4 (CA2): a stand-in here; projector is the holoprojectors' look
+    case CE_PROJECTOR: {                                 // v1.4: projector is the holoprojectors' look; here it is sparkle (spec section 4)
       // A new pattern every 350 to 477 ms (CA1.7: it was 80 to 207 ms). Every pattern is drawn
       // afresh, so a quarter of the display, some twenty LEDs, changes its level by more than a
       // tenth from one pattern to the next: at 80 ms that was five onsets a second in one
@@ -524,7 +558,7 @@ static inline void _draw(LogicEngineRenderer& r, const ContractUnitState& g, Con
       break;
     }
     case CE_METER:
-    case CE_VU: {                                        // v1.4 (CA2): a stand-in until Task F2 gives vu its level from the pump
+    case CE_VU: {                                        // v1.4 vu: the meter, its level from the pump while pumped (contractTick, N10)
       int lit = (H * (int)g.level) / 255;                                // fill from bottom (the level: contractLevelOffer)
       CRGB c = _scaled(col.r || col.g || col.b ? col : ContractRGB{0, 255, 0}, bri);
       for (int y = 0; y < H; y++)
@@ -575,7 +609,7 @@ static inline void _draw(LogicEngineRenderer& r, const ContractUnitState& g, Con
       break;
     }
     case CE_TWINKLE:
-    case CE_LOGIC: {                                     // v1.4 (CA2): a stand-in until Task F2 draws the engine's own walk
+    case CE_LOGIC: {                                     // (logic as a base look is the engine's walk, _logicFrame; never an overlay)
       for (int y = 0; y < H; y++)
         for (int x = 0; x < W; x++) {
           uint8_t tb = fxTwinkleBright(y * W + x, now, g.speed);
@@ -605,6 +639,96 @@ static inline void _draw(LogicEngineRenderer& r, const ContractUnitState& g, Con
 #define CONTRACT_GATE_STAT(unit, scale)
 #endif
 
+// ---- v1.4 logic: the engine's own walk at the look's level, pace and hue (spec N1 to N5) ----
+// The look's settings, on the display's own (the RAM default object, which is the owner's): the
+// palette and hue (N1: a colour with no hue is the display's own; any other is the front
+// palette's shape at that hue), the fade and the delay (N2), and the brightness the palette is
+// baked at, which is the ceiling (N3), so that the look at b=255 is the light of native:0. They
+// are compared with the engine's live values every frame and set only where they differ: on a
+// change of the look's colour or speed, of the owner's settings or brightness, and after the
+// engine restored its own (an effect change). The default object is never written.
+static inline void _logicApply(LogicEngineRenderer& r, uint8_t u) {
+  const ContractUnitState& g = gContract[u];
+  const LogicEngineSettings& d = _defaults(u);
+  const bool own = fxLogicOwn(g.color);
+  const uint8_t pal = own ? d.fPalNum : (uint8_t)0;
+  const uint8_t hue = own ? d.fHue : (uint8_t)(fxLogicHue(g.color) - FX_LOGIC_HUE_BASE);   // (mod 256: N1's & 255)
+  const uint8_t fade = fxLogicPace(g.speed, d.fFade, FX_LOGIC_FADE_MIN);
+  const uint8_t delay = fxLogicPace(g.speed, d.fDelay, FX_LOGIC_DELAY_MIN);
+  if (r.getBrightness() != g.ceil || r.getCurrentPalette() != pal || r.getHue() != hue) {
+    r.setBrightness(g.ceil);                            // (the live value; effect 106's other looks never read it)
+    r.setPaletteHue(pal, hue);                          // calculateAllColors() at the ceiling (LogicEngine.h:1102)
+  }
+  if (r.getFade() != fade) r.setFade(fade);
+  if (r.getDelay() != delay) r.setDelay(delay);
+}
+// The walk goes on at the level last shown: a logic frame the look gate holds while the walk is
+// what is up (the look that is up goes on, in its own colours), and a display on its way to a
+// native look from logic (the hand-back waits for the gates, and the walk does not stop for it).
+// It is not a rise: the field gate is told the level it was told last.
+static inline void _logicWalkOn(LogicEngineRenderer& r, uint8_t u, uint32_t now) {
+  r.updateDisplay(gLogicShown[u]);
+  contractFieldTell(gContract[u], gLogicShown[u], gLogicShown[u], now);
+}
+// One frame of the look. The level is the look's, pumped (_beatBright: b= under the ceiling,
+// fxLogicPumpAmount()). N4: the frame is not measured. The look gate and the field gate are
+// asked with the level for both measures, and a peak of 255 when the level is not 0. A frame
+// the look gate holds leaves the frame that is up (the walk goes on in its own colours when it is
+// the walk). A frame whose level the field gate would hold is drawn at the last level shown. The
+// gate is told what was drawn. N3: the engine is given the level itself, under the ceiling
+// (updateDisplay(level)), and each LED takes it at its next step; at b=255 with no pump it is
+// updateDisplay(fBri), which is what the idle blink draws (LogicEngine.h:1139, :1922), so going
+// between native:0 and logic moves no LED. (Not a fraction of 255: that would draw the palette
+// brighter than native:0, an onset at every hand-over. Core revision CA2, reading 3.)
+static inline bool _logicFrame(LogicEngineRenderer& r, uint8_t u, uint32_t now) {
+  ContractUnitState& g = gContract[u];
+  const uint8_t want = _beatBright(g, beatPosAt(gBeat, now));
+  const uint32_t sig = contractLookSig(CE_LOGIC, g.color);
+  if (!contractLookAllowedAt(g, sig, want ? 255 : 0, now)) {          // S4: held
+    if (gLogicUp[u]) _logicWalkOn(r, u, now);
+    return true;
+  }
+  const uint8_t scale = contractFieldAsk(g, want, want, now);         // S9, by both measures at the level asked for
+  CONTRACT_GATE_STAT(u, scale);
+  if (scale != 255 && !gLogicUp[u]) return true;                      // held as it enters: the frame that is up stays up
+  _logicApply(r, u);
+  const uint8_t level = (scale == 255) ? want : gLogicShown[u];       // held: the last level shown
+  contractLookGateAt(g, sig, level ? 255 : 0, now);
+  // Entering from light that is not the walk (a contract look, an overlay, X's dark, a native
+  // sequence other than the idle blink): the display is cleared first and the walk comes in as
+  // its LEDs step, at most one key pause. Otherwise an LED in a pause would go on showing what
+  // was there, up to 400 ms on the rear at its own pace, at a level the gate is not told: a
+  // sequence that draws at a level of its own is brighter than the ceiling (the property stage
+  // found it). From the idle blink nothing is cleared: the walk is the same walk.
+  if (!gLedsWalk[u])
+    for (int y = 0; y < r.height(); y++) for (int x = 0; x < r.width(); x++) r.setPixelRGB(x, y, CRGB(0, 0, 0));
+  r.updateDisplay(level);
+  contractFieldTell(g, level, level, now);
+  gLogicShown[u] = level; gLogicUp[u] = true; gLedsWalk[u] = true;
+  return true;
+}
+// Effect 106 draws something else than the walk (another look, an overlay, X's dark): the owner's
+// settings go back to the engine at once, as they would at an effect change (restoreSettings()
+// copies the RAM default object, LogicEngine.h:1085, :1829).
+// AND THE WALK'S LIGHT IS NOT KNOWN TO THE GATE: it is taken as dark and just lit, as the layer
+// takes the light of a native sequence it cannot see when effect 106 takes the display from it
+// (contractNativeEnded(g, false)), so the first lit frame after the walk waits 340 ms and the
+// frame that is up (the walk's last) stays up meanwhile. The gate takes the walk at its level
+// (N4), and the walk's own light is far under it: at the front display's brightness 160 no
+// channel passes 17. A look that follows it lights the display for anyone watching while, to
+// the gate, the level did not rise. With the window alone started again (the first reading of
+// this, CA2 with F2's first draft), the property stage still found onsets 200 to 300 ms apart:
+// a follower that ramps up (a pumped pulse) was texture to the gate and an onset to an observer.
+// What it costs: a look after logic comes 340 ms late, and an accent over logic that is shorter
+// than that is not shown. Going between logic and native:0 does not come through here (the
+// walk goes on until the idle blink takes it, which is the same walk).
+static inline void _logicLeave(LogicEngineRenderer& r, uint8_t u, uint32_t now) {
+  gLogicUp[u] = false;
+  r.restoreSettings();
+  r.calculateAllColors();
+  contractNativeEnded(gContract[u], false, now);
+}
+
 // ---- the single fork effect fn: renders unit u's contract state each frame ----
 inline bool ContractRender(LogicEngineRenderer& r) {
   uint8_t u = (r.getID() == 1) ? 0 : 1;
@@ -622,8 +746,14 @@ inline bool ContractRender(LogicEngineRenderer& r) {
     // hand-over (and then the last frame is a dark one).
     // If the contract did not put effect 106 here at all (someone selected it by number), there
     // is nothing to wait for: false sends the engine to its default effect (LogicEngine.h:820-830).
+    // v1.4: when the last thing drawn was logic's walk, the walk goes on meanwhile (_logicWalkOn),
+    // so the idle blink takes over a walk that never stopped.
+    if (gShown[u] == SH_CONTRACT && gLogicUp[u]) _logicWalkOn(r, u, now);
     return gShown[u] == SH_CONTRACT;
   }
+  // v1.4 logic, as a base look: the engine's own walk. (An overlay over it is drawn as below.)
+  if (!overlay && g.base == CB_LOOK && g.effect == CE_LOGIC) return _logicFrame(r, u, now);
+  if (gLogicUp[u]) _logicLeave(r, u, now);
 
   // WHAT to draw. The base look, pumped by the beat; or the show's dark baseline; or THE OVERLAY:
   // the accent is an EFFECT SWAP, not a solid fill, so it reuses every renderer below. Its
@@ -674,6 +804,7 @@ inline bool ContractRender(LogicEngineRenderer& r) {
   contractLookGateAt(g, sig, peak, now);
   _draw(r, g, eff, col, bri, t0, now, overlay);
   contractFieldTell(g, level, lum, now);
+  gLedsWalk[u] = false;                                 // v1.4: the LEDs hold this frame, not the walk
   return true;   // MUST return true (LogicEngine.h:820 reverts to NORMAL on false)
 }
 
@@ -782,7 +913,8 @@ inline void applyContractToUnit(uint8_t u, const ParsedContract& p, uint16_t lin
     case CV_LEVEL:
       // Drives the meter look. A higher level is taken at most once in 340 ms (S9 for a part of
       // the field: contractLevelDue); one that has to wait is taken by contractTick().
-      if (pr.hasLevel) { contractLevelOffer(g, pr.level); contractHoldsDue(g, now); }
+      // v1.4 N12: while a vu look is pumped its level is the pump's, and an L is not shown.
+      if (pr.hasLevel && !_vuPumped(g)) { contractLevelOffer(g, pr.level); contractHoldsDue(g, now); }
       break;
     case CV_BRIGHT:
       if (!contractBrightHonoured(g)) break;      // S6: only in show mode (a host sends B after M:v=show);
@@ -860,7 +992,12 @@ inline void contractTick() {
     if (contractWatchdogExpired(g, gLastLineMs, now)) _boundary(u, 'i', 0);   // L2: the host went away
     ContractLookPatch lp;
     if (liveLookDue(g, now, lp)) _applyLook(u, lp, now);                      // S4: a held live look's window ended
-    contractHoldsDue(g, now);                                                 // S9: a held raise of the meter's level (L) or of the brightness (B, b=)
+    if (_vuPumped(g)) {                                                       // v1.4 N10: a pumped vu offers the envelope's level, every pass
+      const BeatPos bp = beatPosAt(gBeat, now);
+      const uint32_t prog = beatSectionProgress16(bp.beatIndex, g.sectionStart, g.sectionEnd);
+      contractLevelOffer(g, envBright(255, g.beatMod, beatAccentAmount(g.accentMode, bp, g.beatMod, prog, gBeat, g.accentEvery)));
+    }
+    contractHoldsDue(g, now);                                                 // S9: a held raise of the meter's level (L, vu's pump) or of the brightness (B, b=)
     if (gRise[u] && (uint32_t)(now - gRiseMs[u]) >= ENGINE_FRAME_MS) {        // S9: the engine has drawn the brighter native
       contractNativeLevel(g, gRiseLevel[u], now); gRise[u] = false;           // look by now: tell the gate it lit
       if (gRiseLevel[u] != 0) contractLookForced(g, contractLookSigNative((int)gEngineSeq[u]), now);
@@ -926,5 +1063,6 @@ inline void contractSetup() {
     gContract[u].fieldRef = gContract[u].fieldRefY = _ownerBri(u);
     gBriGoal[u] = gBriSaved[u] = _ownerBri(u);
     gRestart[u] = true;                           // the engine starts its first sequence at its first frame
+    gLedsWalk[u] = true;                          // (v1.4: and it is the walk, NORMAL)
   }
 }

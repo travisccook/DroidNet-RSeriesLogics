@@ -391,7 +391,7 @@ static std::string randomLine() {
   const char* unit = pick({ "F", "F", "R", "*", "*", "T" });
   const char* fx = pick({ "solid", "solid", "off", "flash", "pulse", "rainbow", "scan", "sparkle", "meter", "comet", "chase",
                           "wipe", "gradient", "colorcycle", "twinkle", "native:0", "native:4", "native:14", "native:25", "bogus",
-                          "native:6", "native:2", "native:20", "native:24", "native:9" });
+                          "native:6", "native:2", "native:20", "native:24", "native:9", "logic", "logic", "vu" });   // (v1.4: logic, vu)
   const char* col = pick({ "ffffff", "ffffff", "ff0000", "000000", "0000ff", "101010", "zzzzzz", "00ff00", "22c55e", "116530", "ffe500" });
   const uint32_t kind = rnd(17);
   const uint32_t r1 = rnd(256), r2 = rnd(2) ? 255 : rnd(300), r3 = rnd(2) ? 255 : rnd(256), r4 = rnd(6), r5 = rnd(5), r6 = rnd(4);
@@ -578,6 +578,36 @@ static const Profile kProfiles[] = {
     [](uint32_t t) { if (t == 0) tx("L*P:i=wipe,c=ffffff,d=170"); }, 340, BROKE_FINE, true },
   { "a comet and a full look by turns (510 ms and 170 ms), by the fine observer", pShow,
     [](uint32_t t) { if (t == 0) tx("L*A:i=comet,c=ffffff,s=255"); if (t == 510) tx("L*A:i=solid,c=ffffff"); }, 680, BROKE_FINE, true },
+  // ---- v1.4 (core revision CA2): logic, the engine's own walk, which the layer does not measure,
+  // and vu, the meter on the pump. The walk is drawn by the mock's model of it (mock_engine.h);
+  // NORMAL is still drawn as a fill at its brightness (R1's stand-in), so a hand-over between the
+  // two is a step of the whole field here, which on a board it is not ----
+  { "logic pumped at 176 and 177 BPM by turns", []() { pShow(); tx("L*A:i=logic,am=2,m=255"); },
+    [](uint32_t t) { if (t == 0) tx("**C:bpm=176,ph=0,bpb=4,beat=0"); if (t == 2000) tx("**C:bpm=177,ph=0,bpb=4,beat=0"); }, 4000, 0 },
+  { "logic pumped at 300 BPM, the fastest pace, a seek every 50 ms", []() { pShow(); tx("L*A:i=logic,s=255,am=2,m=255"); },
+    [](uint32_t t) { if (t % 50 == 0) { char l[48]; snprintf(l, sizeof l, "**C:bpm=300,ph=0,bpb=4,beat=%d", (int)((t / 50) % 5)); tx(l); } }, 250, 0 },
+  { "logic and a white look by turns every 170 ms", pShow,
+    [](uint32_t t) { if (t == 0) tx("L*A:i=logic"); if (t == 170) tx("L*A:i=solid,c=ffffff"); }, 340, 0 },
+  { "logic, X and logic again every 100 ms", pShow,
+    [](uint32_t t) { if (t == 0) tx("L*A:i=logic"); if (t == 50) tx("L*X"); }, 100, 0 },
+  { "logic and native:0 by turns every 200 ms", pShow,
+    [](uint32_t t) { if (t == 0) tx("L*A:i=logic"); if (t == 200) tx("L*A:i=native:0"); }, 400, 0 },
+  { "logic under B at 0 and 255 by turns every 50 ms", []() { pShow(); tx("L*A:i=logic,c=ff0000"); },
+    [](uint32_t t) { if (t == 0) tx("L*B:b=0"); if (t == 50) tx("L*B:b=255"); }, 100, 0 },
+  { "logic with a white accent every 340 ms", []() { pShow(); tx("L*A:i=logic,am=2,m=200"); tx("**C:bpm=120,ph=0,bpb=4,beat=0"); },
+    [](uint32_t t) { if (t == 0) tx("L*P:c=ffffff,d=170"); }, 340, 0 },
+  { "logic, a white look, X and the white look again", pShow,
+    [](uint32_t t) { if (t == 0) tx("L*A:i=logic"); if (t == 200) tx("L*A:i=solid,c=ffffff"); if (t == 210) tx("L*X"); if (t == 220) tx("L*A:i=solid,c=ffffff"); }, 600, 0 },
+  { "logic in red, blue and white by turns every 170 ms", pShow,
+    [](uint32_t t) { if (t == 0) tx("L*A:i=logic,c=ff0000"); if (t == 170) tx("L*A:i=logic,c=0000ff"); if (t == 340) tx("L*A:i=logic,c=ffffff"); }, 510, 0 },
+  { "M:v=idle and a pumped logic by turns", []() { tx("**C:bpm=150,ph=0,bpb=4,beat=0"); },
+    [](uint32_t t) { if (t == 0) tx("L*A:i=logic,am=2,m=255"); if (t == 0) tx("**C:bpm=150,ph=0,bpb=4,beat=0"); if (t == 300) tx("L*M:v=idle"); }, 600, 0 },
+  { "scored logic and solid sections, a seek every 60 ms", []() { pShow(); tx("L*A:i=logic,am=2,m=255,at=0"); tx("L*A:i=solid,c=ffffff,at=1"); tx("L*A:i=logic,c=ff0000,at=2"); },
+    [](uint32_t t) { if (t % 60 == 0) { char l[40]; snprintf(l, sizeof l, "**C:bpm=120,beat=%d", (int)((t / 60) % 3)); tx(l); } }, 180, 0 },
+  { "vu pumped at 300 BPM, a seek every 50 ms", []() { pShow(); tx("L*A:i=vu,c=ffffff,am=2,m=255"); },
+    [](uint32_t t) { if (t % 50 == 0) { char l[48]; snprintf(l, sizeof l, "**C:bpm=300,ph=0,bpb=4,beat=%d", (int)((t / 50) % 5)); tx(l); } }, 250, 0, true },
+  { "vu pumped at 176 BPM under B at 0 and 200 by turns", []() { pShow(); tx("L*A:i=vu,c=ffffff,am=2,m=255"); tx("**C:bpm=176,ph=0,bpb=4,beat=0"); },
+    [](uint32_t t) { if (t == 0) tx("L*B:b=0"); if (t == 30) tx("L*B:b=200"); }, 60, 0, true },
 };
 static const int kProfileCount = (int)(sizeof kProfiles / sizeof kProfiles[0]);
 static const int kRandomExpected = 0;
@@ -690,7 +720,11 @@ static Result runRandom(int streams) {
     mockEngineSize(1, kRearSizes[sidx % 5][0], kRearSizes[sidx % 5][1]);
     begin();
     if (rnd(3) == 0) { LogicEngineFLDDefault.fBri = (byte)(40 + rnd(216)); FLD->_liveBri = LogicEngineFLDDefault.fBri;   // the owner's own setting
-                       gW[0].ceil = LogicEngineFLDDefault.fBri; }
+                       gW[0].ceil = LogicEngineFLDDefault.fBri;
+                       // set before the show: the idle look draws at it before the first line. (v1.4: logic takes
+                       // the idle blink's LEDs over as they are, and the mock's idle look is a fill at the brightness
+                       // it last drew at; with the line in the same pass, LEDs still in a pause were at the old one.)
+                       for (int i = 0; i < 30; i++) step(); }
     const uint32_t busy = 2 + rnd(30);            // one line every `busy` frames on average
     const bool buttons = rnd(2) == 0;             // half the streams have an owner at the controller
     const bool fine = rnd(4) == 0;                // a quarter pass through the loop as the board does: every 1 to 4 ms
@@ -755,7 +789,7 @@ int main() {
   for (int i = 0; i < kProfileCount; i++) { const Result r = runProfile(kProfiles[i], 10); verdict(kProfiles[i].name, r, kProfiles[i].expected); all.add(r); }
   // every look by itself, at four speeds, on every display size: the fine observer
   static const char* const kAlone[] = { "solid", "flash", "pulse", "rainbow", "scan", "sparkle", "meter", "comet", "chase", "wipe",
-                                        "gradient", "colorcycle", "twinkle" };
+                                        "gradient", "colorcycle", "twinkle", "logic", "vu" };
   for (const char* look : kAlone) {
     Result r;
     for (int sp : { 255, 200, 128, 0 }) for (int round = 0; round < 10; round++) r.add(runAlone(look, sp, round));

@@ -26,7 +26,8 @@ static void send(const char* afterBang) {
 // Wipe every fork-owned global so each scenario starts from power-on state.
 static void resetAll() {
   for (uint8_t u = 0; u < 2; u++) { gContract[u] = ContractUnitState(); gBriTouched[u] = false; gShown[u] = SH_ENGINE; gShownCode[u] = 0; gLatched[u] = true; gEngineSeq[u] = 0;
-                                    gQueryLen[u] = 0; gBriGoing[u] = false; gRise[u] = false; gRestart[u] = false; }
+                                    gQueryLen[u] = 0; gBriGoing[u] = false; gRise[u] = false; gRestart[u] = false;
+                                    gLogicUp[u] = false; gLogicShown[u] = 0; gLedsWalk[u] = true; }
   gLastLineMs = 0;
   mockEngineReset();
   gBeat = BeatClock{};
@@ -50,6 +51,7 @@ int main() {
     "L*A:i=comet,c=3B82F6,s=200",
     "L*A:i=chase,c=3B82F6,s=200", "L*A:i=wipe,c=3B82F6,s=200", "L*A:i=gradient,s=200",
     "L*A:i=colorcycle,s=200", "L*A:i=twinkle,c=3B82F6,s=200",
+    "L*A:i=logic,c=116530,s=200,am=2,m=255", "LFA:i=vu,am=2,m=200", "LRA:i=projector,c=ff0000",   // v1.4
   };
   for (const char* s : cmds) contractHandleLine(s);
 
