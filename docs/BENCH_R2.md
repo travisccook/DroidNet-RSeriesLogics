@@ -12,17 +12,18 @@ Each check is made beside the stock look where there is one. The numbers are the
 
 | # | Check | What the host side expects | Result |
 | - | ----- | -------------------------- | ------ |
-| 1 | `A:i=logic` beside the idle blink: not told apart by eye, front and rear | The same light: `updateDisplay(fBri)` on the same walk (stage 2g: no LED differs from `native:0` with the same seed and brightness) | |
-| 2 | Idle to `logic` and back: no LED jumps; palette, pace and brightness are the owner's afterwards | No LED changes at the hand-over either way; the engine's live settings are the RAM default object's afterwards | |
+| 1 | `A:i=logic` beside the idle blink: not told apart by eye, front and rear | At `b=255` the same light: `updateDisplay(fBri)` on the same walk. Under 255 `logic` is brighter than `native:0` at the same `b=` (front at 160, `b=128`: LEDs summing to 159 against 28) | |
+| 2 | Idle to `logic` and back: no LED jumps; palette, pace and brightness are the owner's afterwards | A hold each way: the frame that is up stays up about 400 ms (39 to 42 frames in the mock), then the other walk goes on; nothing flickers. Say whether the pause shows. The engine's live settings are the RAM default object's afterwards | |
 | 3 | `logic` under `am=2,m=200` at 90, 120 and 176 BPM: the beat reads on the front; say how soft it is on the rear | At 176 BPM the pump takes every other beat (`FX_LOGIC_PUMP_MIN_MS`, 400 ms); each LED takes the level at its next step, up to 400 ms late on the rear | |
 | 4 | `logic` with `c=` red, amber, ice white (own colours expected) and magenta: the hue is the one asked for | Ice white is a colour with no hue: the display's own palette. The others: the front palette's shape at `fxLogicHue(c) - 170` | |
 | 5 | `s=0`, `128`, `255`: slower, stock, and the fastest on offer; nothing strobes | Front fade/delay 4/40, 1/10, 1/10; rear 12/160, 3/40, 1/20 | |
 | 6 | Front on even beats and rear on odd: the trade reads | `an=2`, `ap=0` and `ap=1` | |
 | 7 | `M:v=idle`, `X`, the watchdog and a button during `logic`: each as in R1 | Idle and the watchdog: the walk goes on into the idle blink. `X`: dark at once. A button: its sequence, and the show ends on that display | |
 
-Also to note at rows 2 and 7: after `logic`, a contract look (or an accent) comes 340 ms late, the walk's last frame
-held meanwhile, and an accent shorter than that is not shown ("What is not in" in `DROIDNET_FORK.md`). Say whether
-the hold shows.
+Also to note at rows 2, 3 and 7: after `logic`, a contract look (or an accent) comes 400 ms late, the walk's last frame
+held meanwhile, and an accent shorter than that is not shown; a recolour of `logic` waits up to 400 ms; a rise of its
+level that is not its pump's beat (`B`, a pause and resume) up to 500 ms ("Its windows" in `DROIDNET_FORK.md`). Say
+whether any of the holds show.
 
 ## Rows for all the boards, made on this one too
 

@@ -74,9 +74,14 @@ What is verified is host-side, by `bash test/host/run.sh` (and by CI, `.github/w
 - `projector`'s step rule (contract v1.4 N7) on a jewel of seven with seeded dice (stage 1j, pure core);
 - `logic` and `vu` on the layer (stage 2g, `test/host/test_contract_logics_r2.cpp`), on a mock engine whose walk is
   held LED for LED to a copy of stage 1k's model: what the look sets on the engine, the level it gives it every frame,
-  the gates, the hand-over from the idle blink (no LED differs from `native:0` with the same seed and brightness), the
+  the gates and logic's windows, the hand-over with the idle blink (a hold of 400 ms each way in which no LED moves,
+  and no part of a display lit more often in a second than by the idle blink alone, on the look's own scale), the
   owner's settings after every way out, and the layer's LEDs under the pump against the model's (none apart in 100
-  cases); `vu`'s rows at five tempos and under a seek every 50 ms. The property stage (2e) has both in its streams;
+  cases); `vu`'s rows at five tempos and under a seek every 50 ms. The property stage (2e) has both in its streams,
+  and an observer (i) that counts `logic`'s walk on its own scale, stage 1k's fine reading, wherever it is up;
+- the 2026-11-21 review's findings (stage R2rev, `test/host/test_review_r2_findings.cpp`, the reviewer's): stage 1k's
+  count run on the real layer's LEDs under host streams that raise `logic`'s light by every path. Two of its checks
+  fail by decision ("What is not in");
 - the Serial1 reader, including a 400-byte burst of back-to-back lines, with and without the pass-through;
 - the real ESP32 cross-compile (`pio run -e wlogicengine32`), which is a link, not a run.
 
@@ -163,23 +168,50 @@ the Signal Booster. The query reply says `ver=1.4,rel=2`; the WDP caps say `cont
     every other beat. Each LED takes the level at its next step (N3), which is what stage 1k models; stage 2g holds the
     layer's LEDs to the model's frame for frame.
   - *The gates.* Not measured (N4): the look gate and the field gate are asked with the level for both measures (a
-    peak of 255 when it is not 0), and told what was drawn. While the look is up, a frame the field gate holds is
-    drawn at the last level shown (the walk goes on), and one the look gate holds keeps the walk going in its old
-    colours. A frame held as the look enters leaves the frame that is up.
-  - *The hand-over.* From the idle blink nothing changes on the LEDs: the walk is the same walk. Going back
-    (`M:v=idle`, the watchdog), the walk goes on while the hand-back waits for the gates, and the idle blink takes it
-    over. From anything else (a contract look, an accent, X's dark, another native sequence) the display is cleared
-    first and the walk comes in as its LEDs step.
-  - *Leaving it.* When effect 106 draws anything else, the owner's settings go back (`restoreSettings()`), and the
-    walk's light is taken as not known to the gate (`contractNativeEnded(known=false)`): the next lit frame waits 340
-    ms, the walk's last frame up. See "What is not in" for why, and what it costs.
+    peak of 255 when it is not 0), and told what was drawn. While the look is up, a frame held is drawn at the last
+    level shown (the walk goes on); a frame held as the look enters leaves the frame that is up.
+  - *Its windows* (the 2026-11-21 review; stage 1k decided 400 ms for the pump's rises because the walk takes each
+    level and each colour LED by LED, 0 to about 130 ms late and up to a key pause, 390 ms, on the rear). These are
+    every timing rule the layer applies to `logic`, for Studio's mirror. "Lit" is the field gate's onset or brightening
+    time (`fieldOnsetMs`), and every rule is in whole milliseconds against the frame's `millis()`:
+    1. *Entering over the walk* (the idle blink, `native:0`, or `logic`'s own last frame after it left): at the first
+       frame effect 106 runs the look, the field is taken as dark and just lit (`contractNativeEnded(known=false)`,
+       once), and the frame that is up stays up until the look may light: 400 ms (rule 4), and S4's 170 ms after the
+       field's last change of look. On a board: the idle blink's last frame held about 400 ms, then the walk again.
+    2. *Entering over anything else* (a contract look, an accent, `X`'s dark, another native sequence): the field gate
+       as it stands, with rule 4's 400 ms for an onset; the display is cleared at the first frame drawn.
+    3. *A recolour while up* (a new palette or hue: `c=`, or the owner's palette): waits until 400 ms after the field
+       last lit or got brighter (and S4's 170 ms), the walk going on in its old colours; at the frame it is shown the
+       window starts again from it (`contractNativeEnded(known=true)`: the level the gate knows stands). A pace alone
+       (`s=`) is no recolour.
+    4. *A rise of the level* that the field gate counts as an onset (a step, a tenth of the ceiling plus one, above
+       the trough, after a fall of a step): as the look enters, and on a beat its own pump fires on (the first 30 ms of
+       a beat `fxLogicPumpFires()` keeps), 400 ms after the field last lit or got brighter (`FX_LOGIC_PUMP_MIN_MS`); any
+       other rise while the look is up (`B`, `b=`, the clock held and resumed, a `C` re-seed, a moved `ap=`, the owner's
+       brightness) 500 ms (`LOGIC_RISE_MS`, fork-local). Held, it is drawn at the last level shown. A fall is never
+       held.
+    5. *Leaving the walk* for anything (another look, an accent, `X`, a native look, the idle blink, `M:v=idle`, the
+       watchdog): the owner's settings go back (`restoreSettings()`), the field is taken as dark and just lit
+       (`contractNativeEnded(known=false)`), and the walk's last frame stays up, unchanging, until the next light: a
+       lit frame of effect 106, or the selection of a native sequence, 400 ms after the walk ended at the earliest
+       (`gWalkLeft`), and no sooner than the core's own gates say. `X`'s dark (and lights-out) is never held. A button
+       is never held either: the engine starts it.
+    6. The pump itself is the core's: `fxLogicPumpAmount()`, rises 400 ms apart, so from 151 to 176 BPM an every-beat
+       pump takes every other beat. Held as rule 4 says, a beat can be skipped where a re-seed or a seek put it
+       inside the window.
+  - *The hand-over in time.* `native:0` to `logic`: about 400 ms after the frame effect 106 starts (the next engine
+    frame after the line), the idle blink's last frame held meanwhile. `logic` to `native:0` (or idle, or the watchdog):
+    the idle blink is selected 400 ms after the line (or the watchdog's expiry) and starts at the next engine frame,
+    `logic`'s last frame held meanwhile. In the mock each hold is 39 to 42 frames of 10 ms. Nothing flickers, at
+    every brightness; the light is not the same on both sides under `b=255` (see "What is not in").
 - **`vu`** (N10 to N12) is `meter`, with the pump moving its level: while it is pumped (the clock runs, `am=` and `m=`
   are not 0) the tick offers `envBright(255, m, beatAccentAmount(...))` to the level hold every pass, the meter's
   brightness is the look's level (never pumped), and verb `L` is not shown. Not pumped it is `meter`, frame for frame.
 - **`projector`** draws as `sparkle` here (v1.4's table).
 - `logic`, `projector` and `vu` are no accent (`ae=` naming one is no accent), and an accent may run over each.
-- What it costs the ESP32 image (`pio run -e wlogicengine32`): 1,138,617 B of flash and 64,948 B of static RAM, where
-  CA2 with the stand-ins was 1,136,937 B and 64,948 B (+1,680 B of flash).
+- **`projector`** is not pumped (N8), here where it stands in as `sparkle`: `am=` and `m=` are kept and ignored.
+- What it costs the ESP32 image (`pio run -e wlogicengine32`): 1,139,309 B of flash and 64,956 B of static RAM, where
+  CA2 with the stand-ins was 1,136,937 B and 64,948 B (F2 as first merged: 1,138,617 B and 64,948 B).
 
 ### What is not in
 
@@ -188,21 +220,29 @@ the Signal Booster. The query reply says `ver=1.4,rel=2`; the WDP caps say `cont
   to the native mic-reactive effects (deferred in v1.4; `contractSetup()` is still a no-op).
 - **`logic`: the gate does not know the walk's light.** v1.4 N4 has the layer take the look at the level it asks
   for, as it takes the idle blink, and the walk's own light is far under that level: at the front display's
-  brightness 160 no channel passes 17 (CA2 reading 2). A look that follows `logic` lights the display for anyone
-  watching while, to the gate, nothing rose. The property stage found it as soon as `logic` was in its streams: a white
-  look, `X` and the white look again were two onsets 170 ms apart, and with the window alone started again at the
-  hand-over, a follower that ramps up (a pumped pulse) still gave onsets 200 to 300 ms apart. So the walk's light is
-  taken as unknown when effect 106 stops drawing it (the layer's rule for a native sequence it cannot see), and a lit
-  frame after `logic` waits 340 ms. What that costs: a look after `logic` comes 340 ms late, and an accent over `logic`
-  shorter than 340 ms is not shown at all. Going between `logic` and `native:0` is not affected. The same thing is
-  true of the idle blink in R1 (a white look after it is no onset to the gate: "The luminance of a native sequence"
-  below), and the property stage does not see it there because its mock draws the idle look as a fill at its
-  brightness; only `logic` is drawn by the mock's model of the walk.
+  brightness 160 no channel passes 17 (CA2 reading 2), and it takes each level and colour LED by LED, late. So the
+  layer keeps the windows above ("Its windows"). The property stage found the first of it (a white look, `X` and the
+  white look again: two onsets 170 ms apart), the 2026-11-21 review the rest: a rise of the level by a path the pump's
+  own floor does not see (97 of 408 cases over by stage 1k's count, 4 a second on the whole field with `B`), a
+  recolour (10 of 12), and `native:0` and `logic` by turns (6 of 16). What the windows cost: a look after `logic`
+  comes 400 ms late; an accent over `logic` shorter than 400 ms is not shown at all; `native:0` and `logic` each take
+  about 400 ms to come in; a host that turns between `logic` and a native look every 200 ms gets neither (each
+  hand-over is still waiting when the next line comes, and the frame that is up stays up); a rise of the look's level
+  that is not its pump's beat can wait 500 ms. The same is true of the idle blink in R1 against contract looks (a
+  white look after it is no onset to the gate: "The luminance of a native sequence" below), and the property stage
+  does not see it there because its mock draws the idle look as a fill at its brightness.
+- **`native:0` and `logic` at one `b=` under 255 are two lights.** `native:0` under 255 runs the idle blink with the
+  engine's brightness at the level (`_engineBri`: the palette baked at the level, then scaled by it again);
+  `logic` bakes the palette at the ceiling and scales it by the level once (N3, what stage 1k models). On the front at
+  160 the LEDs sum to 28 against 159 at `b=128`, 244 against 401 at `b=200`. N4's "no LED moves" holds at `b=255`
+  only. By decision (2026-11-21) the two are not made equal; the hand-over is unseen light instead, both ways (rules 1
+  and 5), so nothing flickers. The review's two checks that they are one light (stage R2rev, R2-F2's first) fail
+  for that reason and are left as the reviewer wrote them; `run.sh` ends red there until the owner decides.
 - **`logic`'s pump on the rear display** is softer than on the front: a level reaches an LED at its next step, up to
   400 ms later on the rear's own settings (v1.4 open question 2). Stage 1k cannot say how soft it looks.
 - **A scored accent over a `logic` section** fires on S2's beats (`beatAccentFires()`), the pump on `logic`'s own. From
   151 to 176 BPM the accent can come on a beat the pump skips (CA2 reading 1 left it to the layer; it was left as it
-  is, and the leave rule above holds such an accent shorter than 340 ms back anyway).
+  is, and rule 5 holds such an accent shorter than 400 ms back anyway).
 - **An LED in a pause keeps what it showed** until its next step (the engine's walk). After the owner turns a display
   down, the idle blink takes the new level LED by LED, as it does stock, and `logic` entered within one key pause of
   that does the same.
