@@ -508,7 +508,8 @@ static inline void _draw(LogicEngineRenderer& r, const ContractUnitState& g, Con
           _px(r, x, y, (x == pos) ? c : CRGB(0, 0, 0));
       break;
     }
-    case CE_SPARKLE: {
+    case CE_SPARKLE:
+    case CE_PROJECTOR: {                                 // v1.4 (CA2): a stand-in here; projector is the holoprojectors' look
       // A new pattern every 350 to 477 ms (CA1.7: it was 80 to 207 ms). Every pattern is drawn
       // afresh, so a quarter of the display, some twenty LEDs, changes its level by more than a
       // tenth from one pattern to the next: at 80 ms that was five onsets a second in one
@@ -522,7 +523,8 @@ static inline void _draw(LogicEngineRenderer& r, const ContractUnitState& g, Con
           _px(r, x, y, (_hash3(x, y, blk) % 100u) < density ? c : CRGB(0, 0, 0));
       break;
     }
-    case CE_METER: {
+    case CE_METER:
+    case CE_VU: {                                        // v1.4 (CA2): a stand-in until Task F2 gives vu its level from the pump
       int lit = (H * (int)g.level) / 255;                                // fill from bottom (the level: contractLevelOffer)
       CRGB c = _scaled(col.r || col.g || col.b ? col : ContractRGB{0, 255, 0}, bri);
       for (int y = 0; y < H; y++)
@@ -572,7 +574,8 @@ static inline void _draw(LogicEngineRenderer& r, const ContractUnitState& g, Con
       _fill(r, CRGB(c.r, c.g, c.b));
       break;
     }
-    case CE_TWINKLE: {
+    case CE_TWINKLE:
+    case CE_LOGIC: {                                     // v1.4 (CA2): a stand-in until Task F2 draws the engine's own walk
       for (int y = 0; y < H; y++)
         for (int x = 0; x < W; x++) {
           uint8_t tb = fxTwinkleBright(y * W + x, now, g.speed);

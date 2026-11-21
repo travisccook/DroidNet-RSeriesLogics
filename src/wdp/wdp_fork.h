@@ -2,7 +2,7 @@
 // two calls src/main.cpp makes. wdp_announce_core.h (shared with the PSI and Flthy forks) builds
 // and paces the line; this file only says what the board is and where the line goes:
 //
-//     @WDP1 {"type":"R-Series Logics","fw":"<commit>","caps":["droidnet.contract","contract.1.3","led.logic"]}
+//     @WDP1 {"type":"R-Series Logics","fw":"<commit>","caps":["droidnet.contract","contract.1.4","led.logic"]}
 //
 // The port is Serial1, the Marcduino serial port the WCB is wired to. ONE other thing in the
 // firmware writes to Serial1: the contract's reply to a Q (ContractLogics.h), through
@@ -23,9 +23,9 @@
 #define WDP_FW "unknown"
 #endif
 #define WDP_TYPE "R-Series Logics"   // the WCB Wizard's name for it (Wizard/device-labels.js)
-// "contract.1.3" is the Driveable-Animation Contract version this firmware speaks (CONTRACT_VERSION
+// "contract.1.4" is the Driveable-Animation Contract version this firmware speaks (CONTRACT_VERSION
 // in contract_core.h; test/host/run.sh stage 3 fails if the two disagree).
-#define WDP_CAPS "droidnet.contract contract.1.3 led.logic"
+#define WDP_CAPS "droidnet.contract contract.1.4 led.logic"
 
 // "" X compiles only when X is a string literal, so a WDP_FW define that lost its quotes fails
 // the build here instead of announcing garbage.

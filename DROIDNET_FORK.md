@@ -25,7 +25,10 @@ accents, a host-seeded beat clock, and autonomous board-side section playback â€
 
 ## Status
 
-**Contract v1.3, release R1, in source. Not on hardware.**
+**Contract v1.3, release R1, in source. Not on hardware.** On the R2 line (`lighting-r2`), the shared core is at
+revision CA2: contract v1.4, release 2, with the ids `logic`, `projector` and `vu` (see "Core revision CA2" in
+[docs/CHANGING_THE_CORE.md](docs/CHANGING_THE_CORE.md)). This fork's layer draws them with stand-ins for now:
+`logic` as `twinkle`, `projector` as `sparkle`, `vu` as `meter`. `logic` and `vu` of their own are Task F2's.
 
 - The prebuilt classic ESP32 image in `firmware/` (`f7bd207`, 2026-10-16) runs on the C2-B5 dome's R-Series board;
   it was flashed over WiFi through the board's own Reflash page. That image predates contract v1.3.
@@ -64,6 +67,10 @@ What is verified is host-side, by `bash test/host/run.sh` (and by CI, `.github/w
 - contract S10 as a test (stage 1i): a model of the stock sequences, on every display size the engine knows,
   counts each allow-listed code's onsets over the whole field and over every region of a quarter or more, at the
   speed the core starts it with. It is a model of the stock code, not a measurement of a display;
+- `logic` (contract v1.4, section 9) as a test (stage 1k): a model of the engine's walk, on every display size, at the
+  own, slowest and fastest pace, steady and pumped, counts the worst second over the whole field and over every region
+  of a quarter or more. It decides the core's floors for `logic`'s pace and pump (below). A model, not a measurement;
+- `projector`'s step rule (contract v1.4 N7) on a jewel of seven with seeded dice (stage 1j, pure core);
 - the Serial1 reader, including a 400-byte burst of back-to-back lines, with and without the pass-through;
 - the real ESP32 cross-compile (`pio run -e wlogicengine32`), which is a link, not a run.
 
@@ -127,7 +134,8 @@ is the DroidNet layer (`git log --oneline 6bba8b1..HEAD`).
   is taken at once, a higher one waits for the window, the newest of them. A look that lights part of a display
   (a meter with one row lit) under `B:b=0` and `B:b=200` by turns lit that part as often as the lines came.
 - **Query.** `Q:r=<route>` addressed to one display is answered on Serial1 with
-  `;S0!L<u>q:ver=1.3,rel=1,cap=32,n=<held>,ok=<0|1|2>,bpm=<n>` (`;W<n>,;S0...` for a remote WCB). `r` is a
+  `;S0!L<u>q:ver=1.3,rel=1,cap=32,n=<held>,ok=<0|1|2>,bpm=<n>` (`;W<n>,;S0...` for a remote WCB); on the R2 line,
+  with the core at CA2, `ver=1.4,rel=2`. `r` is a
   number 0 to 99; anything else gets no reply. One reply a display can wait to be written.
 
 ### What is not in
@@ -262,6 +270,55 @@ Notes:
   level the gate is told (`nativeSteadyLogics()`). After any other sequence the gate takes the field as dark and
   just lit, so a contract look that follows waits 340 ms, and a native look that follows comes through effect
   106, which holds the last frame meanwhile.
+
+### `logic`'s floors: a model of the walk, not a measurement
+
+Contract v1.4 section 9 asks for `logic` what S10 asks of a stock sequence: no part of a display of a quarter or more
+lights more than three times in a second, at any pace on offer, steady and under the pump, or no more often than the
+display's own stock blink does. `test/host/test_logic_regions.cpp` (stage 1k) is that test on a MODEL of the engine's
+walk: the palette as `calculateAllColors()` bakes it, every LED walking it with its pauses from FastLED's `random8()`,
+`hsv2rgb_rainbow`, a frame every 10 ms, the pace from `fxLogicPace()`, and the level from the core's clock reaching
+each LED at its next step (`updateDisplay(level)`). No engine and no layer is in it, and nothing in it has been seen on
+a display. `docs/CHANGING_THE_CORE.md` ("Core revision CA2") says how it counts and why.
+
+The worst second, by the stage's fine reading (the gate's rule on the look's own full scale), whole field / any region,
+own palette (two colours, `116530` and `ff0000`, are in the stage as well and are never worse); the pump is `am=2`,
+`m=255`, through `fxLogicPumpAmount()`; 60 s a case:
+
+| Display | Brightness | s | Fade / delay | Steady | 30 BPM | 120 | 176 | 177 | 300 | Stock blink |
+| ------- | ---------- | - | ------------ | ------ | ------ | --- | --- | --- | --- | ----------- |
+| front 8 x 10 | 160 | 128 (own) | 1 / 10 | 1 / 2 | 1 / 1 | 3 / 3 | 2 / 2 | 2 / 2 | 3 / 3 | 1 / 2 |
+| front 8 x 10 | 160 | 0 | 4 / 40 | 1 / 1 | 1 / 1 | 3 / 3 | 2 / 2 | 2 / 2 | 3 / 3 | 1 / 2 |
+| front 8 x 10 | 160 | 255 | 1 / 10 | 1 / 2 | 1 / 1 | 3 / 3 | 2 / 2 | 2 / 2 | 3 / 3 | 1 / 2 |
+| front 8 x 10 | 255 | 128, 0, 255 | as above | 1 / 1 to 1 / 2 | 1 / 1 | 3 / 3 | 2 / 2 | 2 / 2 | 3 / 3 | 1 / 2 |
+| rear 16 x 4 | 140 | 128 (own) | 3 / 40 | 0 / 1 | 1 / 1 | 3 / 3 | 2 / 2 | 2 / 2 | 3 / 3 | 0 / 1 |
+| rear 16 x 4 | 140 | 0 | 12 / 160 | 1 / 1 | 1 / 1 | 3 / 3 | 1 / 2 | 2 / 2 | 2 / 3 | 0 / 1 |
+| rear 16 x 4 | 140 | 255 | 1 / 20 | 1 / 2 | 1 / 1 | 3 / 3 | 2 / 2 | 2 / 2 | 3 / 3 | 0 / 1 |
+| rear 16 x 4 | 255 | 128, 0, 255 | as above | 1 / 1 to 1 / 2 | 1 / 1 | 3 / 3 | 2 / 2 | 2 / 2 | 2 / 3 to 3 / 3 | 1 / 2 |
+| rear 24 x 4 | 140, 255 | 128, 0, 255 | as above | 0 / 1 to 1 / 2 | 1 / 1 | 3 / 3 | 2 / 2 | 1 / 2 to 2 / 2 | 1 / 3 to 3 / 3 | 1 / 1, 1 / 2 |
+| rear 28 x 4 | 140, 255 | 128, 0, 255 | as above | 0 / 1 to 1 / 2 | 1 / 1 | 3 / 3 | 1 / 2 to 2 / 2 | 1 / 2 to 2 / 2 | 1 / 2 to 3 / 3 | 0 / 1, 1 / 1 |
+| rear 32 x 8 | 140, 255 | 128, 0, 255 | as above | 0 / 1 to 0 / 2 | 1 / 1 | 3 / 3 | 1 / 2 to 2 / 2 | 1 / 2 to 2 / 2 | 1 / 2 to 3 / 3 | 0 / 1 |
+
+What it settled:
+
+- **The pace's floors stay** at `FX_LOGIC_FADE_MIN` 1 and `FX_LOGIC_DELAY_MIN` 10. Steady, no pace on offer lights any
+  part of any display more than twice in a second. The fastest pace is the front's own pace; on the rear it is a fade
+  of 1 and a delay of 20 where the stock is 3 and 40.
+- **The pump has a floor of its own,** `FX_LOGIC_PUMP_MIN_MS` 400, where S2 has 340. The light of a beat reaches the
+  LEDs 0 to about 130 ms after it, by a different amount each beat, and with rises 341 to about 380 ms apart that put
+  four onsets into one second at every pace, the stock one included. From 146 to 180 BPM every 2, on the front and the
+  16 by 4 rear, at three paces and both brightnesses (216 cases, 30 s each):
+
+| The pump's floor | Cases over three in a second | The closest two onsets of a region |
+| ---------------- | ---------------------------- | ---------------------------------- |
+| S2's alone, 340 ms | 43 of 216 | 200 ms (168 BPM) |
+| `logic`'s own, 400 ms | 0 of 216 | 290 ms (148 BPM) |
+
+In a wider scan (100 to 300 BPM), 360 ms failed and 380 ms passed; 400 ms passed on four seeds and with owners' fades
+up to 40 and delays up to 100. The floor thins only every-beat pumps from 151 to 176 BPM, to every other beat.
+
+The bench confirms it, or does not. The pump is softer on the rear display than on the front (contract v1.4 open
+question 2), and this model cannot say how soft it looks.
 
 ### Native brightness: `#LEBRI`
 

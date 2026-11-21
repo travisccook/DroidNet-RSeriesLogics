@@ -169,6 +169,14 @@ int main(int argc, char** argv) {
   printf(",\n    \"FX_CYCLE_MIN_MS\": %lu,\n    \"FX_FLASH_MIN_STATE_MS\": %lu", (unsigned long)FX_CYCLE_MIN_MS, (unsigned long)FX_FLASH_MIN_STATE_MS);
   // S9: the gate's step is more than a tenth of the ceiling and at least 2 levels: ceil / DIV + 1.
   printf(",\n    \"FIELD_STEP_DIV\": 10,\n    \"FIELD_STEP_MIN\": 2");
+  // CA2 (v1.4): logic's grey, its hue base and the floors of its pace; projector's step and the
+  // spacing of its brightening steps.
+  printf(",\n    \"FX_LOGIC_GREY\": %u,\n    \"FX_LOGIC_HUE_BASE\": %u,\n    \"FX_LOGIC_FADE_MIN\": %u,\n    \"FX_LOGIC_DELAY_MIN\": %u",
+         (unsigned)FX_LOGIC_GREY, (unsigned)FX_LOGIC_HUE_BASE, (unsigned)FX_LOGIC_FADE_MIN, (unsigned)FX_LOGIC_DELAY_MIN);
+  printf(",\n    \"FX_PROJECTOR_STEP_MIN_MS\": %lu,\n    \"FX_PROJECTOR_STEP_MAX_MS\": %lu,\n    \"FX_PROJECTOR_BRIGHT_MS\": %lu",
+         (unsigned long)FX_PROJECTOR_STEP_MIN_MS, (unsigned long)FX_PROJECTOR_STEP_MAX_MS, (unsigned long)FX_PROJECTOR_BRIGHT_MS);
+  // CA2, from the model of the walk (test_logic_regions.cpp): the shortest gap between two of logic's pump rises.
+  printf(",\n    \"FX_LOGIC_PUMP_MIN_MS\": %lu", (unsigned long)FX_LOGIC_PUMP_MIN_MS);
   // MORE CONSTANTS GO HERE (each starts with ",\n    ")
   printf("\n  ");
   printf("},\n  \"lines\": [");
@@ -177,7 +185,9 @@ int main(int argc, char** argv) {
     "LFA:i=native:0,c=3b82f6,at=0", "LFA:i=rainbow,c=f97316,at=56,am=1,m=200,ae=flash", "LFA:i=native:0,at=447",
     "L*A:i=solid,c=0080FF,at=8", "**A:i=off,at=512", "LFA:i=comet,c=ff0000,at=56",
     "L*A:i=colorcycle,c=3b82f6,s=255,b=255,at=99999,am=2,m=255,an=16,ap=15,ae=colorcycle,ac=ffffff,ad=2550",
-    "PFA:i=solid,c=f97316,at=44,am=1", "HTA:i=twinkle,c=00ff88,b=120,at=-8", "123456789", "" };
+    "PFA:i=solid,c=f97316,at=44,am=1", "HTA:i=twinkle,c=00ff88,b=120,at=-8", "123456789", "",
+    // CA2 (v1.4): one line for each new id
+    "LFA:i=logic,c=116530,s=200,at=16,am=2,m=255", "HTA:i=projector,c=ff0000,b=200,at=32", "PFA:i=vu,am=2,m=200,at=8" };
   for (size_t i = 0; i < sizeof kLines / sizeof kLines[0]; i++)
     printf("%s\n    {\"line\": \"%s\", \"crc16\": %u}", i ? "," : "", kLines[i], (unsigned)contractCrc16(kLines[i]));
   printf("\n  ");
@@ -559,6 +569,77 @@ int main(int argc, char** argv) {
       BeatClock bc; seedClock(bc, bpm, 0, 4, beat, seed);
       const int32_t e = accentEdgeAfterSeed(bc, seed + d);
       row({ bpm, 0, beat, seed, (uint32_t)(seed + d), e == BEAT_NONE ? 0 : 1, e == BEAT_NONE ? 0 : e });
+    }
+  // CA2 (v1.4). logic: is a colour the display's own (no hue), its hue on FastLED's rainbow wheel,
+  // and the engine's fade or delay for s= from the display's own value and the floor.
+  group("fxLogicOwn", "\"r\", \"g\", \"b\"", "\"own\"");
+  for (int r = 0; r < 256; r += 51) for (int g = 0; g < 256; g += 51) for (int b = 0; b < 256; b += 51)
+    row({ r, g, b, fxLogicOwn(ContractRGB{ (uint8_t)r, (uint8_t)g, (uint8_t)b }) ? 1 : 0 });
+  for (int base : { 0, 100, 224 }) for (int d : { 30, 31, 32, 33 }) for (int ch = 0; ch < 3; ch++) {
+    uint8_t v[3] = { (uint8_t)base, (uint8_t)base, (uint8_t)base }; v[ch] = (uint8_t)(base + d);
+    row({ v[0], v[1], v[2], fxLogicOwn(ContractRGB{ v[0], v[1], v[2] }) ? 1 : 0 });
+  }
+  group("fxLogicHue", "\"r\", \"g\", \"b\"", "\"hue\"");
+  for (int r = 0; r < 256; r += 51) for (int g = 0; g < 256; g += 51) for (int b = 0; b < 256; b += 51)
+    row({ r, g, b, fxLogicHue(ContractRGB{ (uint8_t)r, (uint8_t)g, (uint8_t)b }) });
+  for (int x = 0; x < 256; x++) {                     // every step of the six edges of the wheel at full saturation
+    const uint8_t u = (uint8_t)x;
+    const ContractRGB e[6] = { { 255, u, 0 }, { u, 255, 0 }, { 0, 255, u }, { 0, u, 255 }, { u, 0, 255 }, { 255, 0, u } };
+    for (int k = 0; k < 6; k++) row({ e[k].r, e[k].g, e[k].b, fxLogicHue(e[k]) });
+  }
+  for (uint32_t c : { 0x116530u, 0x3b82f6u, 0xf97316u, 0x00ff88u, 0xc86496u, 0x202000u, 0x000020u, 0x808080u, 0x646484u, 0x010203u })
+    row({ (long long)(c >> 16), (long long)((c >> 8) & 255u), (long long)(c & 255u),
+          fxLogicHue(ContractRGB{ (uint8_t)(c >> 16), (uint8_t)(c >> 8), (uint8_t)c }) });
+  group("fxLogicPace", "\"s\", \"x\", \"floor\"", "\"y\"");
+  for (int sp = 0; sp < 256; sp++) for (int x : { 0, 1, 3, 9, 10, 11, 40, 255 }) for (int fl : { 1, 10 })
+    row({ sp, x, fl, fxLogicPace((uint8_t)sp, (uint8_t)x, (uint8_t)fl) });
+  // projector: the ten slots of a colour's row, and the crumbling rule for two colours.
+  group("fxProjectorSlot", "\"rgb\", \"slot\"", "\"r\", \"g\", \"b\"");
+  for (uint32_t c : { 0x000000u, 0xffffffu, 0xff0000u, 0x00ff00u, 0x0000ffu, 0x00ffffu, 0xff00ffu, 0xffff00u, 0x116530u, 0x3b82f6u, 0x010101u, 0x808080u })
+    for (int k = 0; k <= 11; k++) {
+      const ContractRGB o = fxProjectorSlot(ContractRGB{ (uint8_t)(c >> 16), (uint8_t)(c >> 8), (uint8_t)c }, (uint8_t)k);
+      row({ (long long)c, k, o.r, o.g, o.b });
+    }
+  group("fxProjectorTake", "\"cur\", \"cand\"", "\"take\"");
+  for (uint32_t c : { 0x000000u, 0xff0000u, 0x00ff00u, 0x116530u })                   // every pair of slots of four rows
+    for (int a = 0; a < 10; a++) for (int b = 0; b < 10; b++) {
+      const ContractRGB row0 = { (uint8_t)(c >> 16), (uint8_t)(c >> 8), (uint8_t)c };
+      const ContractRGB x = fxProjectorSlot(row0, (uint8_t)a), y = fxProjectorSlot(row0, (uint8_t)b);
+      row({ (long long)(((uint32_t)x.r << 16) | ((uint32_t)x.g << 8) | x.b), (long long)(((uint32_t)y.r << 16) | ((uint32_t)y.g << 8) | y.b),
+            fxProjectorTake(x, y) ? 1 : 0 });
+    }
+  for (uint32_t x : { 0x0000ffu, 0x008000u, 0x808080u, 0x404040u, 0x000000u, 0xffffffu })   // the two measures against each other
+    for (uint32_t y : { 0x0000ffu, 0x008000u, 0x808080u, 0x404040u, 0x000000u, 0xffffffu, 0x010000u, 0x7f7f7fu })
+      row({ (long long)x, (long long)y, fxProjectorTake(ContractRGB{ (uint8_t)(x >> 16), (uint8_t)(x >> 8), (uint8_t)x },
+                                                        ContractRGB{ (uint8_t)(y >> 16), (uint8_t)(y >> 8), (uint8_t)y }) ? 1 : 0 });
+  // vu (N10): while it is pumped, the level a pass offers to the level hold is envBright(255, m, amt),
+  // with amt the envelope of the look's own accent mode. Seeded as accentAt; level is what is offered.
+  group("vuLevel", "\"bpm\", \"ph\", \"bpb\", \"beat\", \"seedMs\", \"nowMs\", \"am\", \"m\", \"an\", \"ap\"",
+        "\"fires\", \"amt\", \"level\"");
+  for (int bpm : { 30, 120, 176, 177, 300 }) for (int am : { 1, 2, 4 }) for (int m : { 64, 200, 255 }) for (int an : { 1, 2 })
+    for (uint32_t d = 0; d < 4100; d += 97) {
+      if (am != 2 && an != 1) continue;                               // an= is for am=2 alone
+      const uint32_t seed = 4294965000u;                              // crosses the millis wrap
+      BeatClock bc; seedClock(bc, bpm, 0, 4, 0, seed);
+      const BeatPos bp = beatPosAt(bc, seed + d);
+      const uint8_t every = accentEveryPack((uint8_t)an, 0);
+      const uint8_t amt = beatAccentAmount((uint8_t)am, bp, (uint8_t)m, 0, bc, every);
+      row({ bpm, 0, 4, 0, seed, (uint32_t)(seed + d), am, m, an, 0, beatAccentFires((uint8_t)am, bp, bc, every) ? 1 : 0, amt,
+            envBright(255, (uint8_t)m, amt) });
+    }
+  // logic's pump (CA2): beatAccentFires() thinned to rises FX_LOGIC_PUMP_MIN_MS apart, and the
+  // envelope amount it gives (beatAccentAmount()'s on a beat it fires, else 0). Seeded as accentAt.
+  group("fxLogicPump", "\"bpm\", \"ph\", \"bpb\", \"beat\", \"seedMs\", \"nowMs\", \"am\", \"m\", \"an\", \"ap\"",
+        "\"fires\", \"amt\"");
+  for (int bpm : { 30, 120, 150, 151, 160, 176, 177, 240, 300 }) for (int bpb : { 1, 4 }) for (int am = 0; am <= 4; am++)
+    for (int an : { 1, 2 }) for (uint32_t d = 0; d < 3000; d += 71) {
+      if (am != 2 && an != 1) continue;
+      const uint32_t seed = 4294965000u;                              // crosses the millis wrap
+      BeatClock bc; seedClock(bc, bpm, 0, bpb, -3, seed);
+      const BeatPos bp = beatPosAt(bc, seed + d);
+      const uint8_t every = accentEveryPack((uint8_t)an, an > 1 ? 1 : 0);
+      row({ bpm, 0, bpb, -3, seed, (uint32_t)(seed + d), am, 255, an, an > 1 ? 1 : 0, fxLogicPumpFires((uint8_t)am, bp, bc, every) ? 1 : 0,
+            fxLogicPumpAmount((uint8_t)am, bp, 255, beatSectionProgress16(bp.beatIndex, 0, 16), bc, every) });
     }
   // GROUPS ADDED BY LATER TASKS GO HERE (keep the order: appended groups never renumber old ones)
   printf("\n    ]}\n  }\n}\n");
