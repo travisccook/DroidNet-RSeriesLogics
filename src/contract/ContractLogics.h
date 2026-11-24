@@ -195,6 +195,35 @@ static inline void _briSync(uint8_t u) {
 // Does the contract set this native look's brightness (verb B in a show, b= on a native look)?
 static inline bool _dimsNative(const ContractUnitState& g) { return g.inShow || g.base == CB_NATIVE; }
 
+// THE WALK'S RISES (2026-11-24; the R2 line's review findings R2-F4 and R2-F5, backported).
+// native:0 (NORMAL) is the engine's walk: it shows a new brightness LED by LED, an LED taking it at
+// its next step, and an LED steps once in P + 1 frames, P its pause (random8(delay), at most
+// delay - 1, at a key colour; fade at a tween; LogicEngine.h:1493-1519). So the light of a rise at T
+// is on every LED by
+//     T + D,   D = ENGINE_FRAME_MS * (max(delay - 1, fade) + 1)              (_walkLagMs)
+// and two rises at T1 and T2 keep every part of the display's onsets 340 ms apart (S9) when
+//     T2 - T1 >= 2 * STROBE_MIN_STATE_MS + D                                  (_walkWindowMs)
+// whatever part of the display took the first one last. Under a b= or B the engine's brightness is
+// the level, which bakes the palette at it and is scaled by it again, and the rainbow conversion
+// squares the value: the walk's light goes as about the fourth power of its brightness, so a rise
+// under the gate's step (a tenth of the ceiling) is a rise of the light all the same. EVERY rise of
+// native:0's brightness is held to the window, whatever its size: 440 ms on the front at its own
+// pace (fade 1, delay 10), 740 ms on the rear (3, 40). gWalkUpMs: when the walk's brightness last
+// rose. (The field gate's 340 ms, which counts a rise of a tenth of the ceiling, let B up every 345
+// to 380 ms and down between light a part of the rear display four times a second.)
+static uint32_t   gWalkUpMs[2]   = { 0, 0 };
+static inline uint32_t _walkLagMs(uint8_t fade, uint8_t delay) {
+  const uint32_t key = delay ? (uint32_t)delay - 1u : 0u;
+  return ENGINE_FRAME_MS * ((key > fade ? key : (uint32_t)fade) + 1u);
+}
+static inline uint32_t _walkWindowMs(uint8_t fade, uint8_t delay) { return 2u * STROBE_MIN_STATE_MS + _walkLagMs(fade, delay); }
+// May the walk's brightness rise now? The window after the field last lit and after the walk last rose.
+static inline bool _walkRiseOpen(const ContractUnitState& g, uint8_t u, uint8_t fade, uint8_t delay, uint32_t now) {
+  const uint32_t w = _walkWindowMs(fade, delay);
+  return strobeCoolDownExpired(g.fieldOnsetMs, now, w) && strobeCoolDownExpired(gWalkUpMs[u], now, w);
+}
+static inline void _walkRose(uint8_t u, uint32_t now) { gWalkUpMs[u] = now; }
+
 // A native look is on the LEDs: take its brightness to what the contract asks (b= on a native
 // look, verb B; after the show, the owner's own again). A native look is light the layer cannot
 // see, so for S9 its field level IS that brightness:
@@ -232,6 +261,11 @@ static inline void _nativeBright(uint8_t u, uint32_t now) {
     // when it starts (contractEngineLatched). Darker is at once, as everywhere.
     if (!nativeSteadyLogics((int)gEngineSeq[u])) return;
     if (contractFieldAllowed(g, want, now) < want) return;          // S9: held. Asked again next pass.
+    // The walk (native:0): every rise of its brightness, under the gate's step too, waits the walk's
+    // window at the engine's live pace (_walkWindowMs).
+    const bool walk = gEngineSeq[u] == NATIVE_NORMAL && _engine(u) != nullptr;
+    if (walk && !_walkRiseOpen(g, u, _engine(u)->getFade(), _engine(u)->getDelay(), now)) return;
+    if (walk) _walkRose(u, now);
     // S4: a native look that was running dark (b=0) comes out of the dark: that is the look
     // arriving on the field, a change of look like any other.
     if (cur == 0 && !contractLookAllowed(g, contractLookSigNative((int)gEngineSeq[u]), now)) return;

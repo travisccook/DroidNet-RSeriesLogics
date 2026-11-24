@@ -18,6 +18,7 @@
 #   2. ContractLogics.h firmware-layer type-check against a mock of the engine API
 #   2b. the 2026-11-15 review findings as behaviour tests (known defects marked)
 #   2c. contract v1.3 on the RSeries layer, on the mock engine
+#   2w. the idle blink's (native:0's) brightness rises keep the walk's window, measured on its light
 #   2d. the Serial1 reader: line assembler, drain loop, the section-11 burst
 #   2e. contract S9 as a property: hostile and random line streams, measured on the pixels
 #   2f. the frame fixtures Studio's preview is checked against (frames/) are what the layer draws
@@ -139,6 +140,13 @@ stage 2b "review regressions (known defects marked)" "$CXX" -std=c++17 -Wall -We
 stage 2d "Serial1 reader: line assembler, drain loop, burst" "$CXX" -std=c++17 -Wall -Wextra test_contract_line.cpp
 # Contract v1.3 as it appears on the two logic displays (lifecycle, clock, brightness, score, query).
 stage 2c "contract v1.3 on the RSeries layer (mock engine)" "$CXX" -std=c++17 -Wall -Wextra test_contract_logics_v13.cpp
+# 2026-11-24 (backported from the R2 line's review, its R2-F4 and R2-F5): native:0 is the engine's walk,
+# which takes a new brightness LED by LED, late by up to its longest pause, and whose light goes as
+# about the fourth power of the brightness. Every rise of its brightness waits the walk's window,
+# 340 ms plus the longest an LED takes to step. B streams on native:0, measured on the mock's walk by
+# the R2 line's count (whole field and every region of a quarter or more, two readings). A mock of
+# the stock code, not a display.
+stage 2w "the idle blink's brightness rises keep the walk's window (mock engine)" "$CXX" -std=c++17 -O1 -Wall -Wextra test_native_walk_rises.cpp
 # Contract S9 as a property of the real layer: hostile and random line streams go in, the mock
 # engine renders every frame, and the full-field level of each display is measured. At most three
 # dark-to-lit onsets in any second, nothing above the owner's ceiling, native after idle, dark

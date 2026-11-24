@@ -173,7 +173,9 @@ static void test_brightness_and_native() {
   resetAll(); send("**M:v=show"); send("LFB:b=64"); LogicEngineFLDDefault.fBri = 255; send("**M:v=idle");
   CHECK(LogicEngineFLDDefault.fBri == 255);
   // the ceiling is re-read at each boundary, from the owner's value, not from what B wrote
-  resetAll(); send("**M:v=show"); send("LFB:b=64"); run(50); send("**M:v=show"); run(400);
+  // (2026-11-24: the idle look is the walk, and its brightness rises at most once in the walk's
+  // window, 440 ms on the front, not the field gate's 340; and its rise is a change of look, 170 ms)
+  resetAll(); send("**M:v=show"); send("LFB:b=64"); run(50); send("**M:v=show"); run(700);
   CHECK(gContract[0].ceil == 160 && FLD->_liveBri == 160);
   send("LFA:i=solid,c=ffffff"); run(50);
   CHECK(FLD->px(0, 0).r == 160);
@@ -464,7 +466,8 @@ static void test_s9_paths() {
   send("LFB:b=255"); run(20); CHECK(FLD->_liveBri == 160);                 // nothing lit lately: at once
   send("LFB:b=0"); run(20);   CHECK(FLD->_liveBri == 0);
   send("LFB:b=255"); run(100); CHECK(FLD->_liveBri == 0);                  // an onset 40 ms after the last: held
-  run(240); CHECK(FLD->_liveBri == 160);                                   // by 340 ms it is back
+  run(240); CHECK(FLD->_liveBri == 0);                                     // at 340 ms still held: the idle look is the walk (2026-11-24),
+  run(80); CHECK(FLD->_liveBri == 160);                                    // and its window is 440 ms on the front; by then it is back
   // a native section takes its brightness at the frame it starts, through the gate
   resetAll(); send("LFX"); run(500); send("LFA:i=solid,c=ffffff"); run(20); send("LFX"); run(200);
   send("LFA:i=native:4"); run(50);
