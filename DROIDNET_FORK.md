@@ -64,6 +64,10 @@ What is verified is host-side, by `bash test/host/run.sh` (and by CI, `.github/w
 - contract S10 as a test (stage 1i): a model of the stock sequences, on every display size the engine knows,
   counts each allow-listed code's onsets over the whole field and over every region of a quarter or more, at the
   speed the core starts it with. It is a model of the stock code, not a measurement of a display;
+- the idle blink's brightness rises (stage 2w, `test/host/test_native_walk_rises.cpp`): `B` streams on `native:0`,
+  measured on the mock engine's walk (drawn LED by LED for this stage) over the whole field and every region of a
+  quarter or more, by the gate's step and by the walk's own: no part of a display lit more than three times in a
+  second, or more often than the idle blink alone;
 - the Serial1 reader, including a 400-byte burst of back-to-back lines, with and without the pass-through;
 - the real ESP32 cross-compile (`pio run -e wlogicengine32`), which is a link, not a run.
 
@@ -126,6 +130,21 @@ is the DroidNet layer (`git log --oneline 6bba8b1..HEAD`).
 - **`B`, and `b=` on a look, go up at most once in 340 ms** too, in the same window as `L`: a lower brightness
   is taken at once, a higher one waits for the window, the newest of them. A look that lights part of a display
   (a meter with one row lit) under `B:b=0` and `B:b=200` by turns lit that part as often as the lines came.
+- **2026-11-24: the idle blink's brightness rises wait the walk's window.** `native:0` (NORMAL) is the engine's
+  walk: it shows a new brightness LED by LED, an LED taking it at its next step, and an LED steps once in `P + 1`
+  frames, `P` its pause (`random8(delay)`, at most `delay − 1`, at a key colour; `fade` at a tween). So a rise's light
+  is on every LED within `D = 10 ms × (max(delay − 1, fade) + 1)`, and two rises keep every part of the display's
+  onsets 340 ms apart when they are `W = 340 + D` ms apart: 440 ms on the front at its own pace (fade 1, delay 10),
+  740 ms on the rear (3, 40). Under a `b=` or `B` the engine's brightness is the level, which bakes the palette at it
+  and is scaled by it again, so the walk's light goes as about the fourth power of its brightness, and a rise under
+  the gate's step (a tenth of the ceiling) is a rise of the light. So every rise of `native:0`'s brightness, of any
+  size, now waits W after the field last lit and after the walk's last rise, at the engine's live pace, as well as
+  the field gate's own rule (`_nativeBright()`, `_walkWindowMs`). A fall is at once. Why: an independent review of
+  the R2 line (its findings R2-F4 and R2-F5, 2026-11-24) measured `B` up every 345 to 380 ms and down between, on
+  `native:0`, over the rule in 35 of 50 cases (the rear 16 by 4 at the owner's 255 lit four times a second by the
+  gate's own count, the closest two 250 ms apart), and `B` between 255 and a `b=` one step under it in 7 of 24. With
+  the window: 0 of 50 and 0 of 24 (stage 2w). It costs a `B` raise on the idle blink up to W late. Backported from
+  the R2 line, where the same window also holds that line's own walk look.
 - **Query.** `Q:r=<route>` addressed to one display is answered on Serial1 with
   `;S0!L<u>q:ver=1.3,rel=1,cap=32,n=<held>,ok=<0|1|2>,bpm=<n>` (`;W<n>,;S0...` for a remote WCB). `r` is a
   number 0 to 99; anything else gets no reply. One reply a display can wait to be written.
