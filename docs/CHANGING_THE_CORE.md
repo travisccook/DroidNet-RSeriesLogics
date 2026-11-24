@@ -825,7 +825,8 @@ Re-copy the seven shared files (`core-files.txt`; `test_logic_regions.cpp` is no
 | Flthy | `projector` (Task F4) | the step rule of N7 as `test_fx_regions.cpp` models it: the brightening step waits `FX_PROJECTOR_BRIGHT_MS` after the last one and after `levelMs`, and sets `levelMs` |
 | all | the tests and scenario files that spell `ver=1.3,rel=1` or `contract.1.3` | spell `ver=1.4,rel=2` and `contract.1.4` |
 
-This fork, at CA2, has the stand-ins only (`logic` draws `twinkle`, `projector` `sparkle`, `vu` `meter`).
+This fork, at CA2, had the stand-ins only (`logic` drew `twinkle`, `projector` `sparkle`, `vu` `meter`) until Task F2
+drew `logic` and `vu` itself; "The logics layer on CA2" at the end of this section says what it does now.
 
 ### Readings of the spec, and one rule it did not have
 
@@ -862,6 +863,12 @@ here, with its section.
    ceil`, 255 at the ceiling: that draws the palette unscaled, brighter than `native:0` by the ratio of 255 to the
    display's brightness before the squaring, an onset at every hand-over from the idle blink. The model follows the
    spec; Task F2 should too.
+   *Later (the 2026-11-21 review, R2-F2, and the owner's decision of 2026-11-24):* as first built, "the light of
+   `native:0` exactly" held at `b=255` only. Under 255 `native:0` runs with the engine's brightness at the level,
+   which bakes the palette at the level and scales it by the level again, while `logic` baked at the ceiling and
+   scaled once (on the front at 160, LEDs summing to 159 against 28 at `b=128`). The layer now bakes `logic`'s
+   palette at the level it draws, so the two are one light at every level, and **N4 holds as written**: going
+   between `native:0` and `logic` at one level is a change of look and not an onset. Stage 1k bakes at the level too.
 4. **`fxLogicHue()` of a colour with no spread (section 5).** The formula divides by `max - min`. Such a colour is the
    display's own (`fxLogicOwn()`), and a layer never asks its hue; the function gives 0 rather than divide by 0.
 5. **A slot past 9 (N6)** is dark, like 7 to 9.
@@ -923,3 +930,49 @@ The ESP32 image of this fork (`pio run -e wlogicengine32`), CA1.7 and CA2 with t
 1,136,937 B of flash (+56 B), 64,948 B of static RAM both. On the PSI the plan's prototype priced the names and the
 version at +16 B; the PSI's own figure is Task F3's to measure. The new functions are inline and used by no PSI code,
 so they cost it nothing.
+
+### The logics layer on CA2 (Task F2, and the 2026-11-21 review's fixes)
+
+Nothing in the core changed for this; it is the RSeries layer only (`src/contract/ContractLogics.h`), recorded here
+because it reads the spec, and because the review found that the gates alone are not enough for `logic`.
+
+- **N3 and N4, as the layer reads them now.** The level reaches the engine as `updateDisplay(level)` with the palette
+  baked at that level (`calculateAllColors(pal, level)` through `setBrightness(level)` and `setPaletteHue()`, whenever
+  the level changes): as `native:0` at that level is drawn. So `logic` and `native:0` at one `b=` are one light, at
+  every level (the review's R2-F2; the owner chose this over recording the difference). Stage 1k, the model the core's
+  floors were decided on, now bakes at the level as well; its rule and its verdicts stand (`logic`'s own floor 0 of
+  216 cases over; S2's alone 18 of 216).
+- **The gates take `logic` unmeasured (N4), and its windows are the layer's.** The walk's light takes each level and
+  colour LED by LED, 0 to about 130 ms late and up to a key pause (390 ms on the rear). The core's 340 ms window and
+  the pump's own 400 ms floor alone let it break section 9 by stage 1k's count on the real layer (stage R2rev): a rise
+  by a path the pump's floor does not see (`ap=` moved each beat, a `C` re-seed, the clock held and resumed, `B` and
+  `b=`), and a recolour. So the layer keeps windows of its own, using only existing core calls:
+  `FX_LOGIC_PUMP_MIN_MS` (400 ms since `fieldOnsetMs`) for an onset as the look enters, for a pump beat after a pump
+  beat, and for the next light after the walk; and the WALK'S WINDOW for every other rise of the walk, of any size,
+  and a recolour: `W = 2 × STROBE_MIN_STATE_MS + D`, D the longest an LED takes to step (`10 ms × (max(delay − 1,
+  fade) + 1)`, the pause distribution of `updateMappedLED()`): a rise's light is on every LED within D, so rises W
+  apart keep every part of the display's onsets 340 ms apart. 440 ms on the front at its own pace, 740 on the rear,
+  1,940 on the rear at `s=0`. It replaced a fitted 500 ms, which the second review broke on a seventh walk seed;
+  swept over 400 seeds on R2rev's paths it gives 0 of 11,200 over. Rises under the gate's step are held too, because
+  the walk's light goes as about the fourth power of the level (R2-F5).
+- **`native:0` is the same walk** and the same light, so its brightness rises (`_nativeBright()`) keep the same window
+  at the engine's live pace (R2-F4), at the frame the engine restarts the idle blink too (`contractEngineLatched()`,
+  R2-F8: it starts at the brightness it has and rises when the window opens). That path is R1's too; it was
+  backported to `main` (branch `lighting-r1-walkrise`).
+- **The hand-over with the idle blink is seamless when it changes nothing** (`logic` not pumped, in the display's own
+  colours, at the idle blink's level): the same walk goes on, no LED moves, no hold. Any other hand-over, and every
+  hand-over between the walk and other light, is unseen light (`contractNativeEnded(known=false)`), the frame that is
+  up held 400 ms. Without that hold for the changing hand-overs too, a pumped `logic` and `native:0` by turns every
+  300 ms at 255 lit the rear 16 by 4 four times a second by the gate's own count.
+- **A recolour** of the walk that is up waits the window and starts it again (`contractNativeEnded(known=true)`).
+- **`projector`'s stand-in** (`sparkle`) is not pumped (N8).
+- The exact rules, in the order the layer applies them, are in `DROIDNET_FORK.md` ("What is in (contract v1.4, R2)",
+  "Its windows"), for Studio's mirror. A fork that draws `logic` itself (none does) would need the same.
+- Stage R2rev (the reviews' findings) passes, R2-F1 to F6 and the check that the two lights are one, except R2-F7's
+  check (`test_review_r2_findings.cpp:525`): it compares the most light over 600 ms with the mean of the 100 ms before,
+  and `native:0` alone, with no `logic`, gives the same 18 and 31 (the walk's own texture). The fix it asks for (a held
+  frame stepped on a palette baked at its level) is in, and stage 2g holds the held frames to `native:0`'s frame for
+  frame.
+
+The ESP32 image with `logic` and `vu` drawn by the layer and the reviews' fixes: 1,140,061 B of flash and 64,964 B of
+static RAM (F2 as first merged: 1,138,617 B and 64,948 B).

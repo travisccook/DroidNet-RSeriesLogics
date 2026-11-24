@@ -74,9 +74,15 @@ What is verified is host-side, by `bash test/host/run.sh` (and by CI, `.github/w
 - `projector`'s step rule (contract v1.4 N7) on a jewel of seven with seeded dice (stage 1j, pure core);
 - `logic` and `vu` on the layer (stage 2g, `test/host/test_contract_logics_r2.cpp`), on a mock engine whose walk is
   held LED for LED to a copy of stage 1k's model: what the look sets on the engine, the level it gives it every frame,
-  the gates, the hand-over from the idle blink (no LED differs from `native:0` with the same seed and brightness), the
+  the gates and logic's windows, the hand-over with the idle blink (seamless when it changes nothing: frame for frame
+  the frames of `native:0` at `b=255`, `128` and `200`, with no hold; otherwise a hold in which no LED moves, and no
+  part of a display lit more often in a second than three or the idle blink alone, on the look's own scale), the
   owner's settings after every way out, and the layer's LEDs under the pump against the model's (none apart in 100
-  cases); `vu`'s rows at five tempos and under a seek every 50 ms. The property stage (2e) has both in its streams;
+  cases); `vu`'s rows at five tempos and under a seek every 50 ms. The property stage (2e) has both in its streams,
+  and an observer (i) that counts `logic`'s walk on its own scale, stage 1k's fine reading, wherever it is up;
+- the 2026-11-21 review's findings (stage R2rev, `test/host/test_review_r2_findings.cpp`, the reviewer's): stage 1k's
+  count run on the real layer's LEDs under host streams that raise `logic`'s light by every path, and its check that
+  `native:0` and `logic` at one `b=` are one light. Every check passes, on six walk seeds;
 - the Serial1 reader, including a 400-byte burst of back-to-back lines, with and without the pass-through;
 - the real ESP32 cross-compile (`pio run -e wlogicengine32`), which is a link, not a run.
 
@@ -154,32 +160,102 @@ the Signal Booster. The query reply says `ver=1.4,rel=2`; the WDP caps say `cont
   - *What is set.* Every frame the look's settings are compared with the engine's live ones and set where they
     differ (`_logicApply()`): the palette and hue (no `c=`, or a colour with no hue, is the display's own; any other
     is `setPaletteHue(0, fxLogicHue(c) - 170)`), the fade and delay (`fxLogicPace()` on the display's own), and the
-    live brightness the palette is baked at, which is the ceiling. So a change of colour or speed, the owner moving
-    the brightness or the pace, and the engine restoring its own settings at an effect change all come out right at
-    the next frame. The RAM default object (`LogicEngineFLDDefault`/`RLDDefault`) is never written for it.
-  - *The level.* `updateDisplay(level)` once a frame, the level itself under the ceiling (not a fraction of 255), so
-    the look at `b=255` with no pump is `updateDisplay(fBri)`, which is what the idle blink draws. The pump is the
+    live brightness the palette is baked at, which is the level drawn this frame. So a change of level, colour or speed,
+    the owner moving the brightness or the pace, and the engine restoring its own settings at an effect change all
+    come out right at the next frame. The RAM default object (`LogicEngineFLDDefault`/`RLDDefault`) is never written
+    for it.
+  - *The level.* `updateDisplay(level)` once a frame, the level itself under the ceiling (not a fraction of 255), with
+    the palette baked at that level: as `native:0` at a `b=` is drawn (the engine's brightness at the level, which
+    bakes the palette at it, then `updateDisplay(fBri)`, which scales by it again). So `logic` at a level is
+    `native:0`'s light at that level, at every level, and v1.4 N4 holds as written (the owner's decision of
+    2026-11-24; until then the palette was baked at the ceiling, a brighter light than `native:0` under `b=255`: on
+    the front at 160, LEDs summing to 159 against 28 at `b=128`). Under the pump the level, and so the bake, changes
+    nearly every frame: about 90 bakes a second a display at 120 BPM, each the stock `calculateAllColors(pal, bri)`
+    (279 B, a 126-pass loop: about 10 us on the ESP32, once a frame a display at most; 0.11 us on the host, where a
+    pass did not get slower). The stock mic sequences bake every frame too. The pump is the
     core's `fxLogicPumpAmount()`: rises 400 ms apart at the least, so from 151 to 176 BPM an every-beat pump takes
     every other beat. Each LED takes the level at its next step (N3), which is what stage 1k models; stage 2g holds the
     layer's LEDs to the model's frame for frame.
   - *The gates.* Not measured (N4): the look gate and the field gate are asked with the level for both measures (a
-    peak of 255 when it is not 0), and told what was drawn. While the look is up, a frame the field gate holds is
-    drawn at the last level shown (the walk goes on), and one the look gate holds keeps the walk going in its old
-    colours. A frame held as the look enters leaves the frame that is up.
-  - *The hand-over.* From the idle blink nothing changes on the LEDs: the walk is the same walk. Going back
-    (`M:v=idle`, the watchdog), the walk goes on while the hand-back waits for the gates, and the idle blink takes it
-    over. From anything else (a contract look, an accent, X's dark, another native sequence) the display is cleared
-    first and the walk comes in as its LEDs step.
-  - *Leaving it.* When effect 106 draws anything else, the owner's settings go back (`restoreSettings()`), and the
-    walk's light is taken as not known to the gate (`contractNativeEnded(known=false)`): the next lit frame waits 340
-    ms, the walk's last frame up. See "What is not in" for why, and what it costs.
+    peak of 255 when it is not 0), and told what was drawn. While the look is up, a frame held is drawn at the last
+    level shown (the walk goes on); a frame held as the look enters leaves the frame that is up.
+  - *Its windows* (the 2026-11-21 review; stage 1k decided 400 ms for the pump's rises because the walk takes each
+    level and each colour LED by LED, 0 to about 130 ms late and up to a key pause, 390 ms, on the rear). These are
+    every timing rule the layer applies to `logic`, for Studio's mirror. "Lit" is the field gate's onset or brightening
+    time (`fieldOnsetMs`), and every rule is in whole milliseconds against the frame's `millis()`:
+    1. *Entering over the walk* (the idle blink, `native:0`, or `logic`'s own last frame after it left). SEAMLESS when
+       it changes nothing: the LEDs hold the idle blink's walk (NORMAL started last and effect 106 has drawn nothing
+       since), `logic` is not pumped (no `am=`, no `m=`, or no clock running), its palette and hue are the display's
+       own (no `c=`, or a colour with no hue), and its level is the level the idle blink is drawn at. Then `logic`
+       takes the walk over as it is, from the first frame effect 106 runs it: no hold, no clear, no LED moves (S4's
+       170 ms still applies, and the walk goes on through it). Otherwise, at that first frame, the field is taken as
+       dark and just lit (`contractNativeEnded(known=false)`, once), and the frame that is up stays up until the look
+       may light: 400 ms (rule 4), and S4's 170 ms after the field's last change of look.
+    2. *Entering over anything else* (a contract look, an accent, `X`'s dark, another native sequence): the field gate
+       as it stands, with rule 4's 400 ms for an onset; the display is cleared at the first frame drawn.
+    *The walk's window* (rules 3, 4 and 7). The walk shows a new level or colour LED by LED, each LED at its next
+    step, and an LED steps once in `P + 1` frames, `P` its pause: `random8(delay)`, at most `delay − 1`, at a key
+    colour, `fade` at a tween (`LogicEngine.h:1493-1519`). So a rise's light is on every LED within
+    `D = 10 ms × (max(delay − 1, fade) + 1)`, and two rises keep every part of the display's onsets 340 ms apart when
+    they are `W = 340 + D` ms apart (`_walkWindowMs`), whichever part took the first one last. `fade` and `delay` are
+    the slower of the engine's live pace and the look's own (`fxLogicPace()` on the owner's). W: front at its own
+    pace (1, 10) 440 ms; rear (3, 40) 740 ms; front at `s=0` (4, 40) 740 ms; rear at `s=0` (12, 160) 1,940 ms; rear at
+    `s=255` (1, 20) 540 ms. The walk's light goes as about the fourth power of its level (the palette baked at the
+    level, scaled by it, the value squared by the rainbow conversion), so a rise under the gate's step is a rise of
+    the light all the same (the second review's R2-F5): EVERY rise of the walk's level is held to W, whatever its
+    size. "The walk's last rise" (`gWalkUpMs`) is the last time `logic`'s level rose, it was recoloured or it lit,
+    or `native:0`'s brightness rose. Swept on R2rev's paths over 400 walk seeds, front and rear, the owner's and 255:
+    0 of 11,200 cases over stage 1k's rule; in the same sweep a 340 ms window gave 1,506 of 2,800 and 400 ms 61 and
+    66 of 2,800.
+    3. *A recolour while up* (a new palette or hue: `c=`, or the owner's palette): waits until W after the field last
+       lit or got brighter and after the walk's last rise (and S4's 170 ms), the walk going on in its old colours; at
+       the frame it is shown the window starts again from it (`contractNativeEnded(known=true)`, and it is the walk's
+       last rise). A pace alone (`s=`) is no recolour.
+    4. *A rise of the level.* As the look enters: an onset by the gate's count waits 400 ms after the field last lit
+       (`FX_LOGIC_PUMP_MIN_MS`). While it is up: EVERY rise of the level, any size (the pump, `B`, `b=`, the clock held
+       and resumed, a `C` re-seed, a moved `ap=`, the owner's brightness), waits W after the field last lit or got
+       brighter and after the walk's last rise; except a beat its own pump fires on (the first 30 ms of a beat
+       `fxLogicPumpFires()` keeps) that follows another such beat, which waits 400 ms, the core's floor that stage 1k
+       decided for exactly that case. Held, it is drawn at the last level shown, on a palette baked at that level. A
+       fall is never held.
+    5. *Leaving the walk for the idle blink* (`native:0` at a `b=`, `M:v=idle`, the watchdog), SEAMLESS when it changes
+       nothing: `logic`'s last frame was not pumped, in the display's own colours, at the level the idle blink will run
+       at (after `M:v=idle` and the watchdog: the ceiling). Then the walk goes on, in `logic`'s settings, until the
+       idle blink is selected: no sooner than 400 ms after the field last lit or got brighter (`fieldOnsetMs`), and no
+       sooner than the core's own gates say (340 ms, S4's 170 ms). Nothing on the LEDs changes for it.
+       *Leaving the walk* for anything else (another look, an accent, `X`, a native look, the idle blink when the
+       hand-over is not seamless): the owner's settings go back (`restoreSettings()`), the field is taken as dark and
+       just lit (`contractNativeEnded(known=false)`), and the walk's last frame stays up, unchanging, until the next
+       light: a lit frame of effect 106, or the selection of a native sequence, 400 ms after the walk ended at the
+       earliest (`gWalkLeft`), and no sooner than the core's own gates say. `X`'s dark (and lights-out) is never held.
+       A button is never held either: the engine starts it.
+    6. The pump itself is the core's: `fxLogicPumpAmount()`, rises 400 ms apart, so from 151 to 176 BPM an every-beat
+       pump takes every other beat. Held as rule 4 says, a beat can be skipped where a re-seed or a seek put it
+       inside the window, and the first beat after a rise of another kind waits W.
+    7. *`native:0`'s brightness* (the idle blink at a `b=`, `B` on it, the owner's value given back): it is the same
+       walk and the same light, so every rise of the engine's brightness on NORMAL, any size, waits W at the engine's
+       live pace after the field last lit and after the walk's last rise, as well as the field gate's own rule
+       (`_nativeBright()`, the second review's R2-F4), and so does the rise at the frame the engine restarts the idle
+       blink (`contractEngineLatched()`: `M:v=idle`, the watchdog, `native:0` after another look; the third review's
+       R2-F8): it starts at the brightness it has and comes up when the window opens. That restart is an onset to the
+       gate, so the rise comes W after it: from a dimmed `native:0`, `M:v=idle` brings the owner's brightness back in
+       about 340 + 440 ms on the front. A fall is at once. This is R1's path: see "What is not in".
+    Every frame the walk is stepped on a palette baked at the level it is drawn at, a held frame too (R2-F7).
+  - *The hand-over in time.* Seamless (rules 1 and 5: unpumped, own colours, one level, at any `b=`): it costs
+    nothing on the LEDs. `logic` comes in at the next engine frame after the line; the idle blink takes the walk back
+    no sooner than 400 ms after the field last lit, the walk going on meanwhile, so nothing is seen of the wait. No
+    dark seam and no hold is needed there. Any other hand-over (a pumped `logic`, a colour, another level): the
+    frame that is up is held about 400 ms each way (39 to 42 frames of 10 ms in the mock), no LED moving, and then
+    the other look. Nothing flickers either way.
 - **`vu`** (N10 to N12) is `meter`, with the pump moving its level: while it is pumped (the clock runs, `am=` and `m=`
   are not 0) the tick offers `envBright(255, m, beatAccentAmount(...))` to the level hold every pass, the meter's
   brightness is the look's level (never pumped), and verb `L` is not shown. Not pumped it is `meter`, frame for frame.
 - **`projector`** draws as `sparkle` here (v1.4's table).
 - `logic`, `projector` and `vu` are no accent (`ae=` naming one is no accent), and an accent may run over each.
-- What it costs the ESP32 image (`pio run -e wlogicengine32`): 1,138,617 B of flash and 64,948 B of static RAM, where
-  CA2 with the stand-ins was 1,136,937 B and 64,948 B (+1,680 B of flash).
+- **`projector`** is not pumped (N8), here where it stands in as `sparkle`: `am=` and `m=` are kept and ignored.
+- What it costs the ESP32 image (`pio run -e wlogicengine32`): 1,139,773 B of flash and 64,956 B of static RAM, where
+  CA2 with the stand-ins was 1,136,937 B and 64,948 B (F2 as first merged: 1,138,617 B and 64,948 B; after the
+  review's first fixes 1,139,309 B).
 
 ### What is not in
 
@@ -188,21 +264,34 @@ the Signal Booster. The query reply says `ver=1.4,rel=2`; the WDP caps say `cont
   to the native mic-reactive effects (deferred in v1.4; `contractSetup()` is still a no-op).
 - **`logic`: the gate does not know the walk's light.** v1.4 N4 has the layer take the look at the level it asks
   for, as it takes the idle blink, and the walk's own light is far under that level: at the front display's
-  brightness 160 no channel passes 17 (CA2 reading 2). A look that follows `logic` lights the display for anyone
-  watching while, to the gate, nothing rose. The property stage found it as soon as `logic` was in its streams: a white
-  look, `X` and the white look again were two onsets 170 ms apart, and with the window alone started again at the
-  hand-over, a follower that ramps up (a pumped pulse) still gave onsets 200 to 300 ms apart. So the walk's light is
-  taken as unknown when effect 106 stops drawing it (the layer's rule for a native sequence it cannot see), and a lit
-  frame after `logic` waits 340 ms. What that costs: a look after `logic` comes 340 ms late, and an accent over `logic`
-  shorter than 340 ms is not shown at all. Going between `logic` and `native:0` is not affected. The same thing is
-  true of the idle blink in R1 (a white look after it is no onset to the gate: "The luminance of a native sequence"
-  below), and the property stage does not see it there because its mock draws the idle look as a fill at its
-  brightness; only `logic` is drawn by the mock's model of the walk.
+  brightness 160 no channel passes 17 (CA2 reading 2), and it takes each level and colour LED by LED, late. So the
+  layer keeps the windows above ("Its windows"). The property stage found the first of it (a white look, `X` and the
+  white look again: two onsets 170 ms apart), the 2026-11-21 review the rest: a rise of the level by a path the pump's
+  own floor does not see (97 of 408 cases over by stage 1k's count, 4 a second on the whole field with `B`), a
+  recolour (10 of 12), and `native:0` and `logic` by turns (6 of 16). What the windows cost: a look after `logic`
+  comes 400 ms late; an accent over `logic` shorter than 400 ms is not shown at all; `native:0` and `logic` each take
+  about 400 ms to come in when the hand-over changes something (rules 1 and 5; a seamless one costs nothing); a host
+  that turns between `logic` and a native look every 200 ms gets neither (each
+  hand-over is still waiting when the next line comes, and the frame that is up stays up); a rise of the walk's level
+  that is not its pump's beat, and every rise of `native:0`'s brightness, can wait W (440 ms on the front, 740 on the
+  rear, up to 1,940 at `s=0`). The same is true of the idle blink in R1 against contract looks (a
+  white look after it is no onset to the gate: "The luminance of a native sequence" below), and the property stage
+  does not see it there because its mock draws the idle look as a fill at its brightness.
+- **R1 (`main`) has R2-F4 and R2-F5 in `native:0`.** On R1, `native:0` under `b=` or `B` is the same walk with its
+  palette baked at the level, and its brightness rises only under the field gate's 340 ms, sub-step rises not at all:
+  the second review measured `B` up every 345 to 380 ms over by stage 1k's rule (35 of 50 cases on this line before the
+  fix, the rear 16 by 4 at 255 four times a second by the gate's own count). The R2 fix is rule 7; a backport to R1 is
+  the owner's call. It would be the walk's window (`_walkLagMs`, `_walkWindowMs`, `_walkRiseOpen`, `gWalkUpMs`) and its
+  use in `_nativeBright()` for NORMAL, with the two stage 2c waits that change with it.
+- **A hand-over that changes something holds.** Between `native:0` and a pumped or coloured `logic`, or at another
+  level, the frame that is up is held about 400 ms. Without it (tried on 2026-11-24, once the two lights were one) the
+  walk went on while the idle blink waited to take a pumped `logic` back, and pumped `logic` and `native:0` by turns
+  every 300 ms at 255 lit the rear 16 by 4 four times a second by the gate's own count.
 - **`logic`'s pump on the rear display** is softer than on the front: a level reaches an LED at its next step, up to
   400 ms later on the rear's own settings (v1.4 open question 2). Stage 1k cannot say how soft it looks.
 - **A scored accent over a `logic` section** fires on S2's beats (`beatAccentFires()`), the pump on `logic`'s own. From
   151 to 176 BPM the accent can come on a beat the pump skips (CA2 reading 1 left it to the layer; it was left as it
-  is, and the leave rule above holds such an accent shorter than 340 ms back anyway).
+  is, and rule 5 holds such an accent shorter than 400 ms back anyway).
 - **An LED in a pause keeps what it showed** until its next step (the engine's walk). After the owner turns a display
   down, the idle blink takes the new level LED by LED, as it does stock, and `logic` entered within one key pause of
   that does the same.
@@ -341,28 +430,50 @@ lights more than three times in a second, at any pace on offer, steady and under
 display's own stock blink does. `test/host/test_logic_regions.cpp` (stage 1k) is that test on a MODEL of the engine's
 walk: the palette as `calculateAllColors()` bakes it, every LED walking it with its pauses from FastLED's `random8()`,
 `hsv2rgb_rainbow`, a frame every 10 ms, the pace from `fxLogicPace()`, and the level from the core's clock reaching
-each LED at its next step (`updateDisplay(level)`). No engine and no layer is in it, and nothing in it has been seen on
+each LED at its next step (`updateDisplay(level)`), with the palette baked at that level (since 2026-11-24, when the
+layer began to bake it there so that `logic` is `native:0`'s light at every level; until then the model and the layer
+baked it at the ceiling). No engine and no layer is in it, and nothing in it has been seen on
 a display. `docs/CHANGING_THE_CORE.md` ("Core revision CA2") says how it counts and why. The layer is held to it by
 stage 2g: the mock engine's walk against a copy of the model's, and the LEDs the layer draws under the pump against the
 model's, frame for frame, at the tempos and paces below (Task F2).
 
 The worst second, by the stage's fine reading (the gate's rule on the look's own full scale), whole field / any region,
 own palette (two colours, `116530` and `ff0000`, are in the stage as well and are never worse); the pump is `am=2`,
-`m=255`, through `fxLogicPumpAmount()`; 60 s a case:
+`m=255`, through `fxLogicPumpAmount()`, the palette baked at the level as the layer bakes it (since 2026-11-24); 60 s a
+case:
 
 | Display | Brightness | s | Fade / delay | Steady | 30 BPM | 120 | 176 | 177 | 300 | Stock blink |
 | ------- | ---------- | - | ------------ | ------ | ------ | --- | --- | --- | --- | ----------- |
 | front 8 x 10 | 160 | 128 (own) | 1 / 10 | 1 / 2 | 1 / 1 | 3 / 3 | 2 / 2 | 2 / 2 | 3 / 3 | 1 / 2 |
 | front 8 x 10 | 160 | 0 | 4 / 40 | 1 / 1 | 1 / 1 | 3 / 3 | 2 / 2 | 2 / 2 | 3 / 3 | 1 / 2 |
 | front 8 x 10 | 160 | 255 | 1 / 10 | 1 / 2 | 1 / 1 | 3 / 3 | 2 / 2 | 2 / 2 | 3 / 3 | 1 / 2 |
-| front 8 x 10 | 255 | 128, 0, 255 | as above | 1 / 1 to 1 / 2 | 1 / 1 | 3 / 3 | 2 / 2 | 2 / 2 | 3 / 3 | 1 / 2 |
+| front 8 x 10 | 255 | 128 (own) | 1 / 10 | 1 / 2 | 1 / 1 | 3 / 3 | 2 / 2 | 2 / 2 | 3 / 3 | 1 / 2 |
+| front 8 x 10 | 255 | 0 | 4 / 40 | 1 / 1 | 1 / 1 | 3 / 3 | 2 / 2 | 2 / 2 | 3 / 3 | 1 / 2 |
+| front 8 x 10 | 255 | 255 | 1 / 10 | 1 / 2 | 1 / 1 | 3 / 3 | 2 / 2 | 2 / 2 | 3 / 3 | 1 / 2 |
 | rear 16 x 4 | 140 | 128 (own) | 3 / 40 | 0 / 1 | 1 / 1 | 3 / 3 | 2 / 2 | 2 / 2 | 3 / 3 | 0 / 1 |
-| rear 16 x 4 | 140 | 0 | 12 / 160 | 1 / 1 | 1 / 1 | 3 / 3 | 1 / 2 | 2 / 2 | 2 / 3 | 0 / 1 |
+| rear 16 x 4 | 140 | 0 | 12 / 160 | 1 / 1 | 1 / 1 | 2 / 3 | 1 / 2 | 1 / 2 | 1 / 2 | 0 / 1 |
 | rear 16 x 4 | 140 | 255 | 1 / 20 | 1 / 2 | 1 / 1 | 3 / 3 | 2 / 2 | 2 / 2 | 3 / 3 | 0 / 1 |
-| rear 16 x 4 | 255 | 128, 0, 255 | as above | 1 / 1 to 1 / 2 | 1 / 1 | 3 / 3 | 2 / 2 | 2 / 2 | 2 / 3 to 3 / 3 | 1 / 2 |
-| rear 24 x 4 | 140, 255 | 128, 0, 255 | as above | 0 / 1 to 1 / 2 | 1 / 1 | 3 / 3 | 2 / 2 | 1 / 2 to 2 / 2 | 1 / 3 to 3 / 3 | 1 / 1, 1 / 2 |
-| rear 28 x 4 | 140, 255 | 128, 0, 255 | as above | 0 / 1 to 1 / 2 | 1 / 1 | 3 / 3 | 1 / 2 to 2 / 2 | 1 / 2 to 2 / 2 | 1 / 2 to 3 / 3 | 0 / 1, 1 / 1 |
-| rear 32 x 8 | 140, 255 | 128, 0, 255 | as above | 0 / 1 to 0 / 2 | 1 / 1 | 3 / 3 | 1 / 2 to 2 / 2 | 1 / 2 to 2 / 2 | 1 / 2 to 3 / 3 | 0 / 1 |
+| rear 16 x 4 | 255 | 128 (own) | 3 / 40 | 1 / 2 | 1 / 1 | 3 / 3 | 2 / 2 | 2 / 2 | 3 / 3 | 1 / 2 |
+| rear 16 x 4 | 255 | 0 | 12 / 160 | 1 / 1 | 1 / 1 | 3 / 3 | 2 / 2 | 1 / 2 | 2 / 3 | 1 / 2 |
+| rear 16 x 4 | 255 | 255 | 1 / 20 | 1 / 2 | 1 / 1 | 3 / 3 | 2 / 2 | 2 / 2 | 3 / 3 | 1 / 2 |
+| rear 24 x 4 | 140 | 128 (own) | 3 / 40 | 1 / 1 | 1 / 1 | 3 / 3 | 2 / 2 | 2 / 2 | 3 / 3 | 1 / 1 |
+| rear 24 x 4 | 140 | 0 | 12 / 160 | 0 / 1 | 1 / 1 | 2 / 3 | 1 / 2 | 1 / 2 | 1 / 2 | 1 / 1 |
+| rear 24 x 4 | 140 | 255 | 1 / 20 | 1 / 2 | 1 / 1 | 3 / 3 | 2 / 2 | 2 / 2 | 3 / 3 | 1 / 1 |
+| rear 24 x 4 | 255 | 128 (own) | 3 / 40 | 1 / 2 | 1 / 1 | 3 / 3 | 2 / 2 | 2 / 2 | 3 / 3 | 1 / 2 |
+| rear 24 x 4 | 255 | 0 | 12 / 160 | 0 / 1 | 1 / 1 | 3 / 3 | 1 / 2 | 1 / 2 | 2 / 3 | 1 / 2 |
+| rear 24 x 4 | 255 | 255 | 1 / 20 | 1 / 2 | 1 / 1 | 3 / 3 | 2 / 2 | 2 / 2 | 3 / 3 | 1 / 2 |
+| rear 28 x 4 | 140 | 128 (own) | 3 / 40 | 0 / 1 | 1 / 1 | 3 / 3 | 2 / 2 | 2 / 2 | 3 / 3 | 0 / 1 |
+| rear 28 x 4 | 140 | 0 | 12 / 160 | 1 / 1 | 1 / 1 | 1 / 3 | 1 / 1 | 1 / 1 | 1 / 2 | 0 / 1 |
+| rear 28 x 4 | 140 | 255 | 1 / 20 | 1 / 2 | 1 / 1 | 3 / 3 | 2 / 2 | 2 / 2 | 3 / 3 | 0 / 1 |
+| rear 28 x 4 | 255 | 128 (own) | 3 / 40 | 1 / 1 | 1 / 1 | 3 / 3 | 2 / 2 | 2 / 2 | 3 / 3 | 1 / 1 |
+| rear 28 x 4 | 255 | 0 | 12 / 160 | 1 / 1 | 1 / 1 | 2 / 3 | 1 / 2 | 1 / 2 | 2 / 2 | 1 / 1 |
+| rear 28 x 4 | 255 | 255 | 1 / 20 | 1 / 2 | 1 / 1 | 3 / 3 | 2 / 2 | 2 / 2 | 3 / 3 | 1 / 1 |
+| rear 32 x 8 | 140 | 128 (own) | 3 / 40 | 0 / 1 | 1 / 1 | 3 / 3 | 2 / 2 | 2 / 2 | 3 / 3 | 0 / 1 |
+| rear 32 x 8 | 140 | 0 | 12 / 160 | 0 / 1 | 1 / 1 | 1 / 3 | 1 / 1 | 1 / 1 | 0 / 1 | 0 / 1 |
+| rear 32 x 8 | 140 | 255 | 1 / 20 | 0 / 1 | 1 / 1 | 3 / 3 | 2 / 2 | 2 / 2 | 3 / 3 | 0 / 1 |
+| rear 32 x 8 | 255 | 128 (own) | 3 / 40 | 0 / 1 | 1 / 1 | 3 / 3 | 2 / 2 | 2 / 2 | 3 / 3 | 0 / 1 |
+| rear 32 x 8 | 255 | 0 | 12 / 160 | 0 / 1 | 1 / 1 | 3 / 3 | 1 / 2 | 1 / 2 | 1 / 2 | 0 / 1 |
+| rear 32 x 8 | 255 | 255 | 1 / 20 | 0 / 2 | 1 / 1 | 3 / 3 | 2 / 2 | 2 / 2 | 3 / 3 | 0 / 1 |
 
 What it settled:
 
@@ -376,8 +487,11 @@ What it settled:
 
 | The pump's floor | Cases over three in a second | The closest two onsets of a region |
 | ---------------- | ---------------------------- | ---------------------------------- |
-| S2's alone, 340 ms | 43 of 216 | 200 ms (168 BPM) |
-| `logic`'s own, 400 ms | 0 of 216 | 290 ms (148 BPM) |
+| S2's alone, 340 ms | 18 of 216 | 240 ms (176 BPM) |
+| `logic`'s own, 400 ms | 0 of 216 | 280 ms (148 BPM) |
+
+(With the palette baked at the ceiling, as the model had it until 2026-11-24: 43 of 216 and 200 ms, 0 of 216 and
+290 ms.)
 
 In a wider scan (100 to 300 BPM), 360 ms failed and 380 ms passed; 400 ms passed on four seeds and with owners' fades
 up to 40 and delays up to 100. The floor thins only every-beat pumps from 151 to 176 BPM, to every other beat.

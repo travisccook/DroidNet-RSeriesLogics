@@ -43,6 +43,13 @@
 //   * RANDOM streams: every verb, wildcards, bursts, corrupted parameters, re-anchors, seeks,
 //     scored and live lines, at random times.
 //
+// (i) v1.4 logic, ON ITS OWN SCALE (the 2026-11-21 review): the walk's light is far under the
+// observers' lines above (at 160 its mean is under 16), so they cannot see it. While a display
+// shows logic's walk (gLogicUp), its whole field and every region of (h) are also counted the way
+// stage 1k counts: the gate's step on the walk's own full scale (its brightest LED at the ceiling,
+// by each measure), a rise of a step above the trough after a fall of a step. At most three onsets
+// in any second; the counts start again whenever the walk is not up. Asserted everywhere.
+//
 // What the test knows about the layer's inside is deliberately little: when a unit's show mode
 // ended without a line saying so (the watchdog, or a failed V), read from gContract[].inShow, so
 // that (c) can start its clock; and whether the contract held a display when a button was
@@ -94,6 +101,8 @@ struct Region {
   // a fall of a step under the last peak ends it), with no allowance for a small lit area. It
   // is what test_fx_regions.cpp holds the core's strand looks to, here on the rendered pixels.
   bool fLit[2] = { false, false }, fStarted[2] = { false, false }; int fRef[2] = { 0, 0 }; uint32_t fAt[2][16]; int fN[2] = { 0, 0 };
+  // (i): logic's walk on its own scale, in sixteenths of a level
+  bool wLit[2] = { false, false }, wStarted[2] = { false, false }; int wRef[2] = { 0, 0 }; uint32_t wAt[2][16]; int wN[2] = { 0, 0 };
 };
 static const int kRegionBands[3][2] = { { 10, 50 }, { 19, 75 }, { 4, 31 } };   // dark at or below, lit from (% of the ceiling)
 
@@ -113,6 +122,7 @@ struct Watch {
   uint32_t colourMinGap = 0xFFFFFFFFu; long colourChanges = 0;
   Region regions[48]; int nRegions = 0;            // (h)
   int fineMost = 0; uint32_t fineMinGap = 0xFFFFFFFFu; int fineWorst = -1;
+  int unit = 0; int walkMost = 0; uint32_t walkMinGap = 0xFFFFFFFFu; long walkFrames = 0;   // (i)
   uint32_t regionMinGap = 0xFFFFFFFFu; long regionOnsets = 0; int regionWorst = -1, regionMost = 0;   // most onsets of one region in a second
   int overCeiling = 0;           // (b) frames with a pixel above the ceiling that effect 106 drew
   long writesSeen = 0;           // ...the mock's count of pixel writes, to tell a drawn frame from a held one
@@ -126,7 +136,7 @@ struct Watch {
   bool ownerDark = false;        // the owner chose lights-out, by button: a display the contract gives back, or leaves alone, is then dark
   bool ownerDarkUp = false;      // ...and the engine has started it (a frame or two after the press)
   void reset(LogicEngineRenderer* rr, int u) {
-    *this = Watch(); r = rr; ceil = (u == 0 ? LogicEngineFLDDefault : LogicEngineRLDDefault).fBri;
+    *this = Watch(); r = rr; unit = u; ceil = (u == 0 ? LogicEngineFLDDefault : LogicEngineRLDDefault).fBri;
     obs[1].darkPct = 19; obs[1].litPct = 75; obs[2].darkPct = 4; obs[2].litPct = 31;
     lum[1].darkPct = 19; lum[1].litPct = 75; lum[2].darkPct = 4; lum[2].litPct = 31;
     static const int kNarrow[4][2] = { { 3, 15 }, { 40, 52 }, { 45, 60 }, { 80, 95 } };
@@ -249,6 +259,34 @@ struct Watch {
             g.fAt[m][g.fN[m]++ & 15] = now;
             int w = 0; for (int k = 0; k < 16 && k < g.fN[m]; k++) if (now - g.fAt[m][(g.fN[m] - 1 - k) & 15] < 1000) w++;
             if (w > fineMost) { fineMost = w; fineWorst = i; }
+          }
+        }
+      }
+      // (i): logic's walk, on its own scale
+      const bool walk = gLogicUp[unit] && r->_fx == 106;
+      int wstep[2] = { 0, 0 };
+      if (walk) {
+        walkFrames++;
+        int fl = 0, fy = 0;                          // the walk's own full scale: its palette at the ceiling, by each measure
+        mockFullScale(r->_pal, r->_hue, ceil, fl, fy);
+        wstep[0] = contractFieldStep((uint8_t)fl) * 16; wstep[1] = contractFieldStep((uint8_t)fy) * 16;
+      }
+      for (int i = 0; i < nRegions; i++) {
+        Region& g = regions[i];
+        if (!walk) { g.wStarted[0] = g.wStarted[1] = false; g.wN[0] = g.wN[1] = 0; continue; }
+        const int area = (g.x1 - g.x0) * (g.y1 - g.y0);
+        for (int m = 0; m < 2; m++) {
+          const long (*sm)[33] = m ? sumY : sumV;
+          const int x = (int)((sm[g.y1][g.x1] - sm[g.y0][g.x1] - sm[g.y1][g.x0] + sm[g.y0][g.x0]) * 16 / area);
+          if (!g.wStarted[m]) { g.wStarted[m] = true; g.wRef[m] = x; g.wLit[m] = false; continue; }
+          if (g.wLit[m]) { if (x > g.wRef[m]) g.wRef[m] = x; else if (g.wRef[m] - x >= wstep[m]) { g.wLit[m] = false; g.wRef[m] = x; } }
+          else if (x < g.wRef[m]) g.wRef[m] = x;
+          else if (x - g.wRef[m] >= wstep[m]) {
+            g.wLit[m] = true; g.wRef[m] = x;
+            if (g.wN[m] > 0 && now - g.wAt[m][(g.wN[m] - 1) & 15] < walkMinGap) walkMinGap = now - g.wAt[m][(g.wN[m] - 1) & 15];
+            g.wAt[m][g.wN[m]++ & 15] = now;
+            int w = 0; for (int k = 0; k < 16 && k < g.wN[m]; k++) if (now - g.wAt[m][(g.wN[m] - 1 - k) & 15] < 1000) w++;
+            if (w > walkMost) walkMost = w;
           }
         }
       }
@@ -446,7 +484,8 @@ enum : int { BROKE_ONSETS = 1,      // (a), the wide observers: two onsets under
              BROKE_COLOUR = 8,      // (g)
              BROKE_OTHER = 16,      // (b) to (e)
              BROKE_REGION = 32,     // (h)
-             BROKE_FINE = 64 };     // (h), by the fine observer: asserted where a script asks for it
+             BROKE_FINE = 64,       // (h), by the fine observer: asserted where a script asks for it
+             BROKE_WALK = 128 };    // (i), logic's walk on its own scale
 // ---- the hostile profiles: the rows of the review's table, and three more of the same kind ----
 struct Profile { const char* name; void (*setup)(); void (*at)(uint32_t t); uint32_t period; int expected; bool fine = false; };
 static void pShow() { tx("**M:v=show"); }
@@ -616,6 +655,7 @@ struct Result {
   int worst = 0; uint32_t minGap = 0xFFFFFFFFu, narrowGap = 0xFFFFFFFFu, lumGap = 0xFFFFFFFFu, colourGap = 0xFFFFFFFFu, regionGap = 0xFFFFFFFFu;
   long regionOnsets = 0; int regionMost = 0;
   int fineMost = 0; uint32_t fineGap = 0xFFFFFFFFu; bool fine = false;   // the fine observer, and whether this script is held to it
+  int walkMost = 0; uint32_t walkGap = 0xFFFFFFFFu; long walkFrames = 0;   // (i)
   int overCeiling = 0, notNative = 0, notDark = 0, wdLate = 0;
   long onsets = 0, darkChecked = 0, nativeChecked = 0, contractFrames = 0, lines = 0;   // how much was looked at
   long presses = 0, buttonChecked = 0, colourChanges = 0, lumOnsets = 0; int notButton = 0;
@@ -630,6 +670,9 @@ struct Result {
       regionOnsets += gW[u].regionOnsets; if (gW[u].regionMost > regionMost) regionMost = gW[u].regionMost;
       if (gW[u].fineMost > fineMost) fineMost = gW[u].fineMost;
       if (gW[u].fineMinGap < fineGap) fineGap = gW[u].fineMinGap;
+      if (gW[u].walkMost > walkMost) walkMost = gW[u].walkMost;
+      if (gW[u].walkMinGap < walkGap) walkGap = gW[u].walkMinGap;
+      walkFrames += gW[u].walkFrames;
       overCeiling += gW[u].overCeiling; notNative += gW[u].notNative; notDark += gW[u].notDark;
       onsets += gW[u].obs[0].total; darkChecked += gW[u].darkChecked; nativeChecked += gW[u].nativeChecked; contractFrames += gW[u].contractFrames;
       notButton += gW[u].notButton; buttonChecked += gW[u].buttonChecked;
@@ -648,6 +691,9 @@ struct Result {
     if (o.regionGap < regionGap) regionGap = o.regionGap;
     regionOnsets += o.regionOnsets; if (o.regionMost > regionMost) regionMost = o.regionMost;
     if (o.fine) { fine = true; if (o.fineMost > fineMost) fineMost = o.fineMost; if (o.fineGap < fineGap) fineGap = o.fineGap; }
+    if (o.walkMost > walkMost) walkMost = o.walkMost;
+    if (o.walkGap < walkGap) walkGap = o.walkGap;
+    walkFrames += o.walkFrames;
     overCeiling += o.overCeiling; notNative += o.notNative; notDark += o.notDark; wdLate += o.wdLate;
     onsets += o.onsets; darkChecked += o.darkChecked; nativeChecked += o.nativeChecked; contractFrames += o.contractFrames; lines += o.lines;
     notButton += o.notButton; presses += o.presses; buttonChecked += o.buttonChecked;
@@ -662,6 +708,7 @@ struct Result {
          | (colourGap < STROBE_MIN_STATE_MS ? BROKE_COLOUR : 0)
          | (regionMost > 3 ? BROKE_REGION : 0)
          | (fine && fineMost > 3 ? BROKE_FINE : 0)
+         | (walkMost > 3 ? BROKE_WALK : 0)
          | (overCeiling || notNative || notDark || wdLate || notButton ? BROKE_OTHER : 0);
   }
   void print(const char* verdict, const char* name) const {
@@ -674,6 +721,7 @@ struct Result {
     if (b & BROKE_COLOUR)    printf(" colour changes %u ms apart;", colourGap);
     if (b & BROKE_REGION)    printf(" a region of a quarter of the field or more lit %d times in one second (the closest two %u ms apart);", regionMost, regionGap);
     if (b & BROKE_FINE)      printf(" by the fine observer a region lit %d times in one second (the closest two %u ms apart);", fineMost, fineGap);
+    if (b & BROKE_WALK)      printf(" logic's walk on its own scale: a region lit %d times in one second (the closest two %u ms apart);", walkMost, walkGap);
     if (notDark)     printf(" %d frames lit after X;", notDark);
     if (notNative)   printf(" %d frames not native after idle;", notNative);
     if (overCeiling) printf(" %d frames over the ceiling;", overCeiling);
@@ -765,7 +813,7 @@ static void verdict(const char* name, const Result& res, int expected) {
   if (b == expected) { if (b) { res.print("XFAIL", name); gKnown++; } return; }
   (void)0;
   res.print((b & ~expected) ? "FAIL " : "XPASS", name);
-  printf("      expected to break %d, broke %d (1 onsets, 2 narrow-band onsets, 4 luminance, 8 colour changes, 16 other, 32 regions, 64 regions by the fine observer)\n", expected, b);
+  printf("      expected to break %d, broke %d (1 onsets, 2 narrow-band onsets, 4 luminance, 8 colour changes, 16 other, 32 regions, 64 regions by the fine observer, 128 logic's walk on its own scale)\n", expected, b);
   gFails++;
 }
 
@@ -810,6 +858,8 @@ int main() {
          "      onsets of a region of a quarter of the field or more: %ld; in the random streams, NOT asserted: at most %d of one region in a\n"
          "      second, the closest two %u ms apart)\n",
          all.colourChanges, all.colourGap, all.lumOnsets, all.lumGap, all.narrowGap, all.regionOnsets, randomRegionMost, randomRegionGap);
+  printf("     (logic's walk on its own scale, (i): %ld frames watched, at most %d onsets of the field or a region in a second, the closest two %u ms apart)\n",
+         all.walkFrames, all.walkMost, all.walkGap);
   printf("S9 property OK (%d known defect(s) still open): %ld lines, %ld frames drawn by the contract, %ld onsets, the closest two %u ms apart;\n"
          "   %ld frames checked dark after X, %ld checked native after idle or the watchdog, %ld button presses and %ld frames\n"
          "   checked on the button's sequence (seed 0x%08X, %d random streams)\n",
