@@ -62,6 +62,10 @@
 // (the light goes as about the fourth power of the level since 330dacd), R2-F6 LOGIC_RISE_MS on a
 // seventh walk seed, R2-F7 a held logic frame stepping the walk on a table baked at another level.
 //
+// THIRD REVIEW, 2026-11-24, of 13bb9e7 and 51a3518: R2-F4 to F7 pass (R2-F7's check restated: the
+// same lines with and without the logic line, frame for frame). One more: R2-F8, the owner's
+// brightness given back at the idle blink's restart, which skips the walk's window.
+//
 // Run alone: clang++ -std=c++17 -O1 test_review_r2_findings.cpp && ./a.out   (about 5 s)
 #include "logics_harness.h"
 #include <cstdarg>
@@ -283,6 +287,18 @@ static void scriptBrightSub(uint32_t t, int u, void* vc) {
   if (t == 0) { send("**M:v=show"); lineFor(u, "A:i=logic"); }
   if (t >= 1000 && (t - 1000) % (uint32_t)c.period == 0) lineFor(u, "B:b=255");
   if (t >= 1000 && (t - 1000) % (uint32_t)c.period == (uint32_t)c.high) lineFor(u, "B:b=%u", (unsigned)c.s);
+}
+// (R2-F8) native:0 dark, and the idle look (the owner's brightness given back), by turns
+static void scriptIdleTurns(uint32_t t, int u, void* vc) {
+  const Ctx& c = *(Ctx*)vc;
+  const uint32_t k = t % (uint32_t)c.period;
+  if (k == 0) { send("**M:v=show"); lineFor(u, "A:i=native:0,b=0"); }
+  if (k == (uint32_t)c.high) lineFor(u, "M:v=idle");
+}
+static std::string leds(const LogicEngineRenderer* r) {
+  std::string s;
+  for (int y = 0; y < r->height(); y++) for (int x = 0; x < r->width(); x++) { const CRGB c = r->px(x, y); s += (char)c.r; s += (char)c.g; s += (char)c.b; }
+  return s;
 }
 static long lightSum(const LogicEngineRenderer* r) {
   long s = 0;
@@ -508,22 +524,83 @@ int main() {
   // calculateAllColors()), and while the look gate holds the logic frame (the field got brighter a
   // moment ago: B) the walk steps at level 80 on a table baked at 160. The front's light goes up
   // about five times for some 150 ms, then back; the gate is told 80 throughout.
+  // THE CHECK (restated 2026-11-24, third review): the same lines from the same walk seed twice,
+  // once with the logic line and once without it (native:0 left alone). A seamless entry is the
+  // same walk with the same light (N4; _logicFrame rule 1), so the two runs' LEDs must be the same
+  // in every frame of the 600 ms after it, the held frames included. (The first statement compared
+  // the brightest frame with the mean of the 100 ms before, within 30 %; native:0 alone, after B,
+  // goes from 18 to 31 on the same steps as its LEDs step up, so that bound could not be met by
+  // any layer. The defect it was written for is the walk stepping on a table baked at 160: 18 to
+  // 129, and LEDs that differ from native:0's.) The scenario's own preconditions are checked too:
+  // the entry is seamless, and the look gate holds logic's first frame.
   {
+    std::vector<std::string> fr[2]; long most[2] = { 0, 0 }; bool seamless = false, heldByLook = false;
+    for (int k = 0; k < 2; k++) {
+      gMockWalkNormal = true; mockEngineSize(0, 8, 10); mockEngineSize(1, 16, 4); resetAll();
+      send("**M:v=show"); send("LFA:i=native:0,b=64"); run(1500);
+      send("LFB:b=128"); for (int i = 0; i < 100 && FLD->_bakedBri != 80; i++) run(10);
+      run(1500);
+      send("LFB:b=64"); run(10); send("LFB:b=128");
+      for (int i = 0; i < 100 && FLD->_bakedBri != 80; i++) run(10);   // the raise is drawn: the field got brighter just now
+      run(10);
+      if (k) {
+        send("LFA:i=logic");
+        // the next engine frame: 106 latches and logic enters
+        run(10);
+        seamless = gLogicUp[0] && !gLogicEnter[0];
+        heldByLook = (uint32_t)(_mock_millis - gContract[0].lookMs) < STROBE_MIN_STATE_MS && gContract[0].lookSig != contractLookSig(CE_LOGIC, gContract[0].color);
+      } else run(10);
+      for (int f = 0; f < 60; f++) { run(10); fr[k].push_back(leds(FLD)); const long l = lightSum(FLD); if (l > most[k]) most[k] = l; }
+      gMockWalkNormal = false;
+    }
+    int differ = 0; for (size_t i = 0; i < fr[0].size(); i++) if (fr[0][i] != fr[1][i]) differ++;
+    printf("R2-F7: native:0 at b=128 left alone peaks at %ld; with a seamless logic entry (%s; look gate holding: %s) %ld; %d of %zu frames differ\n",
+           most[0], seamless ? "seamless" : "NOT seamless", heldByLook ? "yes" : "no", most[1], differ, fr[0].size());
+    CHECK(seamless && heldByLook);                   // (the scenario is the one the finding is about)
+    CHECK(differ == 0);                              // the same walk, the same light, frame for frame
+  }
+
+  // ===== THIRD REVIEW (2026-11-24), of 13bb9e7 and 51a3518 =====
+  // R2-F8: THE OWNER'S BRIGHTNESS GIVEN BACK AT THE IDLE BLINK'S RESTART skips the walk's window.
+  // 13bb9e7 holds native:0's brightness rises to the walk's window in _nativeBright(). But a
+  // display handed back to the idle look from native:0 (M:v=idle, the watchdog, a re-sent
+  // M:v=show) is _choose(SH_ENGINE, NORMAL): the engine restarts NORMAL, and contractEngineLatched()
+  // gives it the owner's brightness at that frame (the `back` branch: contractFieldAllowed(), the
+  // field gate's 340 ms, then _engineBriRestore()), not through _walkRiseOpen(). So
+  //     A:i=native:0,b=0   then   M:v=idle   by turns
+  // brings the walk back from dark every 350 to 400 ms on the front, whose window is 440 ms.
+  {
+    // (1) the rises themselves: the front at the owner's 255, every 400 ms, idle 150 ms after
     gMockWalkNormal = true; mockEngineSize(0, 8, 10); mockEngineSize(1, 16, 4); resetAll();
-    send("**M:v=show"); send("LFA:i=native:0,b=64"); run(1500);
-    send("LFB:b=128");
-    for (int i = 0; i < 40 && FLD->_bakedBri != 80; i++) run(10);
-    run(300);
-    long before = 0; for (int i = 0; i < 10; i++) { run(10); before += lightSum(FLD); } before /= 10;
-    // (B again 20 ms before logic: the field gets brighter, so the look gate holds logic's first frames)
-    send("LFB:b=64"); run(10); send("LFB:b=128"); for (int i = 0; i < 40 && FLD->_bakedBri != 80; i++) run(10);
-    run(10); send("LFA:i=logic");
-    long most = 0; int told = 255, toldMin = 255;
-    for (int f = 0; f < 60; f++) { run(10); const long l = lightSum(FLD); if (l > most) most = l; told = gLogicShown[0]; if (told < toldMin) toldMin = told; }
-    printf("R2-F7: native:0 at b=128 is %ld; logic entered seamlessly at the same level (told %d) reaches %ld while the look gate holds its first frames\n",
-           before, toldMin, most);
-    CHECK(most * 10 <= before * 13);                 // within 30 %: the same light (N4), the gate told one level
+    LogicEngineFLDDefault.fBri = 255; FLD->setBrightness(255); FLD->calculateAllColors();
+    uint32_t last = 0, closest = 0xFFFFFFFFu; int prev = FLD->_liveBri, ups = 0;
+    for (uint32_t t = 0; t < 6000; t += 10) {
+      const uint32_t k = t % 400u;
+      if (k == 0) { send("**M:v=show"); send("LFA:i=native:0,b=0"); }
+      if (k == 150) send("LFM:v=idle");
+      _mock_millis += 10; frame();
+      if (t > 1000 && FLD->_liveBri > prev) { if (last && t - last < closest) closest = t - last; last = t; ups++; }
+      prev = FLD->_liveBri;
+    }
     gMockWalkNormal = false;
+    const uint32_t frontWindow = 2u * STROBE_MIN_STATE_MS + 10u * ((10u - 1u > 1u ? 10u - 1u : 1u) + 1u);   // the front's own pace: 440 ms
+    printf("R2-F8: native:0,b=0 and M:v=idle by turns every 400 ms: the front's brightness came back %d times, the closest two %u ms apart (the walk's window %u)\n",
+           ups, closest, frontWindow);
+    CHECK(ups >= 5 && closest >= frontWindow);
+    // (2) the light, by stage 1k's rule
+    const int o = gOver, n = gCases;
+    for (int bri : { 0, 255 }) for (const auto& d : kD) {
+      gOwnerBri = bri;
+      const Meter::Result stock = measure(d.u, d.w, d.h, SECONDS, nullptr, nullptr, ceil, fl, fy);
+      for (int period : { 300, 400 }) for (int high : { 50, 100, 150 }) {
+        Ctx c; c.period = period; c.high = high; char what[112];
+        snprintf(what, sizeof what, "%s bri %d: native:0,b=0 and M:v=idle by turns every %d ms (idle %d ms in)", d.u ? "rear" : "front", ceil, period, high);
+        judge(what, measure(d.u, d.w, d.h, SECONDS, scriptIdleTurns, &c, ceil, fl, fy), stock);
+      }
+    }
+    gOwnerBri = 0;
+    printf("R2-F8, native:0 dark and the idle look by turns: %d of %d cases break v1.4 section 9's rule\n", gOver - o, gCases - n);
+    CHECK(gOver == o);
   }
   if (gFails) { printf("REVIEW FINDINGS: %d CHECK(s) FAILED (expected while the defects are in the code)\n", gFails); return 1; }
   printf("review findings: all pass\n");
