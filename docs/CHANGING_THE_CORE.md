@@ -966,6 +966,14 @@ because it reads the spec, and because the review found that the gates alone are
   300 ms at 255 lit the rear 16 by 4 four times a second by the gate's own count.
 - **A recolour** of the walk that is up waits the window and starts it again (`contractNativeEnded(known=true)`).
 - **`projector`'s stand-in** (`sparkle`) is not pumped (N8).
+- **`vu`'s hand-over between pumped and not** (2026-11-24, after the PSI's and the holoprojectors' reviews found it
+  on theirs) takes their rule: it starts the level window; to the pump the level starts from 0; from the pump the meter
+  shows the last `L` the unit took (`contractTick()`, `gVuPumped`, `gLastL`). Here the pump and `L` were one level hold
+  already, so pauses, `am=`/`m=` toggles and re-seeds kept 340 ms before it; what changed is N12 after the pump (the
+  meter had gone on at the pump's last level: rows again 330 ms apart with `vu` and `meter` by turns, and 50 ms with a
+  pumped `meter` in the mix). Stage 2g test 13: 0 of 3,792 hand-over runs over three a second or inside 340 ms. What
+  is left is a pumped `meter` under `L`, R1's look, which does 5 a second on its own ("What is not in" in
+  `DROIDNET_FORK.md`). Core calls only; no core change.
 - The exact rules, in the order the layer applies them, are in `DROIDNET_FORK.md` ("What is in (contract v1.4, R2)",
   "Its windows"), for Studio's mirror. A fork that draws `logic` itself (none does) would need the same.
 - Stage R2rev (the reviews' findings, R2-F1 to R2-F8) passes in full. R2-F7's check, as the third review restated
@@ -973,5 +981,5 @@ because it reads the spec, and because the review found that the gates alone are
   over 600 ms; the first version compared the most light with the mean of the 100 ms before, which `native:0` alone
   fails too (its walk's own texture). Stage 2g holds the held frames to `native:0`'s frame for frame.
 
-The ESP32 image with `logic` and `vu` drawn by the layer and the reviews' fixes: 1,140,141 B of flash and 64,964 B of
-static RAM (F2 as first merged: 1,138,617 B and 64,948 B).
+The ESP32 image with `logic` and `vu` drawn by the layer and the reviews' fixes: 1,140,249 B of flash and 64,972 B of
+static RAM (F2 as first merged: 1,138,617 B and 64,948 B; before `vu`'s hand-over, 1,140,141 B and 64,964 B).

@@ -22,7 +22,7 @@ static void send(const char* afterBang) { contractHandleLine(afterBang); }
 static void resetAll() {
   for (uint8_t u = 0; u < 2; u++) { gContract[u] = ContractUnitState(); gBriTouched[u] = false; gShown[u] = SH_ENGINE; gShownCode[u] = 0; gLatched[u] = true; gEngineSeq[u] = 0;
                                     gQueryLen[u] = 0; gBriGoing[u] = false; gRise[u] = false; gRestart[u] = false;
-                                    gLogicUp[u] = false; gLogicShown[u] = 0; gLedsWalk[u] = true; gWalkLeft[u] = false; gLogicEnter[u] = false; gIdleWalk[u] = true; gLogicSteady[u] = false; gWalkUpMs[u] = 0; gWalkUpBeat[u] = false; }
+                                    gLogicUp[u] = false; gLogicShown[u] = 0; gLedsWalk[u] = true; gWalkLeft[u] = false; gLogicEnter[u] = false; gIdleWalk[u] = true; gLogicSteady[u] = false; gWalkUpMs[u] = 0; gWalkUpBeat[u] = false; gVuPumped[u] = false; gLastL[u] = 0; }
   gBeat = BeatClock();
   gLastLineMs = 0;
   mockEngineReset();

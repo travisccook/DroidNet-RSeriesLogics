@@ -25,7 +25,9 @@
 //   * the pump reaches the LEDs as the model has it: the layer's LEDs are the model's LEDs, frame
 //     by frame, at the tempos and paces the model runs;
 //   * vu: not pumped it is meter; pumped, the level rides the beat through the level hold, the
-//     brightness stays at b=, L is not shown, and no row lights more than three times a second.
+//     brightness stays at b=, L is not shown, and no row lights more than three times a second;
+//     the hand-over between pumped and not starts the level window, from 0 to the pump and to the
+//     last L from it, under hostile streams (test 13).
 #include "logics_harness.h"
 #include <cstring>
 #include <string>
@@ -873,6 +875,255 @@ static void test_walk_rises() {
   printf("  the walk's rises: %d rises of native:0 and logic under B every 50 ms, each a window apart; a held seamless logic frame for frame native:0's\n", rises);
 }
 
+// ---- 13. vu's hand-over between pumped and not (the class the PSI and holoprojector reviews found) ----
+// On those boards the pump's level and the meter's own each kept the window alone, and the hand-over
+// between them (C:bpm=0 and back, am= or m= to 0 and back, a re-seed) kept no time: rows lit again in
+// under 340 ms. Here the pump and L offer to ONE level hold (contractLevelOffer: contractTick while
+// pumped, verb L while not), whose rises share one anchor with B's (levelMs), so those hand-overs
+// kept the window before 2026-11-24 too. What the hostile streams found was the meter after the
+// pump: it went on at the pump's last level (N12 says it is the meter, whose level is L's), and
+// that level, held or taken in the window the pump had started, lit rows again 330 ms apart (vu and
+// meter by turns) and, with a pumped meter or random lines, 50 to 300 ms apart. The layer now hands
+// over as the holoprojectors do (contractTick): the window starts at the hand-over, to the pump the
+// level starts from 0, from the pump it is the last L the unit took.
+// The streams: the hand-over at nine offsets from a beat and back after 10 to 600 ms, am= and m=
+// toggles, vu and meter by turns, re-seeds and tempo changes, and random mixes with B; under L
+// storms all the time or only around the hand-over, L held high or low, or none. Front 8 x 10 and
+// rear 16 x 4, at the owner's 255 and their own (160, 140), white and green. Every display is read
+// by the whole field, its quarters, every band of rows (one row up) and of columns (a quarter up),
+// both measures, at the gate's step on the look's own full scale and on the ceiling (stage 1k's
+// fine reading), and row by row lit at half the look's full scale and dark at a tenth (test 9).
+// The rule: no series lights more than three times in a second, and none twice inside 340 ms.
+// Two kinds of stream also put up a meter that the pump lights by its BRIGHTNESS (a meter with am=
+// and m=, v1.3 S2): a pumped meter whose L changes is two lights by turns, the S12 class (spec 12.6),
+// on R1's meter alone. Those streams are held to that meter's own figures, measured here.
+struct VuWatch {
+  int W = 0, H = 0;
+  struct Reg { int x0, x1, y0, y1; bool row; };
+  std::vector<Reg> regs; std::vector<std::vector<int>> val[2];   // [measure][region][frame], x16
+  void init(int w, int h) {
+    W = w; H = h; regs.clear();
+    regs.push_back({ 0, w, 0, h, false });
+    for (int q = 0; q < 4; q++) regs.push_back({ (q & 1) ? w / 2 : 0, (q & 1) ? w : w / 2, (q & 2) ? h / 2 : 0, (q & 2) ? h : h / 2, false });
+    for (int y0 = 0; y0 < h; y0++) for (int y1 = y0 + 1; y1 <= h; y1++) if (!(y0 == 0 && y1 == h)) regs.push_back({ 0, w, y0, y1, y1 == y0 + 1 });
+    for (int x0 = 0; x0 < w; x0++) for (int x1 = x0 + 1; x1 <= w; x1++) if ((x1 - x0) * 4 >= w && !(x0 == 0 && x1 == w)) regs.push_back({ x0, x1, 0, h, false });
+    for (int m = 0; m < 2; m++) val[m].assign(regs.size(), std::vector<int>());
+  }
+  void see(const LogicEngineRenderer* r) {
+    long I[2][11][33] = {};                                   // integral images of the two measures
+    for (int y = 0; y < H; y++) for (int x = 0; x < W; x++) {
+      const CRGB c = r->px(x, y);
+      const long v[2] = { c.r > c.g ? (c.r > c.b ? c.r : c.b) : (c.g > c.b ? c.g : c.b), contractLuminance(c.r, c.g, c.b) };
+      for (int m = 0; m < 2; m++) I[m][y + 1][x + 1] = v[m] + I[m][y][x + 1] + I[m][y + 1][x] - I[m][y][x];
+    }
+    for (int m = 0; m < 2; m++) for (size_t k = 0; k < regs.size(); k++) {
+      const Reg& g = regs[k];
+      const long sum = I[m][g.y1][g.x1] - I[m][g.y0][g.x1] - I[m][g.y1][g.x0] + I[m][g.y0][g.x0];
+      val[m][k].push_back((int)(sum * 16 / ((g.x1 - g.x0) * (g.y1 - g.y0))));
+    }
+  }
+  static void note(std::vector<int>& at, int t, int& most, int& gap) {
+    if (!at.empty() && t - at.back() < gap) gap = t - at.back();
+    at.push_back(t);
+    int k = 0; for (size_t j = at.size(); j-- > 0 && t - at[j] < 1000;) k++;
+    if (k > most) most = k;
+  }
+  // the gate's rule with the steps of fullLv / fullLy: the most onsets of one series in a second and
+  // the closest two (ms; frames 10 ms apart)
+  void gate(int fullLv, int fullLy, int& most, int& gap) const {
+    for (int m = 0; m < 2; m++) {
+      const int step = contractFieldStep((uint8_t)(m ? fullLy : fullLv)) * 16;
+      for (const auto& v : val[m]) {
+        bool lit = false; int ref = v.empty() ? 0 : v[0]; std::vector<int> at;
+        for (size_t i = 0; i < v.size(); i++) {
+          const int x = v[i];
+          if (lit) { if (x > ref) ref = x; else if (ref - x >= step) { lit = false; ref = x; } }
+          else if (x < ref) ref = x;
+          else if (x - ref >= step) { lit = true; ref = x; note(at, (int)i * 10, most, gap); }
+        }
+      }
+    }
+  }
+  // each row lit at half of fullLv and dark at a tenth (a row lit when the reading starts is not an
+  // onset); returns the row onsets
+  int rows(int fullLv, int& most, int& gap) const {
+    int n = 0;
+    for (size_t k = 0; k < regs.size(); k++) {
+      if (!regs[k].row) continue;
+      const std::vector<int>& v = val[0][k];
+      bool lit = !v.empty() && v[0] * 2 >= fullLv * 16; std::vector<int> at;
+      for (size_t i = 0; i < v.size(); i++) {
+        const int x = v[i];
+        if (!lit && x * 2 >= fullLv * 16) { lit = true; n++; note(at, (int)i * 10, most, gap); }
+        else if (lit && x * 10 <= fullLv * 16) lit = false;
+      }
+    }
+    return n;
+  }
+};
+struct VuTally { int runs = 0, over = 0, close = 0, most = 0, gap = 1 << 30, onsets = 0, handovers = 0, past3 = 0, inside = 0; };
+typedef void (*VuScript)(uint32_t t, int a, int b, int c, std::vector<std::string>& out);
+static const char* const kVuCol[2] = { "ffffff", "00ff00" };
+static int gVuCol = 0;
+static std::string vuLook(const char* rest) { return std::string("L*A:i=vu,c=") + kVuCol[gVuCol] + rest; }
+static std::string meterLook(const char* rest) { return std::string("L*A:i=meter,c=") + kVuCol[gVuCol] + rest; }
+static bool gVuMeterOnly = false;   // the bound's runs: a pumped meter from the start, no vu at all
+// One run: `script` gives the lines of each 10 ms after a pumped vu at 120 BPM is up; 12 s, read
+// from 1 s on. For each display the worst second and the closest two onsets over every observer.
+static void vuRun(VuScript script, int a, int b, int c, int ownerBri, const VuTally* bound, VuTally& tl) {
+  sizes(16, 4); resetAll();
+  if (ownerBri) { ownerSets(0, ownerBri); ownerSets(1, ownerBri); }
+  send("**M:v=show");
+  { const std::string l = gVuMeterOnly ? meterLook(",am=2,m=255") : vuLook(",am=2,m=255"); send(l.c_str()); }
+  send("**C:bpm=120,ph=0,bpb=4,beat=0");
+  VuWatch w[2]; for (int u = 0; u < 2; u++) w[u].init((u ? RLD : FLD)->width(), (u ? RLD : FLD)->height());
+  bool was[2] = { false, false };
+  std::vector<std::string> lines;
+  for (uint32_t t = 0; t < 12000; t += 10) {
+    lines.clear(); script(t, a, b, c, lines);
+    for (const auto& l : lines) send(l.c_str());
+    _mock_millis += 10; frame();
+    for (int u = 0; u < 2; u++) {
+      const bool p = _vuPumped(gContract[u]);
+      if (t >= 1000 && p != was[u]) tl.handovers++;
+      was[u] = p;
+      if (t >= 1000) w[u].see(u ? RLD : FLD);
+    }
+  }
+  for (int u = 0; u < 2; u++) {
+    const int ceil = gContract[u].ceil;
+    const ContractRGB col = gVuCol ? ContractRGB{ 0, 255, 0 } : ContractRGB{ 255, 255, 255 };
+    const CRGB full = _scaled(col, (uint8_t)ceil);            // the look's own full scale (b=255: the ceiling)
+    const int lv = full.r > full.g ? (full.r > full.b ? full.r : full.b) : (full.g > full.b ? full.g : full.b);
+    const int ly = contractLuminance(full.r, full.g, full.b);
+    int most = 0, gap = 1 << 30;
+    w[u].gate(lv, ly, most, gap);                             // the gate's step on the look's own scale
+    w[u].gate(ceil, ceil, most, gap);                         // ...and on the ceiling
+    tl.onsets += w[u].rows(lv, most, gap);                    // row by row
+    tl.runs++;
+    const int capMost = bound && bound->most > 3 ? bound->most : 3;
+    const int capGap  = bound && bound->gap < 2 * (int)STROBE_MIN_STATE_MS ? bound->gap : 2 * (int)STROBE_MIN_STATE_MS;
+    if (most > 3) tl.past3++;                                 // by the plain rule, whatever the bound
+    if (gap < 2 * (int)STROBE_MIN_STATE_MS) tl.inside++;
+    if (most > capMost) tl.over++;
+    if (gap < capGap) tl.close++;
+    if (most > tl.most) tl.most = most;
+    if (gap < tl.gap) tl.gap = gap;
+  }
+}
+// L around the hand-over: v= 255 and 0 by turns every 30 ms (Lmode 1, all the time; 2, only within
+// 150 ms of a hand-over line), held at 255 (3) or at 30 (4), or none (0).
+static void vuL(uint32_t t, int Lmode, bool nearHandover, std::vector<std::string>& out) {
+  if (Lmode == 1 || (Lmode == 2 && nearHandover)) { if (t % 30 == 0) out.push_back((t / 30) % 2 ? "L*L:v=255" : "L*L:v=0"); }
+  else if (Lmode == 3 && t % 500 == 0) out.push_back("L*L:v=255");
+  else if (Lmode == 4 && t % 500 == 0) out.push_back("L*L:v=30");
+}
+// (1) C:bpm=0 `o` ms after a beat, the clock back `d` ms later (re-seeded, a beat there), again.
+static void sPause(uint32_t t, int o, int d, int Lmode, std::vector<std::string>& out) {
+  const uint32_t cyc = 1000 + (uint32_t)o + (uint32_t)d, k = t % cyc;   // seeded at k = 0, beats at 0 and 500
+  if (k == 500 + (uint32_t)o) out.push_back("**C:bpm=0");
+  if (k == 0 && t) out.push_back("**C:bpm=120,ph=0,bpb=4,beat=0");
+  bool near = false;
+  for (uint32_t e : { 0u, 500u + (uint32_t)o }) if ((k + cyc - e) % cyc < 150 || (e + cyc - k) % cyc < 150) near = true;
+  vuL(t, Lmode, near, out);
+}
+// (2) am= 2 and 0, (3) m= 255 and 0, (4) vu and meter, (5) vu and a pumped meter, by turns every
+// `every` ms (the look gate holds a look 170 ms, and a held live look is the newest)
+static void sToggle(uint32_t t, int kind, int every, int Lmode, std::vector<std::string>& out) {
+  const bool on = (t / (uint32_t)every) % 2 == 0;
+  if (t % (uint32_t)every == 0 && t) {
+    if (kind == 2) out.push_back(vuLook(on ? ",am=2" : ",am=0"));
+    else if (kind == 3) out.push_back(vuLook(on ? ",m=255" : ",m=0"));
+    else if (kind == 4) out.push_back(on ? vuLook(",am=2,m=255") : meterLook(",am=0"));
+    else out.push_back(on ? vuLook(",am=2,m=255") : meterLook(""));      // the meter keeps the pump: its brightness rides it
+  }
+  const uint32_t r = t % (uint32_t)every;
+  vuL(t, Lmode, r < 150 || (uint32_t)every - r < 150, out);
+}
+// (6) re-seeds and tempo changes, 0 among them, every `every` ms
+static void sReseed(uint32_t t, int every, int, int Lmode, std::vector<std::string>& out) {
+  static const int bpms[] = { 120, 0, 177, 60, 0, 300, 120, 0 };
+  if (t % (uint32_t)every == 0 && t) {
+    const int i = (int)((t / (uint32_t)every) % 8); char l[64];
+    if (bpms[i]) snprintf(l, sizeof l, "**C:bpm=%d,ph=0,bpb=4,beat=%d", bpms[i], i % 3); else snprintf(l, sizeof l, "**C:bpm=0");
+    out.push_back(l);
+  }
+  vuL(t, Lmode, true, out);
+}
+// (7) a random mix of every line above, B among them, one every 10 to 200 ms
+static uint32_t gVuRng = 1, gVuNext = 0;
+static uint32_t vuRand() { gVuRng = gVuRng * 1103515245u + 12345u; return gVuRng >> 8; }
+static void sMix(uint32_t t, int, int, int, std::vector<std::string>& out) {
+  if (t == 0) gVuNext = 0;
+  if (t < gVuNext) return;
+  gVuNext = t + 10 + vuRand() % 191;
+  char l[64];
+  switch (vuRand() % 12) {
+    case 0: out.push_back("**C:bpm=0"); break;
+    case 1: { const unsigned bpm = 60 + vuRand() % 241, beat = vuRand() % 4; snprintf(l, sizeof l, "**C:bpm=%u,ph=0,bpb=4,beat=%u", bpm, beat); out.push_back(l); break; }
+    case 2: out.push_back(vuLook(vuRand() % 2 ? ",am=2" : ",am=0")); break;
+    case 3: out.push_back(vuLook(vuRand() % 2 ? ",am=1" : ",am=3")); break;
+    case 4: { const unsigned m = vuRand() % 2 ? 0u : vuRand() % 256; snprintf(l, sizeof l, ",m=%u", m); out.push_back(vuLook(l)); break; }
+    case 5: out.push_back(meterLook(vuRand() % 2 ? ",am=0" : "")); break;
+    case 6: out.push_back(vuLook(",am=2,m=255")); break;
+    case 7: case 8: { const char who = "F*R"[vuRand() % 3]; const unsigned v = vuRand() % 2 ? 255u : vuRand() % 256;   // (sequenced: one stream on every compiler)
+      snprintf(l, sizeof l, "L%cL:v=%u", who, v); out.push_back(l); break; }
+    case 9: { const unsigned b = vuRand() % 2 ? 255u : vuRand() % 256; snprintf(l, sizeof l, "L*B:b=%u", b); out.push_back(l); break; }
+    case 10: { const unsigned beat = vuRand() % 4; snprintf(l, sizeof l, "**C:bpm=120,ph=0,bpb=4,beat=%u", beat); out.push_back(l); break; }
+    default: out.push_back(vuRand() % 2 ? "L*L:v=255" : "L*L:v=0"); break;
+  }
+}
+// (8) R1's meter alone, pumped (am=2, m=255) at 120 BPM, L every `every` ms: 0 and 255 by turns,
+// 30 and 255 by turns, random, random with B. The S12 class's figures for (5) and (7).
+static void sMeter(uint32_t t, int every, int pat, int, std::vector<std::string>& out) {
+  if (t % (uint32_t)every || !t) return;
+  char l[40];
+  if (pat == 0) out.push_back((t / every) % 2 ? "L*L:v=255" : "L*L:v=0");
+  else if (pat == 1) out.push_back((t / every) % 2 ? "L*L:v=255" : "L*L:v=30");
+  else { snprintf(l, sizeof l, "L*L:v=%u", vuRand() % 256); out.push_back(l); if (pat == 3 && vuRand() % 2) { snprintf(l, sizeof l, "L*B:b=%u", vuRand() % 256); out.push_back(l); } }
+}
+static void vuReport(const char* what, const VuTally& tl) {
+  printf("  %s: %d display runs, %d hand-overs; the worst second %d, the closest two onsets %d ms apart; %d runs over 3, %d inside 340 ms; %d over the bound\n",
+         what, tl.runs, tl.handovers, tl.most, tl.gap, tl.past3, tl.inside, tl.over + tl.close);
+}
+static void vuAdd(VuTally& all, const VuTally& x) {
+  all.runs += x.runs; all.past3 += x.past3; all.inside += x.inside; all.over += x.over; all.close += x.close; all.handovers += x.handovers; all.onsets += x.onsets;
+  if (x.most > all.most) all.most = x.most;
+  if (x.gap < all.gap) all.gap = x.gap;
+}
+static void test_vu_handover() {
+  VuTally hand, mixed, meterAll;
+  for (int owner : { 0, 255 }) for (gVuCol = 0; gVuCol < 2; gVuCol++) {
+    VuTally meter;                                             // the bound for (5) and (7): R1's pumped meter alone
+    for (int every : { 20, 30, 50, 100, 170, 250, 340, 500 }) for (int pat = 0; pat < 4; pat++) for (int seed = 0; seed < (pat >= 2 ? 6 : 1); seed++) {
+      gVuRng = (uint32_t)seed * 7919u + 1u; gVuMeterOnly = true; vuRun(sMeter, every, pat, 0, owner, nullptr, meter); gVuMeterOnly = false;
+    }
+    VuTally tp, tt[6], tr, tm;
+    for (int o : { 0, 10, 30, 60, 120, 200, 300, 420, 490 }) for (int d : { 10, 40, 100, 170, 250, 340, 600 }) for (int L = 0; L <= 4; L++)
+      vuRun(sPause, o, d, L, owner, nullptr, tp);
+    for (int kind = 2; kind <= 5; kind++) for (int every : { 20, 50, 100, 170, 200, 250, 340, 400, 700 }) for (int L = 0; L <= 4; L++)
+      vuRun(sToggle, kind, every, L, owner, kind == 5 ? &meter : nullptr, tt[kind]);
+    for (int every : { 20, 60, 130, 250, 400, 800 }) for (int L : { 0, 1, 3, 4 }) vuRun(sReseed, every, 0, L, owner, nullptr, tr);
+    for (int seed = 1; seed <= 60; seed++) { gVuRng = (uint32_t)seed * 2654435761u + (uint32_t)owner + (uint32_t)gVuCol; vuRun(sMix, seed, 0, 0, owner, &meter, tm); }
+    if (owner == 0 && gVuCol == 0) {
+      vuReport("vu, C:bpm=0 and back, 0 to 490 ms from a beat", tp);
+      vuReport("vu, am= 2 and 0 by turns", tt[2]); vuReport("vu, m= 255 and 0 by turns", tt[3]);
+      vuReport("vu and meter by turns", tt[4]); vuReport("vu, re-seeds and tempo changes", tr);
+      vuReport("vu and a pumped meter by turns (held to R1's pumped meter)", tt[5]); vuReport("vu, random mixes with B (held to R1's pumped meter)", tm);
+      vuReport("R1's pumped meter alone under L (the S12 class)", meter);
+    }
+    for (const VuTally* x : { &tp, &tt[2], &tt[3], &tt[4], &tr }) vuAdd(hand, *x);
+    vuAdd(mixed, tt[5]); vuAdd(mixed, tm); vuAdd(meterAll, meter);
+  }
+  vuReport("vu's hand-overs, every stream, both owner brightnesses, white and green", hand);
+  vuReport("vu with a pumped meter and random mixes, the same", mixed);
+  vuReport("R1's pumped meter alone, the same", meterAll);
+  CHECK(hand.handovers > 50000 && hand.onsets > 10000);       // the streams hand over, and rows do light
+  CHECK(hand.over == 0 && hand.close == 0 && hand.most <= 3 && hand.gap >= 2 * (int)STROBE_MIN_STATE_MS);
+  CHECK(mixed.over == 0 && mixed.close == 0 && mixed.most <= meterAll.most && mixed.gap >= meterAll.gap);
+  sizes(8, 10);
+}
+
 int main() {
   test_mock_walk_is_the_model();
   test_logic_sets();
@@ -887,6 +1138,7 @@ int main() {
   test_logic_native_turns();
   test_projector_unpumped();
   test_walk_rises();
+  test_vu_handover();
   if (gFails) { printf("%d CHECK(s) FAILED\n", gFails); return 1; }
   printf("contract v1.4 logic and vu on the RSeries layer OK (%d known defect(s) still open)\n", gKnown);
   return 0;

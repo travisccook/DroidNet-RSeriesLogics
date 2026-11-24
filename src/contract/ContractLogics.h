@@ -577,6 +577,11 @@ static inline uint8_t _beatBright(const ContractUnitState& g, const BeatPos& bp)
 static inline bool _vuPumped(const ContractUnitState& g) {
   return g.base == CB_LOOK && g.effect == CE_VU && g.accentMode != 0 && g.beatMod != 0 && gBeat.running;
 }
+// v1.4 vu's hand-over (spec 12.5; the class the PSI's and the holoprojectors' R2 reviews found).
+// gVuPumped: contractTick()'s view, last pass, of whether the unit is a pumped vu; gLastL: the last
+// L the unit took (what the meter shows again when the pump stops; 0 if none since the show began).
+static bool       gVuPumped[2] = { false, false };
+static uint8_t    gLastL[2]    = { 0, 0 };
 
 // THE single overlay-arming path. Verb P (live) and the board-side score accent (autonomous)
 // both come through here, so the two delivery paths cannot drift apart.
@@ -985,6 +990,7 @@ static inline void _boundary(uint8_t u, char kind, uint8_t wdSec) {
   else if (kind == 'x') contractOnStop(g, _ownerBri(u));
   else                  contractOnIdle(g, _ownerBri(u));
   _stopClockIfUnused();
+  gVuPumped[u] = false; gLastL[u] = 0;                       // (the core's show reset cleared the level; and so vu's view of it)
   gBriGoal[u] = _level(g); gBriGoing[u] = gBriTouched[u];    // the engine's brightness: back to the owner's, if the show moved it
   _present(u, millis());
 }
@@ -1070,7 +1076,7 @@ inline void applyContractToUnit(uint8_t u, const ParsedContract& p, uint16_t lin
       // Drives the meter look. A higher level is taken at most once in 340 ms (S9 for a part of
       // the field: contractLevelDue); one that has to wait is taken by contractTick().
       // v1.4 N12: while a vu look is pumped its level is the pump's, and an L is not shown.
-      if (pr.hasLevel && !_vuPumped(g)) { contractLevelOffer(g, pr.level); contractHoldsDue(g, now); }
+      if (pr.hasLevel && !_vuPumped(g)) { gLastL[u] = pr.level; contractLevelOffer(g, pr.level); contractHoldsDue(g, now); }
       break;
     case CV_BRIGHT:
       if (!contractBrightHonoured(g)) break;      // S6: only in show mode (a host sends B after M:v=show);
@@ -1148,7 +1154,19 @@ inline void contractTick() {
     if (contractWatchdogExpired(g, gLastLineMs, now)) _boundary(u, 'i', 0);   // L2: the host went away
     ContractLookPatch lp;
     if (liveLookDue(g, now, lp)) _applyLook(u, lp, now);                      // S4: a held live look's window ended
-    if (_vuPumped(g)) {                                                       // v1.4 N10: a pumped vu offers the envelope's level, every pass
+    // v1.4 vu's hand-over between pumped and not (the clock held or resumed, am= or m= to 0 or back,
+    // vu put up or taken down while the clock runs) starts the level window, so the level the other
+    // side brings rises no sooner than 340 ms after it: to the pump, the level starts from 0 (a fall,
+    // at once); from the pump, it is the meter again, at the last L the unit took (0 if none since the
+    // show began). Without it the meter went on at the pump's last level after the hand-over (N12 says
+    // it is the meter of L), which lit rows again 330 ms apart with vu and meter by turns, and 50 ms
+    // with a pumped meter in the mix (stage 2g, test 13).
+    const bool vp = _vuPumped(g);
+    if (vp != gVuPumped[u]) {
+      gVuPumped[u] = vp; g.levelMs = now;
+      if (vp) g.level = g.levelWant = 0; else contractLevelOffer(g, gLastL[u]);
+    }
+    if (vp) {                                                                 // v1.4 N10: a pumped vu offers the envelope's level, every pass
       const BeatPos bp = beatPosAt(gBeat, now);
       const uint32_t prog = beatSectionProgress16(bp.beatIndex, g.sectionStart, g.sectionEnd);
       contractLevelOffer(g, envBright(255, g.beatMod, beatAccentAmount(g.accentMode, bp, g.beatMod, prog, gBeat, g.accentEvery)));
