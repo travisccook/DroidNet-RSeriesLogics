@@ -836,6 +836,24 @@ static void test_walk_rises() {
     CHECK(n >= 5); rises += n;
   }
   CHECK(spaced);
+  // F8: native:0 dark (b=0) and the idle look given back (M:v=idle), by turns every 300 ms: the idle
+  // blink's brightness comes back at most once in the walk's window, also at the frame the engine
+  // restarts it (contractEngineLatched()), not only in _nativeBright()
+  for (int u = 0; u < 2; u++) {
+    resetAll(); run(500);
+    LogicEngineRenderer* r = u ? RLD : FLD;
+    const uint32_t w = u ? _walkWindowMs(3, 40) : _walkWindowMs(1, 10);
+    uint32_t lastDecided = gWalkUpMs[u]; int decided = 0, back = 0; bool sp = true;
+    for (uint32_t t = 0; t < 9000; t += 10) {
+      char l[40];
+      if (t % 300 == 0) { send("**M:v=show"); snprintf(l, sizeof l, "L%cA:i=native:0,b=0", u ? 'R' : 'F'); send(l); }
+      if (t % 300 == 150) { snprintf(l, sizeof l, "L%cM:v=idle", u ? 'R' : 'F'); send(l); }
+      _mock_millis += 10; frame();
+      if (gWalkUpMs[u] != lastDecided) { if (decided && gWalkUpMs[u] - lastDecided < w) sp = false; lastDecided = gWalkUpMs[u]; decided++; }
+      if (r->_fx == 0 && r->_liveBri == (u ? 140 : 160)) back++;
+    }
+    CHECK(sp && decided >= 5 && back > 0);
+  }
   // F7: logic entered seamlessly over native:0 at b=128 while the look gate holds its first frames
   // (the field got brighter a moment ago: B) is frame for frame native:0 left alone: the walk that
   // goes on (_logicWalkOn) steps on the palette at its own level, not the owner's the tick put back.

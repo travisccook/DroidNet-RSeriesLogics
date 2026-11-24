@@ -956,7 +956,9 @@ because it reads the spec, and because the review found that the gates alone are
   swept over 400 seeds on R2rev's paths it gives 0 of 11,200 over. Rises under the gate's step are held too, because
   the walk's light goes as about the fourth power of the level (R2-F5).
 - **`native:0` is the same walk** and the same light, so its brightness rises (`_nativeBright()`) keep the same window
-  at the engine's live pace (R2-F4). That path is R1's too; the R1 change would be the same hunk.
+  at the engine's live pace (R2-F4), at the frame the engine restarts the idle blink too (`contractEngineLatched()`,
+  R2-F8: it starts at the brightness it has and rises when the window opens). That path is R1's too; it was
+  backported to `main` (branch `lighting-r1-walkrise`).
 - **The hand-over with the idle blink is seamless when it changes nothing** (`logic` not pumped, in the display's own
   colours, at the idle blink's level): the same walk goes on, no LED moves, no hold. Any other hand-over, and every
   hand-over between the walk and other light, is unseen light (`contractNativeEnded(known=false)`), the frame that is

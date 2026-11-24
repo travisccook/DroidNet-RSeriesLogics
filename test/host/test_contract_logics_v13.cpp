@@ -145,15 +145,20 @@ static void test_brightness_and_native() {
   run(200); send("LFA:i=native:4"); run(250);
   CHECK(FLD->_seq == 4 && FLD->_liveBri == 40);                           // an effect change later, still 40
   CHECK(RLD->_liveBri == 140 && LogicEngineRLDDefault.fBri == 140);       // the rear was not addressed
-  run(200); send("LFA:i=native:0,b=255"); run(250);
+  // (2026-11-24, R2-F8: the idle blink restarted at 40 is an onset; its rise to 160 waits the walk's
+  // window after it, 440 ms on the front, at the frame it starts as everywhere else)
+  run(200); send("LFA:i=native:0,b=255"); run(500);
   CHECK(FLD->_liveBri == 160);                                            // b= on a native look does the same
   send("LFB:b=64"); CHECK(FLD->_liveBri == 40);
   // every boundary puts the owner's brightness back
   // (S9: the native look was dimmed to a quarter a moment ago, so its way back up is an onset and
-  // waits for the window: 340 ms from the b=255 above. It is back well inside half a second.)
+  // waits for the window. Since 2026-11-24 the idle blink restarts at the brightness it had (40),
+  // once the gate allows (340 ms from the last onset), and that restart is an onset; its rise to
+  // the owner's 160 waits the walk's window after it, 440 ms on the front (R2-F8). It is back
+  // inside 900 ms.)
   send("**M:v=idle"); run(50);
   CHECK(FLD->_seq == 0 && FLD->_liveBri < 160);
-  run(350);
+  run(850);
   CHECK(LogicEngineFLDDefault.fBri == 160 && FLD->_liveBri == 160 && FLD->_seq == 0 && !gBriTouched[0]);
   resetAll(); send("**M:v=show"); send("LFB:b=64"); CHECK(LogicEngineFLDDefault.fBri == 40);
   send("LFX"); run(20);                             CHECK(LogicEngineFLDDefault.fBri == 160 && gContract[0].bright == 255);

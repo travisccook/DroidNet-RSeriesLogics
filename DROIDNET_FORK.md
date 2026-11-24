@@ -235,7 +235,11 @@ the Signal Booster. The query reply says `ver=1.4,rel=2`; the WDP caps say `cont
     7. *`native:0`'s brightness* (the idle blink at a `b=`, `B` on it, the owner's value given back): it is the same
        walk and the same light, so every rise of the engine's brightness on NORMAL, any size, waits W at the engine's
        live pace after the field last lit and after the walk's last rise, as well as the field gate's own rule
-       (`_nativeBright()`, the second review's R2-F4). A fall is at once. This is R1's path: see "What is not in".
+       (`_nativeBright()`, the second review's R2-F4), and so does the rise at the frame the engine restarts the idle
+       blink (`contractEngineLatched()`: `M:v=idle`, the watchdog, `native:0` after another look; the third review's
+       R2-F8): it starts at the brightness it has and comes up when the window opens. That restart is an onset to the
+       gate, so the rise comes W after it: from a dimmed `native:0`, `M:v=idle` brings the owner's brightness back in
+       about 340 + 440 ms on the front. A fall is at once. This is R1's path: see "What is not in".
     Every frame the walk is stepped on a palette baked at the level it is drawn at, a held frame too (R2-F7).
   - *The hand-over in time.* Seamless (rules 1 and 5: unpumped, own colours, one level, at any `b=`): it costs
     nothing on the LEDs. `logic` comes in at the next engine frame after the line; the idle blink takes the walk back
