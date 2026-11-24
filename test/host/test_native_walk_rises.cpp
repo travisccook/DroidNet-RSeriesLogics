@@ -13,7 +13,9 @@
 // could not see: a rise's light reaches some LEDs up to the walk's longest pause late, so rises 340
 // ms apart light a part of the display four times a second; and a rise under the gate's step (a
 // tenth of the ceiling) is a rise of the light by about a third. The layer now holds every rise of
-// native:0's brightness, of any size, to the walk's window (ContractLogics.h, _walkWindowMs):
+// native:0's brightness, of any size, to the walk's window (ContractLogics.h, _walkWindowMs), in
+// _nativeBright() and at the frame the engine restarts the idle blink (contractEngineLatched(); the
+// R2 line's third review, R2-F8):
 //     W = 2 * STROBE_MIN_STATE_MS + ENGINE_FRAME_MS * (max(delay - 1, fade) + 1)
 // 440 ms on the front at its own pace (fade 1, delay 10), 740 ms on the rear (3, 40).
 //
@@ -163,6 +165,13 @@ static void scriptBright(uint32_t t, int u, void* vc) {
   if (t >= 1000 && (t - 1000) % (uint32_t)c.period == 0) lineFor(u, "B:b=255");
   if (t >= 1000 && (t - 1000) % (uint32_t)c.period == (uint32_t)c.high) lineFor(u, "B:b=%d", c.low);
 }
+// native:0 dark, and the idle look (the owner's brightness given back), by turns (the R2 review's stream)
+static void scriptIdleTurns(uint32_t t, int u, void* vc) {
+  const Ctx& c = *(Ctx*)vc;
+  const uint32_t k = t % (uint32_t)c.period;
+  if (k == 0) { send("**M:v=show"); lineFor(u, "A:i=native:0,b=0"); }
+  if (k == (uint32_t)c.high) lineFor(u, "M:v=idle");
+}
 
 int main() {
   // ---- the walk's window ----
@@ -198,6 +207,25 @@ int main() {
     }
     CHECK(spaced);
     printf("  native:0 under B every 50 ms: %d rises of its brightness, each the walk's window apart\n", rises);
+  }
+
+  // ---- the idle blink's restart (M:v=idle from native:0, b=0), by turns every 300 ms: its brightness
+  // comes back at most once in the walk's window at the frame the engine restarts it too (the R2
+  // line's third review, R2-F8) ----
+  for (int u = 0; u < 2; u++) {
+    resetAll(); run(500);
+    LogicEngineRenderer* r = u ? RLD : FLD;
+    const uint32_t w = u ? _walkWindowMs(3, 40) : _walkWindowMs(1, 10);
+    uint32_t lastDecided = gWalkUpMs[u]; int decided = 0, back = 0; bool sp = true;
+    for (uint32_t t = 0; t < 9000; t += 10) {
+      char l[40];
+      if (t % 300 == 0) { send("**M:v=show"); snprintf(l, sizeof l, "L%cA:i=native:0,b=0", u ? 'R' : 'F'); send(l); }
+      if (t % 300 == 150) { snprintf(l, sizeof l, "L%cM:v=idle", u ? 'R' : 'F'); send(l); }
+      _mock_millis += 10; frame();
+      if (gWalkUpMs[u] != lastDecided) { if (decided && gWalkUpMs[u] - lastDecided < w) sp = false; lastDecided = gWalkUpMs[u]; decided++; }
+      if (r->_fx == 0 && r->_liveBri == (u ? 140 : 160)) back++;
+    }
+    CHECK(sp && decided >= 5 && back > 0);
   }
 
   static const struct { int u, w, h; } kAll[] = { { 0, 8, 10 }, { 1, 16, 4 }, { 1, 24, 4 }, { 1, 28, 4 }, { 1, 32, 8 } };
@@ -236,6 +264,22 @@ int main() {
     }
     gOwnerBri = 0;
     printf("  native:0 under B by less than the gate's step: %d of %d cases over the rule\n", gOver - o, gCases - n);
+    CHECK(gOver == o);
+  }
+  // ---- the light: native:0 dark and the idle look by turns (the R2 review's R2-F8, its stream) ----
+  {
+    const int o = gOver, n = gCases;
+    for (int bri : { 0, 255 }) for (const auto& d : { kAll[0], kAll[1] }) {
+      gOwnerBri = bri;
+      const Meter::Result stock = measure(d.u, d.w, d.h, SECONDS, nullptr, nullptr, ceil, fl, fy);
+      for (int period : { 300, 400 }) for (int high : { 50, 100, 150 }) {
+        Ctx c; c.period = period; c.high = high; char what[112];
+        snprintf(what, sizeof what, "%s bri %d: native:0,b=0 and M:v=idle by turns every %d ms (idle %d ms in)", d.u ? "rear" : "front", ceil, period, high);
+        judge(what, measure(d.u, d.w, d.h, SECONDS, scriptIdleTurns, &c, ceil, fl, fy), stock);
+      }
+    }
+    gOwnerBri = 0;
+    printf("  native:0 dark and the idle look by turns: %d of %d cases over the rule\n", gOver - o, gCases - n);
     CHECK(gOver == o);
   }
   // ---- controls: B at the window and slower, on the front and the rear ----

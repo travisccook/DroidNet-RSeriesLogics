@@ -461,6 +461,13 @@ inline void contractEngineLatched(uint8_t u, unsigned seq) {
     const uint8_t want = _level(g);
     level = contractFieldAllowed(g, want, now);
     if (level != 0 && !contractLookAllowed(g, contractLookSigNative((int)seq), now)) level = 0;
+    // The walk (native:0, the idle blink given back): a rise of its brightness at the frame it
+    // restarts waits the walk's window like any other (the review's R2-F8). Not yet: it starts at
+    // the brightness it has, and _nativeBright() takes it up when the window opens.
+    if (seq == NATIVE_NORMAL && _engine(u) != nullptr && level > _engineBriNow(u)) {
+      if (_walkRiseOpen(g, u, _engine(u)->getFade(), _engine(u)->getDelay(), now)) _walkRose(u, now);
+      else level = _engineBriNow(u);
+    }
     gBriGoal[u] = want; gBriGoing[u] = level != want;
     if (!_dimsNative(g) && level == _ownerBri(u)) _engineBriRestore(u);
     else if (level != _engineBriNow(u)) _engineBri(u, level);
