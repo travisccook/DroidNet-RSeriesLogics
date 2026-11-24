@@ -240,7 +240,7 @@ static void test_logic_sets() {
   CHECK(FLD->_updLast == contractLevel(90, 128) && FLD->_liveBri == contractLevel(90, 128) && FLD->_bakedBri == contractLevel(90, 128) &&
         LogicEngineFLDDefault.fBri == 90);
   // the owner moves the brightness during the look: the ceiling, and the palette with it
-  ownerSets(0, 200); run(LOGIC_RISE_MS + 10);                           // (a rise while up, not a beat: 500 ms)
+  ownerSets(0, 200); run(_walkWindowMs(1, 10) + 10);                    // (a rise while up: the walk's window, front 440 ms)
   CHECK(gContract[0].ceil == 200 && FLD->_bakedBri == contractLevel(200, 128) && FLD->_liveBri == contractLevel(200, 128) &&
         FLD->_updLast == contractLevel(200, 128));
 }
@@ -309,10 +309,10 @@ static void test_logic_gates() {
   for (int f = 0; f < 50; f++) {
     const int c0 = FLD->_updCalls; _mock_millis += 10; frame();
     if (FLD->_updCalls != c0 + 1) lastShown = false;                     // the walk goes on every frame...
-    if (_mock_millis - g0 < LOGIC_RISE_MS) { heldUp++; if (FLD->_updLast != 0) lastShown = false; }   // ...at the level last shown (a rise
-    else if (FLD->_updLast != 160) lastShown = false; else upAfter++;   //    while up, not a beat: 500 ms)
+    if (_mock_millis - g0 < _walkWindowMs(1, 10)) { heldUp++; if (FLD->_updLast != 0) lastShown = false; }   // ...at the level last shown
+    else if (FLD->_updLast != 160) lastShown = false; else upAfter++;   //    (a rise while up: the walk's window, 440 ms on the front)
   }
-  CHECK(lastShown && heldUp >= 30 && upAfter >= 10);
+  CHECK(lastShown && heldUp >= 25 && upAfter >= 10);
   // S4: the field changed a moment ago (a red look got brighter: B). The logic frame waits for the
   // look gate; the frame that is up stays up, and the walk is not drawn
   resetAll(); send("**M:v=show"); send("LFA:i=solid,c=ff0000,b=100"); run(400);
@@ -326,13 +326,13 @@ static void test_logic_gates() {
     if (_mock_millis - look < STROBE_MIN_STATE_MS) { heldLook++; if (FLD->_updCalls != 0 || FLD->px(0, 0).r != 160) red = false; }
   }
   CHECK(red && heldLook >= 15 && FLD->_updCalls > 0 && gContract[0].lookSig == contractLookSig(CE_LOGIC, ContractRGB{0, 0, 0}));
-  // S9: B raised every 50 ms. The level the engine gets goes up at most once in 500 ms (LOGIC_RISE_MS)
+  // S9: B raised every 50 ms. The level the engine gets goes up at most once in the walk's window (front 440 ms)
   resetAll(); send("**M:v=show"); send("LFA:i=logic"); run(ENTER_MS);
   uint32_t lastUp = 0; int ups = 0, prev = FLD->_updLast; bool spaced = true;
   for (uint32_t t = 0; t < 6000; t += 10) {
     if (t % 50 == 0) send((t / 50) % 2 ? "LFB:b=255" : "LFB:b=0");
     _mock_millis += 10; frame();
-    if (FLD->_updLast > prev) { if (ups && _mock_millis - lastUp < LOGIC_RISE_MS) spaced = false; lastUp = _mock_millis; ups++; }
+    if (FLD->_updLast > prev) { if (ups && _mock_millis - lastUp < _walkWindowMs(1, 10)) spaced = false; lastUp = _mock_millis; ups++; }
     prev = FLD->_updLast;
   }
   CHECK(spaced && ups >= 6);                                             // (B's own hold, 340 ms, and this one are not in step)
@@ -590,8 +590,8 @@ static void test_logic_leave() {
 
 // ---- 7. recoloured in place; the pace changed in place ----
 static void test_logic_in_place() {
-  // R2-F3: a recolour is a rise of the walk's luminance that the gate cannot measure. It waits 400
-  // ms after the field last lit or got brighter, the walk going on in its old colours, and the
+  // R2-F3: a recolour is a rise of the walk's luminance that the gate cannot measure. It waits the
+  // walk's window after the field last lit or the walk last rose, the walk going on in its old colours, and the
   // window starts again from it. Not a restart of the look (S11: recoloured in place).
   resetAll(); send("**M:v=show"); send("LFA:i=logic,c=ff0000");
   for (int f = 0; f < 100 && FLD->_hue != 86; f++) run(10);              // the red is up (a recolour of the idle blink)
@@ -604,9 +604,9 @@ static void test_logic_in_place() {
     const int c0 = FLD->_updCalls; _mock_millis += 10; frame();
     if (FLD->_updCalls != c0 + 1) walking = false;
     if (!blue && FLD->_hue == 246) blue = _mock_millis;
-    if (_mock_millis - lit0 < FX_LOGIC_PUMP_MIN_MS && FLD->_hue != 86) oldHue = false;
+    if (_mock_millis - lit0 < _walkWindowMs(1, 10) && FLD->_hue != 86) oldHue = false;
   }
-  CHECK(walking && oldHue && blue == lit0 + FX_LOGIC_PUMP_MIN_MS);       // the walk went on, red, until the window; then blue
+  CHECK(walking && oldHue && blue == lit0 + _walkWindowMs(1, 10));       // the walk went on, red, until the walk's window (440 ms); then blue
   CHECK(gContract[0].fieldOnsetMs == blue && gContract[0].startMs == start);   // the window from the recolour; not restarted
   CHECK((uint8_t)(fxLogicHue(rgb(0x0000ffu)) - FX_LOGIC_HUE_BASE) == 246);
   send("LFA:i=logic,c=0000ff,s=255"); run(400);                          // a pace alone is no recolour
@@ -662,6 +662,9 @@ static void test_logic_pump_is_the_model() {
     }
     // own colours: the idle blink taken over as it is, no frame held; a colour: a change, held 400 ms
     if (!applied || (c ? heldEntry < (int)(FX_LOGIC_PUMP_MIN_MS / 10) - 1 : heldEntry != 0)) same = false;
+    // the look up a while before the clock: a beat that follows a rise of another kind (the coloured
+    // entry) waits the walk's window, which the model of a pump alone does not have
+    for (int f = 0; f < 200; f++) { const int c0 = r->_updCalls; _mock_millis += 10; frame(); if (r->_updCalls != c0 + 1) same = false; w.frame(bri); if (!sameLeds(r, w)) same = false; }
     snprintf(l, sizeof l, "**C:bpm=%d,ph=0,bpb=4,beat=0", bpm); send(l);
     const BeatClock bc = seeded(bpm, _mock_millis);
     for (int f = 0; f < 2000; f++) {
@@ -805,6 +808,53 @@ static void test_projector_unpumped() {
   CHECK(full);
 }
 
+// ---- 12. the walk's rises (the second review's R2-F4 to F7) ----
+static void test_walk_rises() {
+  // F6: the walk's window is 340 ms and the longest an LED takes to step (its longest pause, and the
+  // frame it steps in): max(delay - 1, fade) + 1 frames of 10 ms
+  CHECK(_walkWindowMs(1, 10) == 440 && _walkWindowMs(3, 40) == 740 && _walkWindowMs(12, 160) == 1940 && _walkWindowMs(1, 20) == 540);
+  CHECK(_walkWindowMs(4, 1) == 390 && _walkWindowMs(0, 0) == 350);   // (a tween pause longer than the key's; no pause at all)
+  // F4 and F5: B every 50 ms, up and down, on native:0 and on logic, to 255 and to a level under the
+  // gate's step (b=238 on the front: 149 of 160, under its step of 17) or to 0: the walk's brightness
+  // rises at most once in its window, whatever the size of the rise
+  struct { const char* look; const char* low; int u; } kCase[] = {
+    { "native:0", "0", 0 }, { "native:0", "238", 0 }, { "logic", "238", 0 }, { "native:0", "0", 1 }, { "logic", "240", 1 } };
+  int rises = 0; bool spaced = true;
+  for (const auto& c : kCase) {
+    resetAll(); char l[48]; send("**M:v=show"); snprintf(l, sizeof l, "L%cA:i=%s", c.u ? 'R' : 'F', c.look); send(l); run(1500);
+    LogicEngineRenderer* r = c.u ? RLD : FLD;
+    const uint32_t w = c.u ? _walkWindowMs(3, 40) : _walkWindowMs(1, 10);
+    // the walk's own brightness: the engine's for native:0, the level drawn for logic
+    int prev = strcmp(c.look, "logic") ? r->_liveBri : r->_updLast; uint32_t last = 0; int n = 0;
+    for (uint32_t t = 0; t < 8000; t += 10) {
+      if (t % 50 == 0) { snprintf(l, sizeof l, "L%cB:b=%s", c.u ? 'R' : 'F', (t / 50) % 2 ? "255" : c.low); send(l); }
+      _mock_millis += 10; frame();
+      const int now = strcmp(c.look, "logic") ? r->_liveBri : r->_updLast;
+      if (now > prev) { if (n && _mock_millis - last < w) spaced = false; last = _mock_millis; n++; }
+      prev = now;
+    }
+    CHECK(n >= 5); rises += n;
+  }
+  CHECK(spaced);
+  // F7: logic entered seamlessly over native:0 at b=128 while the look gate holds its first frames
+  // (the field got brighter a moment ago: B) is frame for frame native:0 left alone: the walk that
+  // goes on (_logicWalkOn) steps on the palette at its own level, not the owner's the tick put back.
+  gMockWalkNormal = true;
+  std::vector<std::string> fr[2];
+  for (int k = 0; k < 2; k++) {
+    sizes(16, 4); resetAll();
+    send("**M:v=show"); send("LFA:i=native:0,b=64"); run(1500);
+    send("LFB:b=128"); for (int i = 0; i < 40 && FLD->_bakedBri != 80; i++) run(10);
+    run(300); send("LFB:b=64"); run(10); send("LFB:b=128"); for (int i = 0; i < 60 && FLD->_bakedBri != 80; i++) run(10);
+    run(10); if (k) send("LFA:i=logic");
+    for (int f = 0; f < 60; f++) { run(10); fr[k].push_back(leds(FLD)); }
+    if (k) CHECK(FLD->_fx == 106 && gLogicUp[0] && gLogicShown[0] == 80);
+  }
+  CHECK(fr[0] == fr[1]);
+  gMockWalkNormal = false; sizes(8, 10);
+  printf("  the walk's rises: %d rises of native:0 and logic under B every 50 ms, each a window apart; a held seamless logic frame for frame native:0's\n", rises);
+}
+
 int main() {
   test_mock_walk_is_the_model();
   test_logic_sets();
@@ -818,6 +868,7 @@ int main() {
   test_vu();
   test_logic_native_turns();
   test_projector_unpumped();
+  test_walk_rises();
   if (gFails) { printf("%d CHECK(s) FAILED\n", gFails); return 1; }
   printf("contract v1.4 logic and vu on the RSeries layer OK (%d known defect(s) still open)\n", gKnown);
   return 0;
