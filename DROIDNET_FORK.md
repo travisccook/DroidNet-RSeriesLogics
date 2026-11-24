@@ -31,8 +31,9 @@ revision CA2: contract v1.4, release 2, with the ids `logic`, `projector` and `v
 "What is in (contract v1.4, R2)" below) and `projector` as `sparkle`, as v1.4's table has it. Host-tested and
 cross-compiled; nothing of it has run on a board. The bench list for R2 is [docs/BENCH_R2.md](docs/BENCH_R2.md).
 
-**Release 2 status (2026-11-24).** The R2 line is the branch `claude/amazing-heisenberg-40jot7` (head `a7a948f`);
-`main` holds R1 (`fe1c8ad`) and the walk's window for the idle blink's brightness, backported from the R2 line with
+**Release 2 status (2026-11-24).** The R2 line was built on the branch `claude/amazing-heisenberg-40jot7` and is
+`main` since 2026-11-24 (the owner's decision; host-tested only). Before that `main` held R1 (`fe1c8ad`) and
+the walk's window for the idle blink's brightness, backported from the R2 line with
 the owner's approval (`10cb5a7`; see "What is in (contract v1.3, R1)"). On the R2 line: core CA2, `logic` and `vu`
 drawn by this layer, and three rounds of an independent review (R2-F1 to R2-F8), each closed; and `vu`'s hand-over
 between pumped and not, which the PSI's and the holoprojectors' reviews found on their boards, checked here under
