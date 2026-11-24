@@ -154,7 +154,8 @@ int main(int argc, char** argv) {
     // R1: no overlay on a native look. The display stays on the native sequence throughout.
     { "accent-over-native", 2000, 10, "elapsed", { { 0, "LFA:i=native:0" }, { 1000, "LFP:c=ff0000,d=400" } } },
     // ---- v1.4 vu: the meter on the pump (N10): its level rides the beat through the level hold, its
-    // brightness stays at b=. At 120 BPM, and under a C seek every 50 ms (N11) ----
+    // brightness stays at b=. At 120 BPM, and under a C seek every 50 ms (N11). Put up while the clock
+    // runs, it starts dark and its first rise comes 340 ms later (the hand-over, 2026-11-24) ----
     { "vu-120",      4000, 10, "elapsed", { { 0, "LFA:i=vu,c=22c55e,am=2,m=255" }, { 0, "L*C:bpm=120,ph=0,bpb=4,beat=0" } } },
     { "vu-seek",     3000, 10, "elapsed", vuSeek() },
   };

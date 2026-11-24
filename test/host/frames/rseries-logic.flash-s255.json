@@ -1,6 +1,6 @@
 {
   "schema": 1, "board": "rseries-logic", "unit": "F", "contract": "1.4",
-  "source": { "repo": "DroidNet-RSeriesLogics", "commit": "e8abbb1700ed", "harness": "test/host/logics_harness.h (mock engine)" },
+  "source": { "repo": "DroidNet-RSeriesLogics", "commit": "f48f23cfd12d", "harness": "test/host/logics_harness.h (mock engine)" },
   "layout": { "leds": 80, "cols": 8, "rows": 10, "index": "row-major" },
   "script": [{ "atMs": 0, "line": "LFA:i=flash,c=ff0000,s=255" }],
   "clock": "elapsed", "millis0": 100000, "stepMs": 10, "durationMs": 2000, "brightness": 255,
