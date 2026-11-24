@@ -267,12 +267,8 @@ struct Watch {
       int wstep[2] = { 0, 0 };
       if (walk) {
         walkFrames++;
-        int fl = 0, fy = 0;                          // the walk's own full scale: its brightest LED at the ceiling, by each measure
-        for (int k = 0; k < MOCK_COLORS; k++) {
-          int R, G, B; mockHsvRainbow(r->_all[k][0] + r->_hue, r->_all[k][1], ceil >= 255 ? r->_all[k][2] : mockScale8(ceil, r->_all[k][2]), R, G, B);
-          const int a = R > G ? (R > B ? R : B) : (G > B ? G : B), y = contractLuminance((uint8_t)R, (uint8_t)G, (uint8_t)B);
-          if (a > fl) fl = a; if (y > fy) fy = y;
-        }
+        int fl = 0, fy = 0;                          // the walk's own full scale: its palette at the ceiling, by each measure
+        mockFullScale(r->_pal, r->_hue, ceil, fl, fy);
         wstep[0] = contractFieldStep((uint8_t)fl) * 16; wstep[1] = contractFieldStep((uint8_t)fy) * 16;
       }
       for (int i = 0; i < nRegions; i++) {

@@ -176,6 +176,19 @@ static void test_mock_walk_is_the_model() {
     }
     CHECK(same);
   }
+  // mockFullScale() (the look's own full scale, for a palette baked at another level) is the
+  // brightest LED of the palette the engine bakes at that brightness
+  for (int pal = 0; pal < 6; pal++) for (int hue : { 0, 86, 246 }) for (int bri : { 1, 40, 140, 160, 255 }) {
+    LogicEngineRenderer t; t._bake((byte)pal, (byte)bri);
+    int lv = 0, ly = 0;
+    for (int k = 0; k < MOCK_COLORS; k++) {
+      int R, G, B; mockHsvRainbow(t._all[k][0] + hue, t._all[k][1], bri == 255 ? t._all[k][2] : mockScale8(bri, t._all[k][2]), R, G, B);
+      const int a = R > G ? (R > B ? R : B) : (G > B ? G : B), y = contractLuminance((uint8_t)R, (uint8_t)G, (uint8_t)B);
+      if (a > lv) lv = a; if (y > ly) ly = y;
+    }
+    int fl, fy; mockFullScale(pal, hue, bri, fl, fy);
+    CHECK(fl == lv && fy == ly);
+  }
   gMockWalkNormal = false; sizes(8, 10);
   printf("  the mock's walk is the model's: %d frames compared LED for LED\n", compared);
 }
@@ -220,13 +233,15 @@ static void test_logic_sets() {
   // the owner's own pace is the base: an owner who set the rear slower gets it slower again
   resetAll(); LogicEngineRLDDefault.fFade = 6; LogicEngineRLDDefault.fDelay = 80; send("LRA:i=logic,s=0"); run(ENTER_MS);
   CHECK(RLD->_fade == 24 && RLD->_delay == 255);
-  // b= is a fraction of the ceiling; the palette stays baked at the ceiling (N3)
+  // b= is a fraction of the ceiling; the palette is baked at the level, as native:0 at that b= is (N3, N4)
   // (the owner's change on the idle look is a change of look the gate is told of: 170 ms first)
   resetAll(); ownerSets(0, 90); run(300); send("LFA:i=logic,b=128"); run(ENTER_MS);
-  CHECK(FLD->_updLast == contractLevel(90, 128) && FLD->_liveBri == 90 && FLD->_bakedBri == 90 && LogicEngineFLDDefault.fBri == 90);
+  CHECK(FLD->_updLast == contractLevel(90, 128) && FLD->_liveBri == contractLevel(90, 128) && FLD->_bakedBri == contractLevel(90, 128) &&
+        LogicEngineFLDDefault.fBri == 90);
   // the owner moves the brightness during the look: the ceiling, and the palette with it
   ownerSets(0, 200); run(LOGIC_RISE_MS + 10);                           // (a rise while up, not a beat: 500 ms)
-  CHECK(gContract[0].ceil == 200 && FLD->_bakedBri == 200 && FLD->_liveBri == 200 && FLD->_updLast == contractLevel(200, 128));
+  CHECK(gContract[0].ceil == 200 && FLD->_bakedBri == contractLevel(200, 128) && FLD->_liveBri == contractLevel(200, 128) &&
+        FLD->_updLast == contractLevel(200, 128));
 }
 
 // ---- 3. the level every frame (N3, and CA2's two readings) ----
@@ -326,17 +341,21 @@ static void test_logic_gates() {
   CHECK(lows == 0);
 }
 
-// ---- 5. the hand-over between the idle blink and logic: a hold, and no onset ----
-// (Corrected test. Until the 2026-11-21 review this asserted that the hand-over moves no LED: the
-// frames equal native:0's with the same seed. That is true at b=255 only. native:0 under 255 bakes
-// its palette at its level and scales it again, logic bakes it at the ceiling (R2-F2): two lights,
-// and the gate was told one. Every hand-over between them, either way, is now unseen light
-// (contractNativeEnded(known=false)) and waits FX_LOGIC_PUMP_MIN_MS with the frame that is up held.)
-// What is asserted, on both displays, own brightness, 255 and 90, two rear sizes: every frame in
-// which a display draws nothing is in a hold of 400 ms (39 to 42 frames) in which no LED changes,
-// one a hand-over; and the run, measured the way stage 1k measures (the gate's step on the look's
-// own full scale, whole field and every region of a quarter or more, by level and by luminance),
-// lights no part of a display in any second more often than the idle blink alone does, or three.
+// ---- 5. the hand-over between the idle blink and logic ----
+// N4 as written: native:0 and logic at one b= are one light (the palette baked at the level and
+// scaled by it again, both: the owner's decision of 2026-11-24 on the review's R2-F2). So when
+// the hand-over changes nothing (logic not pumped, in the display's own colours, at native:0's
+// level) logic takes the idle blink's walk over as it is, and the idle blink takes logic's back.
+// (A) The same light: at b=255 (own brightness, 255, 90) and at b=128 and b=200, the frames of a
+//     run that goes between native:0 (the idle blink, or native:0 at that b=) and logic, by every
+//     path, are the frames of a run that stays on native:0 at that b=, LED for LED, and every
+//     frame of either display draws once: there is no hold.
+// (B) A change at the hand-over (a pumped logic, a coloured one, by turns with native:0 every 300
+//     and 600 ms at 255): unseen light, held; no LED moves while a display draws nothing, and no
+//     part of a display is lit more often in a second than three or the idle blink alone, by the
+//     gate's step on the look's own scale (stage 1k's fine reading) and on the ceiling. (Without
+//     the hold, the walk going on while the idle blink waited for a pumped logic, the pumped case
+//     every 300 ms lit the rear 16 x 4 four times a second by the gate's own count.)
 struct FineCount {
   int W = 0, H = 0; std::vector<std::vector<int>> ser[2];           // [measure][whole, quarters, bands]
   struct Reg { int x0, x1, y0, y1; }; std::vector<Reg> regs;
@@ -380,22 +399,15 @@ struct FineCount {
   }
 };
 // The look's own full scale at the ceiling: its brightest LED by each measure over the palette.
-static void ownFull(const LogicEngineRenderer* r, int ceil, int& lv, int& ly) {
-  lv = ly = 0;
-  for (int k = 0; k < MOCK_COLORS; k++) {
-    int R, G, B; mockHsvRainbow(r->_all[k][0] + r->_hue, r->_all[k][1], ceil == 255 ? r->_all[k][2] : mockScale8(ceil, r->_all[k][2]), R, G, B);
-    const int a = R > G ? (R > B ? R : B) : (G > B ? G : B), y = contractLuminance((uint8_t)R, (uint8_t)G, (uint8_t)B);
-    if (a > lv) lv = a; if (y > ly) ly = y;
-  }
-}
-struct Hold { int frames = 0; bool still = true; };
-static int handoverRun(const std::vector<std::pair<uint32_t, const char*>>& script, int ownerBri, FineCount* fc, std::vector<Hold>* holds, int& on106) {
+static void ownFull(const LogicEngineRenderer* r, int ceil, int& lv, int& ly) { mockFullScale(r->_pal, r->_hue, ceil, lv, ly); }
+static int gHoldMoved = 0;
+static int handoverRun(const std::vector<std::pair<uint32_t, const char*>>& script, int ownerBri, FineCount* fc, std::vector<std::string>& out,
+                       int& on106, int& notOne) {
   resetAll();
   if (ownerBri) { ownerSets(0, ownerBri); ownerSets(1, ownerBri); }
-  for (int u = 0; u < 2; u++) { fc[u].init((u ? RLD : FLD)->width(), (u ? RLD : FLD)->height()); holds[u].clear(); }
-  size_t next = 0; on106 = 0; int stray = 0;
-  std::string last[2] = { leds(FLD), leds(RLD) };
-  bool inHold[2] = { false, false };
+  for (int u = 0; u < 2; u++) fc[u].init((u ? RLD : FLD)->width(), (u ? RLD : FLD)->height());
+  size_t next = 0; on106 = 0; notOne = 0; out.clear(); gHoldMoved = 0; int& moved = gHoldMoved;
+  std::string prevLeds[2] = { leds(FLD), leds(RLD) };
   for (uint32_t t = 0; t < 9000; t += 10) {
     while (next < script.size() && script[next].first <= t) send(script[next++].second);
     const int c0[2] = { FLD->_updCalls, RLD->_updCalls };
@@ -403,53 +415,92 @@ static int handoverRun(const std::vector<std::pair<uint32_t, const char*>>& scri
     if (FLD->_fx == 106) on106++;
     for (int u = 0; u < 2; u++) {
       const LogicEngineRenderer* r = u ? RLD : FLD;
-      const std::string now = leds(r);
-      if (r->_updCalls == c0[u]) {                                      // nothing drawn this frame
-        if (!inHold[u]) { holds[u].push_back(Hold()); inHold[u] = true; }
-        holds[u].back().frames++;
-        if (now != last[u]) holds[u].back().still = false;
-      } else if (r->_updCalls != c0[u] + 1) stray++;
-      else inHold[u] = false;
-      last[u] = now;
+      if (r->_updCalls != c0[u] + 1) {                                  // a hold (or a frame drawn twice)
+        notOne++;
+        if (r->_updCalls != c0[u] || leds(r) != prevLeds[u]) moved++;   // a hold in which an LED moved
+      }
+      prevLeds[u] = leds(r);
       if (t >= 1000) fc[u].see(r);
     }
+    out.push_back(leds(FLD) + leds(RLD));
   }
-  return stray;
+  return 0;
 }
 static void test_logic_handover() {
   gMockWalkNormal = true;
-  const std::vector<std::pair<uint32_t, const char*>> none;
-  const std::vector<std::pair<uint32_t, const char*>> script = {
-    { 500, "L*A:i=logic" },                       // live, no show: the idle blink to logic
-    { 1500, "L*M:v=idle" },                       // and back
-    { 2500, "**M:v=show,wd=2" }, { 2600, "LFA:i=logic" }, { 2700, "LRA:i=logic,c=ffffff,s=128,b=255" },   // a show's first A; a grey is own colours
-    { 3700, "**M:v=idle" },
-    { 4500, "**M:v=show,wd=1" }, { 4600, "L*A:i=logic" },   // ...and the watchdog gives it back (no line for a second)
-    { 7000, "L*A:i=logic,m=0,am=0" }, { 7900, "**M:v=idle" } };
-  int worstRun = 0, worstStock = 0, holdsSeen = 0;
-  for (int bri : { 0, 255, 90 }) for (int size = 0; size < 2; size++) {
+  int worstRun = 0, worstStock = 0, runs = 0;
+  // (A) one light
+  for (int b : { 255, 128, 200 }) for (int bri : { 0, 255, 90 }) for (int size = 0; size < 2; size++) {
+    if (b != 255 && bri == 90) continue;
     sizes(size ? 24 : 16, 4);
-    FineCount fa[2], fb[2]; std::vector<Hold> ha[2], hb[2]; int o106a = 0, o106b = 0;
-    CHECK(handoverRun(none, bri, fa, ha, o106a) == 0);
-    CHECK(ha[0].empty() && ha[1].empty());                               // the idle blink alone draws every frame
-    CHECK(handoverRun(script, bri, fb, hb, o106b) == 0);                 // one updateDisplay a frame, or none in a hold
-    CHECK(o106b > 250);                                                  // the look was up, for most of the run
+    char n0[48], lg[48], lgF[48], lgR[48];
+    snprintf(n0, sizeof n0, "L*A:i=native:0,b=%d", b); snprintf(lg, sizeof lg, "L*A:i=logic,b=%d", b);
+    snprintf(lgF, sizeof lgF, "LFA:i=logic,b=%d", b); snprintf(lgR, sizeof lgR, "LRA:i=logic,c=ffffff,s=128,b=%d", b);
+    std::vector<std::pair<uint32_t, const char*>> stock, script;
+    if (b == 255)
+      script = { { 500, "L*A:i=logic" },          // live, no show: the idle blink to logic
+                 { 1500, "L*M:v=idle" },          // and back
+                 { 2500, "**M:v=show,wd=2" }, { 2600, "LFA:i=logic" }, { 2700, "LRA:i=logic,c=ffffff,s=128,b=255" },   // a show's first A; a grey is own colours
+                 { 3700, "**M:v=idle" },
+                 { 4500, "**M:v=show,wd=1" }, { 4600, "L*A:i=logic" },   // ...and the watchdog gives it back (no line for a second)
+                 { 7000, "L*A:i=logic,m=0,am=0" }, { 7900, "**M:v=idle" } };
+    else {
+      stock  = { { 400, "**M:v=show" }, { 500, n0 } };
+      script = { { 400, "**M:v=show" }, { 500, n0 }, { 1500, lg }, { 2500, n0 }, { 3000, lgF }, { 3200, lgR }, { 4300, n0 },
+                 { 5000, lg }, { 6000, n0 }, { 6400, lg }, { 7900, n0 } };
+    }
+    FineCount fa[2], fb[2]; std::vector<std::string> a, bb; int o106a = 0, o106b = 0, na = 0, nb = 0;
+    handoverRun(stock, bri, fa, a, o106a, na);
+    handoverRun(script, bri, fb, bb, o106b, nb);
+    int differ = 0; for (size_t i = 0; i < a.size(); i++) if (a[i] != bb[i]) differ++;
+    CHECK(differ == 0 && na == 0 && nb == 0);                           // the frames of native:0, and no hold
+    CHECK(o106b > 250);                                                  // the look was up, for much of the run
+    CHECK(FLD->_fx == 0 && RLD->_fx == 0);
+    if (b == 255) CHECK(ownersLive(FLD) && ownersLive(RLD) && FLD->_palHueCalls == 0 && FLD->_fadeSets == 0 && FLD->_delaySets == 0);
+    runs++;
+  }
+  // (B) a change at the hand-over
+  int notOneB = 0, heldB = 0;
+  for (int period : { 300, 600 }) for (int kind = 0; kind < 2; kind++) for (int size = 0; size < 2; size++) {
+    sizes(size ? 24 : 16, 4);
+    static char lines[2][48]; snprintf(lines[0], sizeof lines[0], "%s", kind ? "L*A:i=logic,c=00ff00" : "L*A:i=logic,am=2,m=255");
+    std::vector<std::pair<uint32_t, const char*>> stock, script = { { 400, "**M:v=show" } };
+    for (uint32_t t = 500; t < 8800; t += (uint32_t)period) {
+      script.push_back({ t, ((t - 500) / (uint32_t)period) % 2 ? "L*A:i=native:0" : lines[0] });
+      if (t == 500) script.push_back({ 510, "**C:bpm=120,ph=0,bpb=4,beat=0" });   // (after the show's first A: a C first would be its dark start)
+    }
+    FineCount fa[2], fb[2]; std::vector<std::string> a, bb; int o106a = 0, o106b = 0, na = 0, nb = 0;
+    handoverRun(stock, 255, fa, a, o106a, na);
+    handoverRun(script, 255, fb, bb, o106b, nb);
+    notOneB += gHoldMoved; heldB += nb;
     for (int u = 0; u < 2; u++) {
-      CHECK(hb[u].size() == 8);                                          // four times in, four times out
-      for (const Hold& h : hb[u]) { CHECK(h.still && h.frames >= 39 && h.frames <= 42); holdsSeen++; }
-      const LogicEngineRenderer* r = u ? RLD : FLD;
-      int lv, ly; ownFull(r, bri ? bri : (u ? 140 : 160), lv, ly);        // (the idle blink's palette: the run ends on it)
-      const int wa = fa[u].worst(lv, ly), wb = fb[u].worst(lv, ly);
-      CHECK(wb <= 3 || wb <= wa);
+      int lv, ly; mockFullScale(u ? 1 : 0, 0, 255, lv, ly);              // the idle blink's own full scale at 255
+      if (kind) { int gl, gy; mockFullScale(0, (uint8_t)(fxLogicHue(rgb(0x00ff00u)) - FX_LOGIC_HUE_BASE), 255, gl, gy); if (gl > lv) lv = gl; if (gy > ly) ly = gy; }
+      const int wa = fa[u].worst(lv, ly), wb = fb[u].worst(lv, ly), ga = fa[u].worst(255, 255), gb = fb[u].worst(255, 255);
+      if (!((wb <= 3 || wb <= wa) && (gb <= 3 || gb <= ga))) printf("  OVER period %d kind %d size %d display %d: own scale %d (stock %d), gate %d (stock %d)\n", period, kind, size, u, wb, wa, gb, ga);
+      CHECK((wb <= 3 || wb <= wa) && (gb <= 3 || gb <= ga));
       if (wb > worstRun) worstRun = wb;
       if (wa > worstStock) worstStock = wa;
     }
-    CHECK(FLD->_fx == 0 && RLD->_fx == 0 && ownersLive(FLD) && ownersLive(RLD));
-    CHECK(FLD->_palHueCalls == 0 && FLD->_fadeSets == 0 && FLD->_delaySets == 0);
   }
+  CHECK(notOneB == 0 && heldB > 0);                                     // held, and nothing moves while held
+  // the seamless hand-over back waits logic's window: a steady logic that lit 100 ms ago (from X's
+  // dark) is taken back by the idle blink 400 ms after it lit, the walk going on meanwhile
+  sizes(16, 4); resetAll(); send("**M:v=show"); send("LFX"); run(500); send("LFA:i=logic"); run(10);
+  const uint32_t lit = gContract[0].fieldOnsetMs; CHECK(lit == _mock_millis);
+  run(90); send("LFM:v=idle");
+  uint32_t normal = 0; bool walking = true;
+  for (int f = 0; f < 60 && !normal; f++) { const int c0 = FLD->_updCalls; _mock_millis += 10; frame(); if (FLD->_updCalls != c0 + 1) walking = false; if (FLD->_fx == 0) normal = _mock_millis; }
+  CHECK(walking && normal && normal >= lit + FX_LOGIC_PUMP_MIN_MS && normal <= lit + FX_LOGIC_PUMP_MIN_MS + 20);
+  // a pumped logic is no seamless hand-over: the idle blink takes it back as unseen light, the
+  // walk's last frame held 400 ms
+  resetAll(); send("**M:v=show"); send("LFA:i=logic,am=2,m=255"); run(500); send("**C:bpm=120,ph=0,bpb=4,beat=0"); run(1000);
+  const uint32_t left = _mock_millis; send("LFM:v=idle"); normal = 0; bool still = true; const std::string up0 = leds(FLD);
+  for (int f = 0; f < 60 && !normal; f++) { _mock_millis += 10; frame(); if (FLD->_fx == 0) normal = _mock_millis; else if (leds(FLD) != up0) still = false; }
+  CHECK(still && normal >= left + FX_LOGIC_PUMP_MIN_MS && normal <= left + FX_LOGIC_PUMP_MIN_MS + 20);
   gMockWalkNormal = false; sizes(8, 10);
-  printf("  the hand-over: %d holds of 400 ms, none with an LED moving; the worst second on the look's own scale %d (the idle blink alone %d)\n",
-         holdsSeen, worstRun, worstStock);
+  printf("  the hand-over: %d seamless runs frame for frame the idle blink's, none with a hold; with a change, %d frames held, none moving,"
+         " the worst second on the look's own scale %d (the idle blink alone %d)\n", runs, heldB, worstRun, worstStock);
 }
 
 // ---- 6. restoration: the owner's settings after the look, X, idle, the watchdog, a take-over ----
@@ -493,11 +544,11 @@ static void test_logic_restoration() {
   CHECK(FLD->_liveBri == 70 && FLD->_bakedBri == 70 && FLD->_updLast == 70);
   send("LFM:v=idle"); run(500);
   CHECK(FLD->_fx == 0 && ownersLive(FLD) && FLD->_liveBri == 70 && LogicEngineFLDDefault.fBri == 70);
-  // a native look with B in a show, then logic: the brightness the contract wrote for the native
-  // look is not the walk's. The walk is baked at the ceiling, and the owner's goes back.
+  // a native look with B in a show, then logic: the walk is baked at its level, as the native look
+  // was, and the owner's brightness goes back to the default object.
   resetAll(); send("**M:v=show"); send("LFA:i=native:0,b=64"); run(400); CHECK(LogicEngineFLDDefault.fBri == 40);
   send("LFA:i=logic"); run(ENTER_MS + 100);
-  CHECK(FLD->_fx == 106 && FLD->_bakedBri == 160 && FLD->_liveBri == 160 && FLD->_updLast == 40 && LogicEngineFLDDefault.fBri == 160);
+  CHECK(FLD->_fx == 106 && FLD->_bakedBri == 40 && FLD->_liveBri == 40 && FLD->_updLast == 40 && LogicEngineFLDDefault.fBri == 160);
 }
 
 // ---- 6b. after the walk: its light is not known to the gate (_logicLeave) ----
@@ -533,7 +584,7 @@ static void test_logic_leave() {
   send("LFP:c=ffffff,d=200"); int whiteFrames = 0;
   for (int f = 0; f < 80; f++) { _mock_millis += 10; frame(); if (fieldLevel(FLD) > 100) whiteFrames++; }
   CHECK(whiteFrames == 0 && FLD->_updLast == 160 && FLD->_fx == 106);
-  // going to native:0 waits the same (the hand-over test above)
+  // going to native:0 is no leave: the walk goes on into the idle blink (the hand-over test above)
 }
 
 // ---- 7. recoloured in place; the pace changed in place ----
@@ -541,9 +592,11 @@ static void test_logic_in_place() {
   // R2-F3: a recolour is a rise of the walk's luminance that the gate cannot measure. It waits 400
   // ms after the field last lit or got brighter, the walk going on in its old colours, and the
   // window starts again from it. Not a restart of the look (S11: recoloured in place).
-  resetAll(); send("**M:v=show"); send("LFA:i=logic,c=ff0000"); run(ENTER_MS);
+  resetAll(); send("**M:v=show"); send("LFA:i=logic,c=ff0000");
+  for (int f = 0; f < 100 && FLD->_hue != 86; f++) run(10);              // the red is up (a recolour of the idle blink)
   const uint32_t lit0 = gContract[0].fieldOnsetMs, start = gContract[0].startMs;
-  run(180 - (_mock_millis - lit0));                                      // 180 ms after the look lit: the look gate allows a colour
+  CHECK(FLD->_hue == 86 && lit0 == _mock_millis);                        // ...and it started the window
+  run(180);                                                               // 180 ms on: the look gate allows a colour
   send("LFA:i=logic,c=0000ff");
   bool walking = true, oldHue = true; uint32_t blue = 0;
   for (int f = 0; f < 40; f++) {
@@ -564,8 +617,9 @@ static void test_logic_in_place() {
 }
 
 // ---- 8. the pump reaches the LEDs as the region model has it ----
-// The same seed: the model's walk run by the model's own rule (each frame, every LED stepped at
-// envBright(level, m, fxLogicPumpAmount()) from the clock), and the mock's walk run by the layer.
+// The same seed: the model's walk run by the model's own rule (each frame, the palette baked at
+// envBright(level, m, fxLogicPumpAmount()) from the clock and every LED stepped at it), and the
+// mock's walk run by the layer.
 // Every LED of every frame is compared. If the layer delivered the level any other way (a
 // fraction of 255, beatAccentAmount(), a frame skipped or doubled, a level held by the gate)
 // the two would part.
@@ -587,31 +641,35 @@ static void test_logic_pump_is_the_model() {
     for (int f = 0; f < 120; f++) { _mock_millis += 10; frame(); w.frame(bri); }
     bool same = sameLeds(r, w);
     char l[96]; snprintf(l, sizeof l, "L%cA:i=logic,c=%06x,s=%d,am=2,m=255", d.disp ? 'R' : 'F', (unsigned)c, s); send(l);
-    // The entry over the idle blink: the layer draws nothing for FX_LOGIC_PUMP_MIN_MS (the idle
-    // blink's last frame stays up), and the model's walk waits with it. Then the look, not pumped
-    // (no clock yet), and the model takes the look's palette and pace at the same frame.
+    // The entry over the idle blink: in its own colours (and not pumped: no clock yet) the same walk
+    // goes on; in a colour it is a change, unseen light, and the idle blink's last frame is held
+    // 400 ms, the model's walk waiting with it. The model takes the look's palette and pace at the
+    // frame the layer first draws.
     const ContractRGB col = rgb(c);
-    bool applied = false; int heldEntry = 0;
+    bool applied = false; int heldEntry = 0, mpal = d.disp, mbaked = bri;
     for (int f = 0; f < (int)(ENTER_MS / 10) + 20; f++) {
       const int c0 = r->_updCalls; _mock_millis += 10; frame();
       if (r->_updCalls == c0) { heldEntry++; continue; }
       if (!applied) {
         applied = true;
-        if (!fxLogicOwn(col)) { w.bake(0, bri); w.hue = (uint8_t)(fxLogicHue(col) - FX_LOGIC_HUE_BASE); }   // N1, as the model does
+        if (!fxLogicOwn(col)) { mpal = 0; w.bake(0, bri); w.hue = (uint8_t)(fxLogicHue(col) - FX_LOGIC_HUE_BASE); }   // N1, as the model does
         w.fade = fxLogicPace((uint8_t)s, (uint8_t)(d.disp ? 3 : 1), FX_LOGIC_FADE_MIN);                       // N2
         w.delay = fxLogicPace((uint8_t)s, (uint8_t)(d.disp ? 40 : 10), FX_LOGIC_DELAY_MIN);
       }
       w.frame(bri);
       if (!sameLeds(r, w)) same = false;
     }
-    if (heldEntry < (int)(FX_LOGIC_PUMP_MIN_MS / 10) - 1 || !applied) same = false;
+    // own colours: the idle blink taken over as it is, no frame held; a colour: a change, held 400 ms
+    if (!applied || (c ? heldEntry < (int)(FX_LOGIC_PUMP_MIN_MS / 10) - 1 : heldEntry != 0)) same = false;
     snprintf(l, sizeof l, "**C:bpm=%d,ph=0,bpb=4,beat=0", bpm); send(l);
     const BeatClock bc = seeded(bpm, _mock_millis);
     for (int f = 0; f < 2000; f++) {
       const int c0 = r->_updCalls; _mock_millis += 10; frame();
       if (r->_updCalls != c0 + 1) same = false;                          // under its own pump the look is never held
       const BeatPos bp = beatPosAt(bc, _mock_millis);
-      w.frame(envBright((uint8_t)bri, 255, fxLogicPumpAmount(2, bp, 255, 0, bc, 0)));   // the model's rule (test_logic_regions.cpp)
+      const int level = envBright((uint8_t)bri, 255, fxLogicPumpAmount(2, bp, 255, 0, bc, 0));   // the model's rule (test_logic_regions.cpp):
+      if (level != mbaked) { w.bake(mpal, level); mbaked = level; }                            // the palette at the level,
+      w.frame(level);                                                                          // each LED at its next step
       if (!sameLeds(r, w)) same = false;
       compared++;
     }

@@ -20,8 +20,12 @@
 //   * the pace from fxLogicPace() on the display's own fade and delay (v1.4 N2), and the level
 //     from the core's own clock: b=255, the pump am=2 with m=255, envBright() under the ceiling
 //     (the display's own brightness), reaching each LED at its next step as updateDisplay(level)
-//     gives it (v1.4 N3; the stock blink is updateDisplay() = updateDisplay(fBri), so at the
-//     ceiling the look is the light of native:0 exactly).
+//     gives it (v1.4 N3), WITH THE PALETTE BAKED AT THAT LEVEL (calculateAllColors(pal, level)
+//     whenever the level changes), the way native:0 at a b= under 255 is drawn: the engine's
+//     brightness at the level, which bakes the palette at it, then updateDisplay(fBri), which
+//     scales by it again. So logic at a level is the light of native:0 at that level, at every
+//     level (the 2026-11-21 review's R2-F2, the owner's decision of 2026-11-24). Until then the
+//     palette was baked at the ceiling and scaled once.
 // Display sizes: every one the engine knows, front 8 x 10 with the front's settings, rear 16 x 4,
 // 24 x 4, 28 x 4 and 32 x 8 with the rear's (LE:90-105: front fade 1, delay 10, brightness 160;
 // rear fade 3, delay 40, brightness 140).
@@ -168,11 +172,13 @@ static Result run(const Disp& d, int W, int H, uint8_t s, uint32_t c, int bpm, i
   wk.bake(d.pal, d.bri); wk.fade = d.fade; wk.delay = d.delay; wk.hue = 0;
   wk.setup(W * H, seed);
   const ContractRGB col = { (uint8_t)(c >> 16), (uint8_t)(c >> 8), (uint8_t)c };
-  if (!fxLogicOwn(col)) { wk.bake(0, d.bri); wk.hue = (uint8_t)(fxLogicHue(col) - FX_LOGIC_HUE_BASE); }   // N1
+  int palNum = d.pal;
+  if (!fxLogicOwn(col)) { palNum = 0; wk.bake(0, d.bri); wk.hue = (uint8_t)(fxLogicHue(col) - FX_LOGIC_HUE_BASE); }   // N1
   wk.fade = fxLogicPace(s, (uint8_t)d.fade, FX_LOGIC_FADE_MIN);                                          // N2
   wk.delay = fxLogicPace(s, (uint8_t)d.delay, FX_LOGIC_DELAY_MIN);
   const uint8_t ceil = (uint8_t)d.bri;
   for (int f = 0; f < 500; f++) for (int i = 0; i < wk.n; i++) wk.led(i, ceil);
+  int baked = ceil;
   BeatClock bc;
   const uint32_t t0 = 4294960000u;                  // across the millis() wrap
   if (bpm) {
@@ -197,6 +203,7 @@ static Result run(const Disp& d, int W, int H, uint8_t s, uint32_t c, int bpm, i
       const BeatPos bp = beatPosAt(bc, t0 + (uint32_t)f * FRAME_MS);
       level = envBright(ceil, 255, s2Only ? beatAccentAmount(2, bp, 255, 0, bc, 0) : fxLogicPumpAmount(2, bp, 255, 0, bc, 0));
     }
+    if (level != baked) { wk.bake(palNum, level); baked = level; }   // the palette at the level (the layer's _logicApply)
     for (int i = 0; i < wk.n; i++) wk.led(i, level);
     for (int m = 0; m < 2; m++) {
       const std::vector<uint8_t>& px = m ? wk.ly : wk.lv;
@@ -219,6 +226,7 @@ static Result run(const Disp& d, int W, int H, uint8_t s, uint32_t c, int bpm, i
     }
   }
   Result res;
+  wk.bake(palNum, ceil);                            // (the full scale is the palette at the ceiling)
   // the look's own full scale: its brightest LED at the ceiling, by each measure, over the palette
   for (int k = 0; k < COLORS; k++) {
     int r, g, b; hsv(wk.pal[k][0] + wk.hue, wk.pal[k][1], ceil == 255 ? wk.pal[k][2] : scale8(ceil, wk.pal[k][2]), r, g, b);

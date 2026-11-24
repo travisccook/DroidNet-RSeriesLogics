@@ -104,6 +104,29 @@ static const uint8_t kMockKeys[6][4][3] = {
   { {165,50,248}, {166,181,226}, {165,223,89}, {255,255,214} },  // blue and red
   { {87,206,105}, {79,255,214}, {43,255,250}, {25,255,214} } };  // yellow and green
 static const int MOCK_TWEENS = 14, MOCK_COLORS = 4 + MOCK_TWEENS * 3, MOCK_WALK = 2 * MOCK_COLORS - 2;   // 46 colours, 90 steps
+// A palette's full scale at a brightness: its brightest LED by each measure (the brightest
+// channel; Rec.709 luminance in whole numbers) over the 46 colours baked at `bri`, with `hue`
+// added. Stage 1k's "the look's own full scale", for a palette the engine may have baked at
+// another level (logic bakes at the level it draws).
+inline void mockFullScale(int palNum, int hue, int bri, int& lv, int& ly) {
+  lv = ly = 0;
+  const int p = palNum < 6 ? palNum : 0;
+  for (int k = 0; k < 4; k++) {
+    const int t = k + MOCK_TWEENS * k;
+    for (int j = 0; j <= (t + 1 != MOCK_COLORS ? MOCK_TWEENS : 0); j++) {
+      int c[3];
+      for (int el = 0; el < 3; el++) {
+        const int per = (t + 1 != MOCK_COLORS) ? (kMockKeys[p][k + 1][el] - kMockKeys[p][k][el]) / (MOCK_TWEENS + 1) : 0;
+        const int val = (j && per) ? ((kMockKeys[p][k][el] + j * per) & 255) : kMockKeys[p][k][el];
+        c[el] = (el == 2) ? mockMap8(val, 1, bri) : val;
+      }
+      const int v = bri == 255 ? c[2] : mockScale8(bri, c[2]);
+      int R, G, B; mockHsvRainbow(c[0] + hue, c[1], v, R, G, B);
+      const int a = R > G ? (R > B ? R : B) : (G > B ? G : B), y = (54 * R + 183 * G + 19 * B) >> 8;
+      if (a > lv) lv = a; if (y > ly) ly = y;
+    }
+  }
+}
 // The walk's seed for each display at mockEngineReset(), and whether NORMAL is drawn by the walk.
 static uint16_t gMockWalkSeed[2] = { 0x51F1u, 0x2D5Bu };
 static bool gMockWalkNormal = false;
