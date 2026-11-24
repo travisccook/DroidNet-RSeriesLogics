@@ -31,6 +31,13 @@ revision CA2: contract v1.4, release 2, with the ids `logic`, `projector` and `v
 "What is in (contract v1.4, R2)" below) and `projector` as `sparkle`, as v1.4's table has it. Host-tested and
 cross-compiled; nothing of it has run on a board. The bench list for R2 is [docs/BENCH_R2.md](docs/BENCH_R2.md).
 
+**Release 2 status (2026-11-24).** The R2 line is the branch `claude/amazing-heisenberg-40jot7` (head `a7a948f`);
+`main` holds R1 (`fe1c8ad`) and the walk's window for the idle blink's brightness, backported from the R2 line with
+the owner's approval (`10cb5a7`; see "What is in (contract v1.3, R1)"). On the R2 line: core CA2, `logic` and `vu`
+drawn by this layer, and three rounds of an independent review (R2-F1 to R2-F8), each closed. The query reply says
+`ver=1.4,rel=2` and the WDP caps `contract.1.4`. The ESP32 image links at 1,140,141 B of flash and 64,964 B of static
+RAM. Host-tested, modelled and cross-compiled; not run on a board.
+
 - The prebuilt classic ESP32 image in `firmware/` (`f7bd207`, 2026-10-16) runs on the C2-B5 dome's R-Series board;
   it was flashed over WiFi through the board's own Reflash page. That image predates contract v1.3.
 - Nothing in this repository records a contract (`!`) command observed on real LEDs, with any image. Treat the
@@ -83,6 +90,10 @@ What is verified is host-side, by `bash test/host/run.sh` (and by CI, `.github/w
 - the 2026-11-21 review's findings (stage R2rev, `test/host/test_review_r2_findings.cpp`, the reviewer's): stage 1k's
   count run on the real layer's LEDs under host streams that raise `logic`'s light by every path, and its check that
   `native:0` and `logic` at one `b=` are one light. Every check passes, on six walk seeds;
+- the idle blink's brightness rises (stage 2w, `test/host/test_native_walk_rises.cpp`): `B` streams on `native:0`,
+  measured on the mock engine's walk (drawn LED by LED for this stage) over the whole field and every region of a
+  quarter or more, by the gate's step and by the walk's own: no part of a display lit more than three times in a
+  second, or more often than the idle blink alone;
 - the Serial1 reader, including a 400-byte burst of back-to-back lines, with and without the pass-through;
 - the real ESP32 cross-compile (`pio run -e wlogicengine32`), which is a link, not a run.
 
@@ -145,6 +156,26 @@ is the DroidNet layer (`git log --oneline 6bba8b1..HEAD`).
 - **`B`, and `b=` on a look, go up at most once in 340 ms** too, in the same window as `L`: a lower brightness
   is taken at once, a higher one waits for the window, the newest of them. A look that lights part of a display
   (a meter with one row lit) under `B:b=0` and `B:b=200` by turns lit that part as often as the lines came.
+- **2026-11-24: the idle blink's brightness rises wait the walk's window.** `native:0` (NORMAL) is the engine's walk: it
+  shows a new brightness LED by LED, an LED taking it at its next step, and an LED steps once in `P + 1` frames, `P` its
+  pause (`random8(delay)`, at most `delay − 1`, at a key colour; `fade` at a tween). So a rise's light is on every LED
+  within `D = 10 ms × (max(delay − 1, fade) + 1)`, and two rises keep every part of the display's onsets 340 ms apart
+  when they are `W = 340 + D` ms apart: 440 ms on the front at its own pace (fade 1, delay 10), 740 ms on the rear (3,
+  40). Under a `b=` or `B` the engine's brightness is the level, which bakes the palette at it and is scaled by it
+  again, so the walk's light goes as about the fourth power of its brightness, and a rise under the gate's step (a tenth
+  of the ceiling) is a rise of the light. So every rise of `native:0`'s brightness, of any size, now waits W after the
+  field last lit and after the walk's last rise, at the engine's live pace, as well as the field gate's own rule
+  (`_nativeBright()`, `_walkWindowMs`), and so does the rise at the frame the engine restarts the idle blink
+  (`contractEngineLatched()`: `M:v=idle`, the watchdog, `native:0` after another look): it starts at the brightness it
+  has and comes up when the window opens. That restart is an onset to the gate, so the rise comes W after it: from a
+  dimmed `native:0`, `M:v=idle` brings the owner's brightness back in about 340 + 440 ms on the front. A fall is at
+  once. Why: an independent review of the R2 line (its findings R2-F4 and R2-F5, 2026-11-24) measured `B` up every 345
+  to 380 ms and down between, on `native:0`, over the rule in 35 of 50 cases (the rear 16 by 4 at the owner's 255 lit
+  four times a second by the gate's own count, the closest two 250 ms apart), and `B` between 255 and a `b=` one step
+  under it in 7 of 24. With the window: 0 of 50 and 0 of 24 (stage 2w). The same review's third look (R2-F8) found the
+  restart: `native:0,b=0` and `M:v=idle` by turns, 20 of 24 over; with the hold at the restart, 0 of 24. It costs a `B`
+  raise on the idle blink up to W late. Backported from the R2 line, where the same window also holds that line's own
+  walk look.
 - **Query.** `Q:r=<route>` addressed to one display is answered on Serial1 with
   `;S0!L<u>q:ver=1.3,rel=1,cap=32,n=<held>,ok=<0|1|2>,bpm=<n>` (`;W<n>,;S0...` for a remote WCB); on the R2 line,
   with the core at CA2, `ver=1.4,rel=2`. `r` is a
@@ -253,9 +284,9 @@ the Signal Booster. The query reply says `ver=1.4,rel=2`; the WDP caps say `cont
 - **`projector`** draws as `sparkle` here (v1.4's table).
 - `logic`, `projector` and `vu` are no accent (`ae=` naming one is no accent), and an accent may run over each.
 - **`projector`** is not pumped (N8), here where it stands in as `sparkle`: `am=` and `m=` are kept and ignored.
-- What it costs the ESP32 image (`pio run -e wlogicengine32`): 1,139,773 B of flash and 64,956 B of static RAM, where
+- What it costs the ESP32 image (`pio run -e wlogicengine32`): 1,140,141 B of flash and 64,964 B of static RAM, where
   CA2 with the stand-ins was 1,136,937 B and 64,948 B (F2 as first merged: 1,138,617 B and 64,948 B; after the
-  review's first fixes 1,139,309 B).
+  review's first fixes 1,139,309 B; with one light, 1,139,773 B; with the walk's window, 1,140,061 B).
 
 ### What is not in
 
@@ -277,12 +308,11 @@ the Signal Booster. The query reply says `ver=1.4,rel=2`; the WDP caps say `cont
   rear, up to 1,940 at `s=0`). The same is true of the idle blink in R1 against contract looks (a
   white look after it is no onset to the gate: "The luminance of a native sequence" below), and the property stage
   does not see it there because its mock draws the idle look as a fill at its brightness.
-- **R1 (`main`) has R2-F4 and R2-F5 in `native:0`.** On R1, `native:0` under `b=` or `B` is the same walk with its
-  palette baked at the level, and its brightness rises only under the field gate's 340 ms, sub-step rises not at all:
-  the second review measured `B` up every 345 to 380 ms over by stage 1k's rule (35 of 50 cases on this line before the
-  fix, the rear 16 by 4 at 255 four times a second by the gate's own count). The R2 fix is rule 7; a backport to R1 is
-  the owner's call. It would be the walk's window (`_walkLagMs`, `_walkWindowMs`, `_walkRiseOpen`, `gWalkUpMs`) and its
-  use in `_nativeBright()` for NORMAL, with the two stage 2c waits that change with it.
+- **R1 (`main`) has rule 7 too.** The second and third reviews found R2-F4, R2-F5 and R2-F8 in `native:0`, which is
+  R1's path: `B` up every 345 to 380 ms was over by stage 1k's rule in 35 of 50 cases, the rear 16 by 4 at 255 four
+  times a second by the gate's own count. With the owner's approval the walk's window was backported to `main`
+  (`4ec45f1`, `10cb5a7`, 2026-11-24; stage 2w) and merged into this line (`a7a948f`). A `B` raise on the idle blink
+  comes up to W late on R1 as well.
 - **A hand-over that changes something holds.** Between `native:0` and a pumped or coloured `logic`, or at another
   level, the frame that is up is held about 400 ms. Without it (tried on 2026-11-24, once the two lights were one) the
   walk went on while the idle blink waited to take a pumped `logic` back, and pumped `logic` and `native:0` by turns

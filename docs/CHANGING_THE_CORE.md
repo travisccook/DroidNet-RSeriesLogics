@@ -968,11 +968,10 @@ because it reads the spec, and because the review found that the gates alone are
 - **`projector`'s stand-in** (`sparkle`) is not pumped (N8).
 - The exact rules, in the order the layer applies them, are in `DROIDNET_FORK.md` ("What is in (contract v1.4, R2)",
   "Its windows"), for Studio's mirror. A fork that draws `logic` itself (none does) would need the same.
-- Stage R2rev (the reviews' findings) passes, R2-F1 to F6 and the check that the two lights are one, except R2-F7's
-  check (`test_review_r2_findings.cpp:525`): it compares the most light over 600 ms with the mean of the 100 ms before,
-  and `native:0` alone, with no `logic`, gives the same 18 and 31 (the walk's own texture). The fix it asks for (a held
-  frame stepped on a palette baked at its level) is in, and stage 2g holds the held frames to `native:0`'s frame for
-  frame.
+- Stage R2rev (the reviews' findings, R2-F1 to R2-F8) passes in full. R2-F7's check, as the third review restated
+  it, runs the same lines from the same seed with and without a seamless `logic` and finds no LED of any frame apart
+  over 600 ms; the first version compared the most light with the mean of the 100 ms before, which `native:0` alone
+  fails too (its walk's own texture). Stage 2g holds the held frames to `native:0`'s frame for frame.
 
-The ESP32 image with `logic` and `vu` drawn by the layer and the reviews' fixes: 1,140,061 B of flash and 64,964 B of
+The ESP32 image with `logic` and `vu` drawn by the layer and the reviews' fixes: 1,140,141 B of flash and 64,964 B of
 static RAM (F2 as first merged: 1,138,617 B and 64,948 B).
