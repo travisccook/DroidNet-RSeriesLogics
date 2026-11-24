@@ -34,9 +34,11 @@ cross-compiled; nothing of it has run on a board. The bench list for R2 is [docs
 **Release 2 status (2026-11-24).** The R2 line is the branch `claude/amazing-heisenberg-40jot7` (head `a7a948f`);
 `main` holds R1 (`fe1c8ad`) and the walk's window for the idle blink's brightness, backported from the R2 line with
 the owner's approval (`10cb5a7`; see "What is in (contract v1.3, R1)"). On the R2 line: core CA2, `logic` and `vu`
-drawn by this layer, and three rounds of an independent review (R2-F1 to R2-F8), each closed. The query reply says
-`ver=1.4,rel=2` and the WDP caps `contract.1.4`. The ESP32 image links at 1,140,141 B of flash and 64,964 B of static
-RAM. Host-tested, modelled and cross-compiled; not run on a board.
+drawn by this layer, and three rounds of an independent review (R2-F1 to R2-F8), each closed; and `vu`'s hand-over
+between pumped and not, which the PSI's and the holoprojectors' reviews found on their boards, checked here under
+hostile streams and given their rule (2026-11-24, `lighting-r2-vufix`). The query reply says `ver=1.4,rel=2` and the
+WDP caps `contract.1.4`. The ESP32 image links at 1,140,249 B of flash and 64,972 B of static RAM. Host-tested,
+modelled and cross-compiled; not run on a board.
 
 - The prebuilt classic ESP32 image in `firmware/` (`f7bd207`, 2026-10-16) runs on the C2-B5 dome's R-Series board;
   it was flashed over WiFi through the board's own Reflash page. That image predates contract v1.3.
@@ -85,7 +87,10 @@ What is verified is host-side, by `bash test/host/run.sh` (and by CI, `.github/w
   the frames of `native:0` at `b=255`, `128` and `200`, with no hold; otherwise a hold in which no LED moves, and no
   part of a display lit more often in a second than three or the idle blink alone, on the look's own scale), the
   owner's settings after every way out, and the layer's LEDs under the pump against the model's (none apart in 100
-  cases); `vu`'s rows at five tempos and under a seek every 50 ms. The property stage (2e) has both in its streams,
+  cases); `vu`'s rows at five tempos and under a seek every 50 ms, and its hand-over between pumped and not under
+  hostile streams (test 13: the clock held at nine offsets from a beat and resumed, `am=` and `m=` toggles, `vu` and
+  `meter` by turns, re-seeds, `L` storms around the hand-over, random mixes with `B`; front and rear, the owner's 255
+  and their own, read by every observer below). The property stage (2e) has both in its streams,
   and an observer (i) that counts `logic`'s walk on its own scale, stage 1k's fine reading, wherever it is up;
 - the 2026-11-21 review's findings (stage R2rev, `test/host/test_review_r2_findings.cpp`, the reviewer's): stage 1k's
   count run on the real layer's LEDs under host streams that raise `logic`'s light by every path, and its check that
@@ -281,12 +286,32 @@ the Signal Booster. The query reply says `ver=1.4,rel=2`; the WDP caps say `cont
 - **`vu`** (N10 to N12) is `meter`, with the pump moving its level: while it is pumped (the clock runs, `am=` and `m=`
   are not 0) the tick offers `envBright(255, m, beatAccentAmount(...))` to the level hold every pass, the meter's
   brightness is the look's level (never pumped), and verb `L` is not shown. Not pumped it is `meter`, frame for frame.
+  - *The hand-over between pumped and not* (the clock held or resumed, `am=` or `m=` to 0 and back, `vu` put up or
+    taken down while the clock runs) starts the level window (`levelMs`, which `B` and `b=` share): to the pump the
+    level starts from 0, a fall at once, and the pump's first rise comes 340 ms after the hand-over; from the pump the
+    meter shows the last `L` the unit took (0, dark, if none since the show began), rising to it 340 ms after the
+    hand-over. `contractTick()` sees the hand-over (`gVuPumped`, `gLastL`), as the holoprojectors' layer does. So N12
+    on the logics now reads as it does on the holoprojectors (v1.4 12.5): after the pump the meter is the meter of the
+    last `L`, not of the pump's last level, and no level of either side lights rows sooner than 340 ms after the other.
+  - *Why, and what it found* (2026-11-24, stage 2g test 13). The pump and `L` were already one level hold here, with
+    one anchor, so the clock held and resumed at any offset from a beat, `am=` and `m=` toggles and re-seeds kept
+    340 ms between onsets before the change too (3,792 display runs, 102,160 hand-overs). What was off was N12 after
+    the pump: the meter went on at the pump's last level, and with `vu` and `meter` by turns that level lit rows again
+    330 ms after the last (by the frame shown: the first rise waited for the field gate). With a pumped `meter` and in
+    random mixes, rows lit 4 to 5 times in a second, the closest two 50 ms apart (130 of 840 runs over three a second,
+    252 inside 340 ms). Now: the hand-over streams 0 over and 0 inside 340 ms; the pumped-`meter` and random streams 11
+    and 47, the worst second 5, the closest two 50 ms, held to what a pumped `meter` under `L` does on its own (below,
+    "What is not in": 5 in a second and 30 ms, 416 and 682 of 896 runs).
+  - *What it costs.* A `vu` put up while the clock runs starts dark and comes up 340 ms later (the frames `vu-120` and
+    `vu-seek` changed so: Studio's copy of `test/host/frames` needs the new files). After a pause the meter shows the
+    last `L`, or is dark until one comes.
 - **`projector`** draws as `sparkle` here (v1.4's table).
 - `logic`, `projector` and `vu` are no accent (`ae=` naming one is no accent), and an accent may run over each.
 - **`projector`** is not pumped (N8), here where it stands in as `sparkle`: `am=` and `m=` are kept and ignored.
-- What it costs the ESP32 image (`pio run -e wlogicengine32`): 1,140,141 B of flash and 64,964 B of static RAM, where
+- What it costs the ESP32 image (`pio run -e wlogicengine32`): 1,140,249 B of flash and 64,972 B of static RAM, where
   CA2 with the stand-ins was 1,136,937 B and 64,948 B (F2 as first merged: 1,138,617 B and 64,948 B; after the
-  review's first fixes 1,139,309 B; with one light, 1,139,773 B; with the walk's window, 1,140,061 B).
+  review's first fixes 1,139,309 B; with one light, 1,139,773 B; with the walk's window, 1,140,061 B; with R2-F8,
+  1,140,141 B and 64,964 B; with `vu`'s hand-over, +108 B and +8 B).
 
 ### What is not in
 
@@ -338,7 +363,13 @@ the Signal Booster. The query reply says `ver=1.4,rel=2`; the WDP caps say `cont
 - A brighter `B` or `b=` on a native sequence whose own light moves (`native:2`, `6`, `9`, `10`) while it runs.
   Nothing can tell when such a sequence next lights by itself, so it is given a brighter level only when it
   starts. A dimmer one reaches it at once.
-- A limit on a part of a display for every order of lines. No look by itself, and no meter under `L`, lights a
+- **A pumped `meter` under `L`** (found 2026-11-24 while checking `vu`'s hand-over; R1's look, not v1.4's): the pump
+  lights the rows by their brightness on its beats (S2) and `L` by their level (the level hold), each in its own
+  window, so the two by turns light a part of a display up to 5 times in a second, the closest two 30 ms apart (stage
+  2g test 13, 416 of 896 runs over three a second at 120 BPM with `L` every 20 to 500 ms). It is the alternation
+  class (v1.4 12.6) inside one look. Not changed here: an owner item with the rest of the class. `vu` is not affected
+  (its pump moves the level, in the one window), and a `meter` without `am=` and `m=` is not.
+- A limit on a part of a display for every order of lines. No look by itself, and no meter under `L` alone, lights a
   region of a quarter of a display or more than three times in a second; the core's own test asserts that for
   the looks it times, on every strand length (stage 1j), and the property stage for every look on the rendered
   pixels, by an observer as fine as the gate. Two looks by turns do, five scripts in all, which the stage lists
