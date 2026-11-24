@@ -103,7 +103,7 @@ static uint8_t    gBriWritten[2] = { 0, 0 };
 
 // v1.4 logic (spec N1 to N5). While a display shows the look, the engine's LIVE settings are the
 // look's: the palette and hue (N1), the fade and delay (N2), and the brightness the palette is
-// baked at, which is the ceiling (N3). The RAM default object, which the engine restores its
+// baked at, which is the level drawn (N3, N4: as native:0 at that level is). The RAM default object, which the engine restores its
 // settings from at every effect change (LogicEngine.h:807, :1829), is never written for it: it
 // stays the owner's. gLogicUp: the last frame effect 106 drew on the display was the walk, with
 // the look's settings in the engine. gLogicShown: the level the walk was last drawn at.
@@ -715,10 +715,16 @@ static inline void _logicHue(uint8_t u, uint8_t& pal, uint8_t& hue) {
   hue = own ? d.fHue : (uint8_t)(fxLogicHue(g.color) - FX_LOGIC_HUE_BASE);   // (mod 256: N1's & 255)
 }
 // The look's settings: that palette and hue, the fade and the delay (N2), and the brightness the
-// palette is baked at, which is the ceiling (N3). Compared with the engine's live values every
-// frame and set only where they differ: on a change of the look's colour or speed, of the owner's
-// settings or brightness, and after the engine restored its own (an effect change). The default
-// object is never written.
+// palette is baked at, which is the LEVEL drawn this frame (N3): as native:0 at a b= is drawn,
+// the engine's brightness at the level (_engineBri: the palette baked at it), then
+// updateDisplay(fBri), which scales by it again. So logic at a level is native:0's light at that
+// level, at every level (v1.4 N4 as written; the owner's decision of 2026-11-24 on the review's
+// R2-F2; until then the palette was baked at the ceiling and scaled once, a brighter light under
+// b=255). Under the pump the level changes nearly every frame, and so the palette is baked again
+// (the stock calculateAllColors(pal, bri), about 10 us on the ESP32), as the stock mic sequences
+// do every frame. Compared with the engine's live values every frame and set only where they
+// differ: on a change of the level, of the look's colour or speed, of the owner's settings, and
+// after the engine restored its own (an effect change). The default object is never written.
 static inline void _logicApply(LogicEngineRenderer& r, uint8_t u, uint8_t pal, uint8_t hue, uint8_t level) {
   const ContractUnitState& g = gContract[u];
   const LogicEngineSettings& d = _defaults(u);
@@ -756,11 +762,13 @@ static inline bool _logicOnset(const ContractUnitState& g, uint8_t x) {
 // One frame of the look. The level is the look's, pumped (_beatBright: b= under the ceiling,
 // fxLogicPumpAmount()). N4: the frame is not measured; the gates are asked with the level for
 // both measures (and a peak of 255 when it is not 0), and told what was drawn. The rules, in order:
-//   1. ENTERING OVER THE WALK (the idle blink, or logic's own last frame after it left): the LEDs'
-//      light is not known to the gate (native:0 under b=255 bakes its palette at its level and
-//      scales it again; logic bakes it at the ceiling: two lights, R2-F2), so it is taken as dark
-//      and just lit (contractNativeEnded(g, false)), once, and the frame that is up (the idle
-//      blink's last) stays up until the look may light: 400 ms (rule 4).
+//   1. ENTERING OVER THE WALK (the idle blink, or logic's own last frame after it left). SEAMLESS
+//      when it changes nothing: the idle blink's walk (gIdleWalk), logic not pumped, its palette
+//      and hue the engine's live ones (the display's own), its level the level the idle blink
+//      draws at. Then logic takes the walk over as it is: the same light, no hold. Otherwise the
+//      LEDs' light is a change the gate cannot measure (a colour, a level, a pump, or logic's own
+//      walk that it left), so it is taken as dark and just lit (contractNativeEnded(g, false)),
+//      once, and the frame that is up stays up until the look may light: 400 ms (rule 4).
 //   2. S4: a frame the look gate holds leaves the frame that is up; the walk goes on in its old
 //      colours when it is the walk.
 //   3. A RECOLOUR of the walk that is up (another palette or hue: a c=, the owner's palette) is a
@@ -778,8 +786,13 @@ static inline bool _logicOnset(const ContractUnitState& g, uint8_t x) {
 //      sequence other than the idle blink), the display is cleared first and the walk comes in
 //      as its LEDs step: an LED in a pause would go on showing what was there, at a level the gate
 //      is not told (a sequence that draws at a level of its own is brighter than the ceiling).
-//   6. N3: updateDisplay(level), the level itself under the ceiling; each LED takes it at its
-//      next step (core revision CA2, reading 3: not a fraction of 255).
+//   6. N3: updateDisplay(level), the level itself under the ceiling, the palette baked at it
+//      (_logicApply); each LED takes it at its next step (core revision CA2, reading 3: not a
+//      fraction of 255).
+//   And leaving: to the idle blink, seamless when logic was not pumped, in the display's own
+//   colours, at the level the idle blink runs at (_present: the walk goes on until the idle
+//   blink starts, no sooner than 400 ms after the field last lit); to anything else, and to the
+//   idle blink otherwise, _logicLeave (unseen light, the walk's last frame held 400 ms).
 static inline bool _logicFrame(LogicEngineRenderer& r, uint8_t u, uint32_t now) {
   ContractUnitState& g = gContract[u];
   const uint8_t want = _beatBright(g, beatPosAt(gBeat, now));

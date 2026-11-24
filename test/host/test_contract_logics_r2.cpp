@@ -16,9 +16,10 @@
 //   * the gates: asked with the level for both measures, a held frame drawn at the last level
 //     shown, told what was drawn; logic's windows (400 ms, and 500 ms for a rise while up that is
 //     not its pump's beat), a recolour, the 400 ms after the walk;
-//   * the hand-over with the idle blink: a hold of 400 ms each way in which no LED moves, and no
-//     part of a display lit more often in a second than by the idle blink alone, on the look's
-//     own scale (the 2026-11-21 review, R2-F2: under b=255 the two are not one light);
+//   * the hand-over with the idle blink: seamless when it changes nothing (frame for frame the
+//     idle blink's, at b=255, 128 and 200: one light, the palette baked at the level); otherwise
+//     held, no LED moving, and no part of a display lit more often in a second than three or the
+//     idle blink alone, on the look's own scale;
 //   * restoration: palette, hue, fade, delay and brightness are the owner's again after the look,
 //     after X, after M:v=idle, after the watchdog and after a take-over;
 //   * the pump reaches the LEDs as the model has it: the layer's LEDs are the model's LEDs, frame

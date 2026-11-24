@@ -863,11 +863,12 @@ here, with its section.
    ceil`, 255 at the ceiling: that draws the palette unscaled, brighter than `native:0` by the ratio of 255 to the
    display's brightness before the squaring, an onset at every hand-over from the idle blink. The model follows the
    spec; Task F2 should too.
-   *Later (the 2026-11-21 review, R2-F2):* "the light of `native:0` exactly" holds at `b=255` only. Under 255
-   `native:0` runs with the engine's brightness at the level, which bakes the palette at the level and scales it by
-   the level again, while `logic` bakes at the ceiling and scales once. So N4's "going between `native:0` and `logic`
-   at one level is a change of look and not an onset" does not hold below 255. The layer now takes every hand-over
-   between them as unseen light (below); the two lights are left different by decision.
+   *Later (the 2026-11-21 review, R2-F2, and the owner's decision of 2026-11-24):* as first built, "the light of
+   `native:0` exactly" held at `b=255` only. Under 255 `native:0` runs with the engine's brightness at the level,
+   which bakes the palette at the level and scales it by the level again, while `logic` baked at the ceiling and
+   scaled once (on the front at 160, LEDs summing to 159 against 28 at `b=128`). The layer now bakes `logic`'s
+   palette at the level it draws, so the two are one light at every level, and **N4 holds as written**: going
+   between `native:0` and `logic` at one level is a change of look and not an onset. Stage 1k bakes at the level too.
 4. **`fxLogicHue()` of a colour with no spread (section 5).** The formula divides by `max - min`. Such a colour is the
    display's own (`fxLogicOwn()`), and a layer never asks its hue; the function gives 0 rather than divide by 0.
 5. **A slot past 9 (N6)** is dark, like 7 to 9.
@@ -933,28 +934,33 @@ so they cost it nothing.
 ### The logics layer on CA2 (Task F2, and the 2026-11-21 review's fixes)
 
 Nothing in the core changed for this; it is the RSeries layer only (`src/contract/ContractLogics.h`), recorded here
-because it reads the spec, and because the review found that N4 as written is not enough for `logic`.
+because it reads the spec, and because the review found that the gates alone are not enough for `logic`.
 
-- **N4, as the layer reads it now.** The gates take `logic` at its level, unmeasured, as the spec says. But the walk's
-  light is far under that level (reading 2), and it takes each level and each colour LED by LED, 0 to about 130 ms
-  late and up to a key pause (390 ms on the rear). The core's 340 ms window, and the pump's own 400 ms floor alone,
-  let it break section 9 by stage 1k's own count on the real layer (stage R2rev): a rise by a path the pump's floor
-  does not see (`ap=` moved each beat, a `C` re-seed, the clock held and resumed, `B` and `b=`), a recolour, and
-  `native:0` and `logic` by turns. So the layer keeps windows of its own, using only existing core calls:
+- **N3 and N4, as the layer reads them now.** The level reaches the engine as `updateDisplay(level)` with the palette
+  baked at that level (`calculateAllColors(pal, level)` through `setBrightness(level)` and `setPaletteHue()`, whenever
+  the level changes): as `native:0` at that level is drawn. So `logic` and `native:0` at one `b=` are one light, at
+  every level (the review's R2-F2; the owner chose this over recording the difference). Stage 1k, the model the core's
+  floors were decided on, now bakes at the level as well; its rule and its verdicts stand (`logic`'s own floor 0 of
+  216 cases over; S2's alone 18 of 216).
+- **The gates take `logic` unmeasured (N4), and its windows are the layer's.** The walk's light takes each level and
+  colour LED by LED, 0 to about 130 ms late and up to a key pause (390 ms on the rear). The core's 340 ms window and
+  the pump's own 400 ms floor alone let it break section 9 by stage 1k's count on the real layer (stage R2rev): a rise
+  by a path the pump's floor does not see (`ap=` moved each beat, a `C` re-seed, the clock held and resumed, `B` and
+  `b=`), and a recolour. So the layer keeps windows of its own, using only existing core calls:
   `FX_LOGIC_PUMP_MIN_MS` (400 ms since `fieldOnsetMs`) for an onset as the look enters, on its pump's own beat, for a
   recolour, and for the next light after the walk; `LOGIC_RISE_MS` (500 ms, fork-local) for any other onset of its
   level while it is up. At 400 ms for every rise the review's measure still found a clock held and resumed by turns
   over on the rear on two of six walk seeds; 450 and 500 cleared all six.
-- **The walk is unseen light at every hand-over**, both ways: entering over the idle blink (or `logic`'s own last frame)
-  and leaving `logic` for anything, `contractNativeEnded(known=false)`, the frame that is up held until the window.
-  So the hand-over between `native:0` and `logic` costs about 400 ms each way, and nothing flickers.
-- **A recolour** of the walk that is up is a rise of its luminance the gate cannot see: it waits the window and starts
-  it again (`contractNativeEnded(known=true)`).
+- **The hand-over with the idle blink is seamless when it changes nothing** (`logic` not pumped, in the display's own
+  colours, at the idle blink's level): the same walk goes on, no LED moves, no hold. Any other hand-over, and every
+  hand-over between the walk and other light, is unseen light (`contractNativeEnded(known=false)`), the frame that is
+  up held 400 ms. Without that hold for the changing hand-overs too, a pumped `logic` and `native:0` by turns every
+  300 ms at 255 lit the rear 16 by 4 four times a second by the gate's own count.
+- **A recolour** of the walk that is up waits the window and starts it again (`contractNativeEnded(known=true)`).
 - **`projector`'s stand-in** (`sparkle`) is not pumped (N8).
 - The exact rules, in the order the layer applies them, are in `DROIDNET_FORK.md` ("What is in (contract v1.4, R2)",
   "Its windows"), for Studio's mirror. A fork that draws `logic` itself (none does) would need the same.
-- Still open: R2rev's two checks that `native:0` and `logic` at one `b=` under 255 give one light. They fail by
-  decision (the lights are not made equal) and were not edited.
+- Stage R2rev (the review's findings) passes in full, its check that the two lights are one included.
 
-The ESP32 image with `logic` and `vu` drawn by the layer and the review's fixes: 1,139,309 B of flash and 64,956 B of
+The ESP32 image with `logic` and `vu` drawn by the layer and the review's fixes: 1,139,773 B of flash and 64,956 B of
 static RAM (F2 as first merged: 1,138,617 B and 64,948 B).
