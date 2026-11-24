@@ -55,6 +55,13 @@
 // enters. R2-F2's first check (the two lights) stays a question of what native:0 at b<255 should
 // look like.
 //
+// SECOND REVIEW, 2026-11-24, of the fix (5203841, 7a09d7f, 330dacd, f6e73af): R2-F1 to F3 above
+// pass on it (with the fine reading's full scale now the palette baked at the ceiling, as stage
+// 1k takes it, since logic bakes at the level). Four more findings, at the end of main():
+// R2-F4 native:0 under B (R1's 340 ms path, logic's own light), R2-F5 rises under the gate's step
+// (the light goes as about the fourth power of the level since 330dacd), R2-F6 LOGIC_RISE_MS on a
+// seventh walk seed, R2-F7 a held logic frame stepping the walk on a table baked at another level.
+//
 // Run alone: clang++ -std=c++17 -O1 test_review_r2_findings.cpp && ./a.out   (about 5 s)
 #include "logics_harness.h"
 #include <cstdarg>
@@ -83,15 +90,11 @@ static void countOnsets(const std::vector<int>& v, int step, Worst& w) {
     }
   }
 }
-// FastLED's rainbow conversion and scale8 as the mock has them, for the look's own full scale.
+// The look's own full scale (stage 1k's fine reading): the palette the engine has (its number and
+// hue) BAKED AT THE CEILING, its brightest LED by each measure. (Since the fix of 2026-11-24 logic
+// bakes its palette at the level it draws, so the engine's current table is not the full scale.)
 static void fullScale(const LogicEngineRenderer* r, int ceil, int& fullLv, int& fullLy) {
-  fullLv = fullLy = 0;
-  for (int k = 0; k < MOCK_COLORS; k++) {
-    int R, G, B; mockHsvRainbow(r->_all[k][0] + r->_hue, r->_all[k][1], ceil == 255 ? r->_all[k][2] : mockScale8(ceil, r->_all[k][2]), R, G, B);
-    const int lv = R > G ? (R > B ? R : B) : (G > B ? G : B), ly = contractLuminance((uint8_t)R, (uint8_t)G, (uint8_t)B);
-    if (lv > fullLv) fullLv = lv;
-    if (ly > fullLy) fullLy = ly;
-  }
+  mockFullScale(r->_bakedPal < 0 ? r->_pal : r->_bakedPal, r->_hue, ceil, fullLv, fullLy);
 }
 // Every frame of a display: its LEDs into region series (stage 1k's regions).
 struct Meter {
@@ -156,12 +159,12 @@ static Meter::Result measure(int u, int w, int h, int seconds, Script script, vo
   run(1000);                                       // the idle blink a while
   Meter mt; mt.init(r->width(), r->height());
   // The look's own full scale (the fine reading's): its brightest LED at the ceiling, by each
-  // measure, the LARGEST seen while logic is up (a larger scale counts fewer onsets).
+  // measure, the LARGEST seen while the walk is up (a larger scale counts fewer onsets).
   fullLv = fullLy = 0;
   for (uint32_t t = 0; t < (uint32_t)seconds * 1000u; t += FRAME_MS) {
     if (script) script(t, u, ctx);
     _mock_millis += FRAME_MS; frame();
-    if (script && t > 2000 && r->_fx == 106 && gLogicUp[u]) {
+    if (script && t > 2000 && (r->_fx == 0 || (r->_fx == 106 && gLogicUp[u]))) {   // the walk: logic, or native:0
       int a, b; fullScale(r, ceil, a, b); if (a > fullLv) fullLv = a; if (b > fullLy) fullLy = b;
     }
     if (t >= 2000) mt.see(r);                       // (the first 2 s: the look comes up)
@@ -265,6 +268,26 @@ static void scriptHold(uint32_t t, int u, void* vc) {
     else snprintf(l, sizeof l, "**C:bpm=%d,ph=0,bpb=4,beat=0", c.bpm);
     send(l);
   }
+}
+
+// (R2-F4) B on native:0, as (c) on logic
+static void scriptBrightN0(uint32_t t, int u, void* vc) {
+  const Ctx& c = *(Ctx*)vc;
+  if (t == 0) { send("**M:v=show"); lineFor(u, "A:i=native:0"); }
+  if (t >= 1000 && (t - 1000) % (uint32_t)c.period == 0) lineFor(u, "B:b=255");
+  if (t >= 1000 && (t - 1000) % (uint32_t)c.period == (uint32_t)c.high) lineFor(u, "B:b=0");
+}
+// (R2-F5) B between 255 and c.s (a level under the gate's step below the ceiling) on logic
+static void scriptBrightSub(uint32_t t, int u, void* vc) {
+  const Ctx& c = *(Ctx*)vc;
+  if (t == 0) { send("**M:v=show"); lineFor(u, "A:i=logic"); }
+  if (t >= 1000 && (t - 1000) % (uint32_t)c.period == 0) lineFor(u, "B:b=255");
+  if (t >= 1000 && (t - 1000) % (uint32_t)c.period == (uint32_t)c.high) lineFor(u, "B:b=%u", (unsigned)c.s);
+}
+static long lightSum(const LogicEngineRenderer* r) {
+  long s = 0;
+  for (int y = 0; y < r->height(); y++) for (int x = 0; x < r->width(); x++) { const CRGB c = r->px(x, y); s += c.r > c.g ? (c.r > c.b ? c.r : c.b) : (c.g > c.b ? c.g : c.b); }
+  return s;
 }
 
 // CONTROL: a logic look pumped by its own rule alone (am=2, no other line), the case stage 1k
@@ -408,6 +431,99 @@ int main() {
     gOwnerBri = 0;
     printf("R2-F3, logic recoloured by turns: %d of %d cases break v1.4 section 9\n", gOver - o, gCases - n);
     CHECK(gOver == o);
+  }
+
+  // ===== SECOND REVIEW (2026-11-24), of the fix (5203841, 7a09d7f, 330dacd, f6e73af) =====
+  // R2-F4: native:0 under B, every 345 to 380 ms (up, and down 170 ms later). native:0 IS logic's
+  // light now (330dacd: one light at every level), and the same walk: each LED takes a new
+  // brightness at its next step. But native:0's rises go through _nativeBright() and the field
+  // gate's 340 ms (contractFieldAllowed), not logic's 400/500 (_logicWindow, LOGIC_RISE_MS). That
+  // path is R1's and unchanged, so this is older than R2; R2's model of the walk is what shows it.
+  {
+    const int o = gOver, n = gCases;
+    static const struct { int u, w, h; } kAll[] = { { 0, 8, 10 }, { 1, 16, 4 }, { 1, 24, 4 }, { 1, 28, 4 }, { 1, 32, 8 } };
+    for (int bri : { 0, 255 }) for (const auto& d : kAll) {
+      gOwnerBri = bri;
+      const Meter::Result stock = measure(d.u, d.w, d.h, SECONDS, nullptr, nullptr, ceil, fl, fy);
+      for (int period : { 345, 350, 360, 370, 380 }) {
+        Ctx c; c.period = period; c.high = 170; char what[96];
+        snprintf(what, sizeof what, "%s %dx%d bri %d: native:0, B:b=255 every %d ms, b=0 170 ms on", d.u ? "rear" : "front", d.w, d.h, ceil, period);
+        judge(what, measure(d.u, d.w, d.h, SECONDS, scriptBrightN0, &c, ceil, fl, fy), stock);
+      }
+    }
+    gOwnerBri = 0;
+    printf("R2-F4, native:0 under B every 345 to 380 ms: %d of %d cases break v1.4 section 9's rule\n", gOver - o, gCases - n);
+    CHECK(gOver == o);
+  }
+  // R2-F5: a rise UNDER THE GATE'S STEP is an onset of the walk's light. The gate's step is a tenth
+  // of the ceiling, on the LEVEL; since 330dacd logic's light goes as the level to the fourth
+  // power or so (the palette baked at the level, scaled by it, and the rainbow conversion squares
+  // the value), so B between 255 and the b= one step-less-one under it (a level of 160 and 144 on
+  // the front) changes the walk's light by about a third: never an onset to the gate, never held
+  // by _logicWindow/LOGIC_RISE_MS (_logicOnset() says no), taken every 340 ms (contractHoldsDue).
+  // Before 330dacd (the palette at the ceiling) the same stream broke the rule in 1 case of 36;
+  // after it, in 8. native:0 does the same (R1's path).
+  {
+    const int o = gOver, n = gCases;
+    for (int bri : { 0, 255 }) for (const auto& d : { kD[0], kD[1] }) {
+      gOwnerBri = bri;
+      const Meter::Result stock = measure(d.u, d.w, d.h, SECONDS, nullptr, nullptr, ceil, fl, fy);
+      const int step = contractFieldStep((uint8_t)ceil);
+      int bsub = 255; while (bsub > 0 && ceil - contractLevel((uint8_t)ceil, (uint8_t)(bsub - 1)) < step) bsub--;
+      for (int lo : { bsub, bsub + 8 }) for (int period : { 345, 360, 380 }) {
+        Ctx c; c.period = period; c.high = 170; c.s = (uint8_t)lo; char what[112];
+        snprintf(what, sizeof what, "%s bri %d: logic, B:b=255 every %d ms, b=%d (level %d, under the step) 170 ms on", d.u ? "rear" : "front", ceil, period, lo,
+                 contractLevel((uint8_t)ceil, (uint8_t)lo));
+        judge(what, measure(d.u, d.w, d.h, SECONDS, scriptBrightSub, &c, ceil, fl, fy), stock);
+      }
+    }
+    gOwnerBri = 0;
+    printf("R2-F5, logic under B by less than the gate's step: %d of %d cases break v1.4 section 9's rule\n", gOver - o, gCases - n);
+    CHECK(gOver == o);
+  }
+  // R2-F6: LOGIC_RISE_MS (500) is a margin found on six walk seeds; a seventh breaks it. The clock
+  // held and resumed by turns every 250 ms, a pumped logic on the rear 16x4 at the owner's 255,
+  // with the rear walk's seed 0xCAFE: a region lights four times in a second (the closest two
+  // about 200 ms apart) by the fine reading. 2 of 132 seeds x periods x tempos found over here.
+  {
+    const int o = gOver, n = gCases;
+    const uint16_t keep = gMockWalkSeed[1];
+    gMockWalkSeed[1] = 0xCAFEu; gOwnerBri = 255;
+    const Meter::Result stock = measure(1, 16, 4, SECONDS, nullptr, nullptr, ceil, fl, fy);
+    for (int bpm : { 120, 150 }) {
+      Ctx c; c.bpm = bpm; c.period = 250; char what[96];
+      snprintf(what, sizeof what, "rear 16x4 bri 255, walk seed cafe: am=2, the clock held and resumed every 250 ms, %d BPM", bpm);
+      judge(what, measure(1, 16, 4, SECONDS, scriptHold, &c, ceil, fl, fy), stock);
+    }
+    gMockWalkSeed[1] = keep; gOwnerBri = 0;
+    printf("R2-F6, the 500 ms margin on another walk seed: %d of %d cases break v1.4 section 9's rule\n", gOver - o, gCases - n);
+    CHECK(gOver == o);
+  }
+  // R2-F7: A HELD logic frame steps the walk with a palette baked at ANOTHER level. _logicWalkOn()
+  // (rule 2, the look gate; rule 3, a recolour) calls updateDisplay(gLogicShown) without
+  // _logicApply(), so it steps the LEDs with whatever the engine's table was last baked at. Since
+  // 330dacd that table must be at the drawn level. After native:0 with a contract brightness
+  // (b=128: the default object written to 80), the seamless entry takes the walk at 80; the next
+  // tick's _present() puts the owner's brightness back (_engineBriRestore: setBrightness(160),
+  // calculateAllColors()), and while the look gate holds the logic frame (the field got brighter a
+  // moment ago: B) the walk steps at level 80 on a table baked at 160. The front's light goes up
+  // about five times for some 150 ms, then back; the gate is told 80 throughout.
+  {
+    gMockWalkNormal = true; mockEngineSize(0, 8, 10); mockEngineSize(1, 16, 4); resetAll();
+    send("**M:v=show"); send("LFA:i=native:0,b=64"); run(1500);
+    send("LFB:b=128");
+    for (int i = 0; i < 40 && FLD->_bakedBri != 80; i++) run(10);
+    run(300);
+    long before = 0; for (int i = 0; i < 10; i++) { run(10); before += lightSum(FLD); } before /= 10;
+    // (B again 20 ms before logic: the field gets brighter, so the look gate holds logic's first frames)
+    send("LFB:b=64"); run(10); send("LFB:b=128"); for (int i = 0; i < 40 && FLD->_bakedBri != 80; i++) run(10);
+    run(10); send("LFA:i=logic");
+    long most = 0; int told = 255, toldMin = 255;
+    for (int f = 0; f < 60; f++) { run(10); const long l = lightSum(FLD); if (l > most) most = l; told = gLogicShown[0]; if (told < toldMin) toldMin = told; }
+    printf("R2-F7: native:0 at b=128 is %ld; logic entered seamlessly at the same level (told %d) reaches %ld while the look gate holds its first frames\n",
+           before, toldMin, most);
+    CHECK(most * 10 <= before * 13);                 // within 30 %: the same light (N4), the gate told one level
+    gMockWalkNormal = false;
   }
   if (gFails) { printf("REVIEW FINDINGS: %d CHECK(s) FAILED (expected while the defects are in the code)\n", gFails); return 1; }
   printf("review findings: all pass\n");
