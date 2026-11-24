@@ -61,7 +61,9 @@ predates contract v1.3. Nothing in this repository records a contract (`!`) comm
 image: treat the contract layer as untested on hardware until the R1 bench checklist has been run. The ESP32-S3
 build is not supported yet: it compiles, but its hardware config is unconfirmed (see below).
 
-**Testing.** The source in this tree is contract v1.3 (release R1). `bash test/host/run.sh` runs the host suite:
+**Testing.** The source on `main` is contract v1.3 (release R1). The branch `claude/amazing-heisenberg-40jot7` is
+release R2 (contract v1.4, with the `logic` look), host-tested and not run on a board: see
+[DROIDNET_FORK.md](DROIDNET_FORK.md). `bash test/host/run.sh` runs the host suite:
 the shared core's unit tests and parser fuzz, the RSeries layer on a mock of the engine (every finding of the
 2026-11-15 and 2026-11-16 reviews is a regression test there), the contract's "never flash a display" rule as a
 property of hostile and random line streams measured on the rendered pixels, the Serial1 reader, the frame
@@ -219,7 +221,7 @@ announce, `docs/WDP_DEVICE_ANNOUNCE.md` in greghulette/Wireless_Communication_Bo
   (`scripts/pre_extra.py`), the same sha the prebuilt images in `firmware/` are named by. It gets
   `-dirty` when the tree had changes outside `firmware/`, and is `unknown` when git could not say.
   The line is 104 bytes with a clean commit, 110 with `-dirty`. `contract.1.3` is the contract version the
-  firmware speaks.
+  firmware speaks; R2's firmware (the branch `claude/amazing-heisenberg-40jot7`) says `contract.1.4`.
 - **It never blocks.** `mainLoop()` writes only as much of the line as the UART reports room for
   (`availableForWrite()`, 128 bytes on an idle port), so a whole line normally goes in one write.
 - The WCB consumes the line and never forwards it, so no other board sees it. `?WDP,DA` on the WCB
