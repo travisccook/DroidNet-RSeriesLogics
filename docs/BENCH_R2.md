@@ -21,8 +21,9 @@ Each check is made beside the stock look where there is one. The numbers are the
 | 7 | `M:v=idle`, `X`, the watchdog and a button during `logic`: each as in R1 | Idle and the watchdog: the walk goes on into the idle blink. `X`: dark at once. A button: its sequence, and the show ends on that display | |
 
 Also to note at rows 2, 3 and 7: after `logic`, a contract look (or an accent) comes 400 ms late, the walk's last frame
-held meanwhile, and an accent shorter than that is not shown; a recolour of `logic` waits up to 400 ms; a rise of its
-level that is not its pump's beat (`B`, a pause and resume) up to 500 ms ("Its windows" in `DROIDNET_FORK.md`). Say
+held meanwhile, and an accent shorter than that is not shown; a recolour of `logic`, a rise of its level that is not
+its pump's beat (`B`, a pause and resume), and a rise of the idle blink's brightness (`B` on `native:0`) wait the
+walk's window, 440 ms on the front and 740 ms on the rear at their own pace ("Its windows" in `DROIDNET_FORK.md`). Say
 whether any of the holds show.
 
 ## Rows for all the boards, made on this one too

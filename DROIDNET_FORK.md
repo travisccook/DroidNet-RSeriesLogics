@@ -162,7 +162,8 @@ the Signal Booster. The query reply says `ver=1.4,rel=2`; the WDP caps say `cont
     is `setPaletteHue(0, fxLogicHue(c) - 170)`), the fade and delay (`fxLogicPace()` on the display's own), and the
     live brightness the palette is baked at, which is the level drawn this frame. So a change of level, colour or speed,
     the owner moving the brightness or the pace, and the engine restoring its own settings at an effect change all
-    come out right at the next frame. The RAM default object (`LogicEngineFLDDefault`/`RLDDefault`) is never written for it.
+    come out right at the next frame. The RAM default object (`LogicEngineFLDDefault`/`RLDDefault`) is never written
+    for it.
   - *The level.* `updateDisplay(level)` once a frame, the level itself under the ceiling (not a fraction of 255), with
     the palette baked at that level: as `native:0` at a `b=` is drawn (the engine's brightness at the level, which
     bakes the palette at it, then `updateDisplay(fBri)`, which scales by it again). So `logic` at a level is
@@ -192,30 +193,50 @@ the Signal Booster. The query reply says `ver=1.4,rel=2`; the WDP caps say `cont
        may light: 400 ms (rule 4), and S4's 170 ms after the field's last change of look.
     2. *Entering over anything else* (a contract look, an accent, `X`'s dark, another native sequence): the field gate
        as it stands, with rule 4's 400 ms for an onset; the display is cleared at the first frame drawn.
-    3. *A recolour while up* (a new palette or hue: `c=`, or the owner's palette): waits until 400 ms after the field
-       last lit or got brighter (and S4's 170 ms), the walk going on in its old colours; at the frame it is shown the
-       window starts again from it (`contractNativeEnded(known=true)`: the level the gate knows stands). A pace alone
-       (`s=`) is no recolour.
-    4. *A rise of the level* that the field gate counts as an onset (a step, a tenth of the ceiling plus one, above
-       the trough, after a fall of a step): as the look enters, and on a beat its own pump fires on (the first 30 ms of
-       a beat `fxLogicPumpFires()` keeps), 400 ms after the field last lit or got brighter (`FX_LOGIC_PUMP_MIN_MS`); any
-       other rise while the look is up (`B`, `b=`, the clock held and resumed, a `C` re-seed, a moved `ap=`, the owner's
-       brightness) 500 ms (`LOGIC_RISE_MS`, fork-local). Held, it is drawn at the last level shown. A fall is never
-       held.
+    *The walk's window* (rules 3, 4 and 7). The walk shows a new level or colour LED by LED, each LED at its next
+    step, and an LED steps once in `P + 1` frames, `P` its pause: `random8(delay)`, at most `delay − 1`, at a key
+    colour, `fade` at a tween (`LogicEngine.h:1493-1519`). So a rise's light is on every LED within
+    `D = 10 ms × (max(delay − 1, fade) + 1)`, and two rises keep every part of the display's onsets 340 ms apart when
+    they are `W = 340 + D` ms apart (`_walkWindowMs`), whichever part took the first one last. `fade` and `delay` are
+    the slower of the engine's live pace and the look's own (`fxLogicPace()` on the owner's). W: front at its own
+    pace (1, 10) 440 ms; rear (3, 40) 740 ms; front at `s=0` (4, 40) 740 ms; rear at `s=0` (12, 160) 1,940 ms; rear at
+    `s=255` (1, 20) 540 ms. The walk's light goes as about the fourth power of its level (the palette baked at the
+    level, scaled by it, the value squared by the rainbow conversion), so a rise under the gate's step is a rise of
+    the light all the same (the second review's R2-F5): EVERY rise of the walk's level is held to W, whatever its
+    size. "The walk's last rise" (`gWalkUpMs`) is the last time `logic`'s level rose, it was recoloured or it lit,
+    or `native:0`'s brightness rose. Swept on R2rev's paths over 400 walk seeds, front and rear, the owner's and 255:
+    0 of 11,200 cases over stage 1k's rule; in the same sweep a 340 ms window gave 1,506 of 2,800 and 400 ms 61 and
+    66 of 2,800.
+    3. *A recolour while up* (a new palette or hue: `c=`, or the owner's palette): waits until W after the field last
+       lit or got brighter and after the walk's last rise (and S4's 170 ms), the walk going on in its old colours; at
+       the frame it is shown the window starts again from it (`contractNativeEnded(known=true)`, and it is the walk's
+       last rise). A pace alone (`s=`) is no recolour.
+    4. *A rise of the level.* As the look enters: an onset by the gate's count waits 400 ms after the field last lit
+       (`FX_LOGIC_PUMP_MIN_MS`). While it is up: EVERY rise of the level, any size (the pump, `B`, `b=`, the clock held
+       and resumed, a `C` re-seed, a moved `ap=`, the owner's brightness), waits W after the field last lit or got
+       brighter and after the walk's last rise; except a beat its own pump fires on (the first 30 ms of a beat
+       `fxLogicPumpFires()` keeps) that follows another such beat, which waits 400 ms, the core's floor that stage 1k
+       decided for exactly that case. Held, it is drawn at the last level shown, on a palette baked at that level. A
+       fall is never held.
     5. *Leaving the walk for the idle blink* (`native:0` at a `b=`, `M:v=idle`, the watchdog), SEAMLESS when it changes
        nothing: `logic`'s last frame was not pumped, in the display's own colours, at the level the idle blink will run
        at (after `M:v=idle` and the watchdog: the ceiling). Then the walk goes on, in `logic`'s settings, until the
        idle blink is selected: no sooner than 400 ms after the field last lit or got brighter (`fieldOnsetMs`), and no
        sooner than the core's own gates say (340 ms, S4's 170 ms). Nothing on the LEDs changes for it.
        *Leaving the walk* for anything else (another look, an accent, `X`, a native look, the idle blink when the
-       hand-over is not seamless): the owner's settings go back (`restoreSettings()`), the field is taken as dark and just lit
-       (`contractNativeEnded(known=false)`), and the walk's last frame stays up, unchanging, until the next light: a
-       lit frame of effect 106, or the selection of a native sequence, 400 ms after the walk ended at the earliest
-       (`gWalkLeft`), and no sooner than the core's own gates say. `X`'s dark (and lights-out) is never held. A button
-       is never held either: the engine starts it.
+       hand-over is not seamless): the owner's settings go back (`restoreSettings()`), the field is taken as dark and
+       just lit (`contractNativeEnded(known=false)`), and the walk's last frame stays up, unchanging, until the next
+       light: a lit frame of effect 106, or the selection of a native sequence, 400 ms after the walk ended at the
+       earliest (`gWalkLeft`), and no sooner than the core's own gates say. `X`'s dark (and lights-out) is never held.
+       A button is never held either: the engine starts it.
     6. The pump itself is the core's: `fxLogicPumpAmount()`, rises 400 ms apart, so from 151 to 176 BPM an every-beat
        pump takes every other beat. Held as rule 4 says, a beat can be skipped where a re-seed or a seek put it
-       inside the window.
+       inside the window, and the first beat after a rise of another kind waits W.
+    7. *`native:0`'s brightness* (the idle blink at a `b=`, `B` on it, the owner's value given back): it is the same
+       walk and the same light, so every rise of the engine's brightness on NORMAL, any size, waits W at the engine's
+       live pace after the field last lit and after the walk's last rise, as well as the field gate's own rule
+       (`_nativeBright()`, the second review's R2-F4). A fall is at once. This is R1's path: see "What is not in".
+    Every frame the walk is stepped on a palette baked at the level it is drawn at, a held frame too (R2-F7).
   - *The hand-over in time.* Seamless (rules 1 and 5: unpumped, own colours, one level, at any `b=`): it costs
     nothing on the LEDs. `logic` comes in at the next engine frame after the line; the idle blink takes the walk back
     no sooner than 400 ms after the field last lit, the walk going on meanwhile, so nothing is seen of the wait. No
@@ -247,10 +268,17 @@ the Signal Booster. The query reply says `ver=1.4,rel=2`; the WDP caps say `cont
   comes 400 ms late; an accent over `logic` shorter than 400 ms is not shown at all; `native:0` and `logic` each take
   about 400 ms to come in when the hand-over changes something (rules 1 and 5; a seamless one costs nothing); a host
   that turns between `logic` and a native look every 200 ms gets neither (each
-  hand-over is still waiting when the next line comes, and the frame that is up stays up); a rise of the look's level
-  that is not its pump's beat can wait 500 ms. The same is true of the idle blink in R1 against contract looks (a
+  hand-over is still waiting when the next line comes, and the frame that is up stays up); a rise of the walk's level
+  that is not its pump's beat, and every rise of `native:0`'s brightness, can wait W (440 ms on the front, 740 on the
+  rear, up to 1,940 at `s=0`). The same is true of the idle blink in R1 against contract looks (a
   white look after it is no onset to the gate: "The luminance of a native sequence" below), and the property stage
   does not see it there because its mock draws the idle look as a fill at its brightness.
+- **R1 (`main`) has R2-F4 and R2-F5 in `native:0`.** On R1, `native:0` under `b=` or `B` is the same walk with its
+  palette baked at the level, and its brightness rises only under the field gate's 340 ms, sub-step rises not at all:
+  the second review measured `B` up every 345 to 380 ms over by stage 1k's rule (35 of 50 cases on this line before the
+  fix, the rear 16 by 4 at 255 four times a second by the gate's own count). The R2 fix is rule 7; a backport to R1 is
+  the owner's call. It would be the walk's window (`_walkLagMs`, `_walkWindowMs`, `_walkRiseOpen`, `gWalkUpMs`) and its
+  use in `_nativeBright()` for NORMAL, with the two stage 2c waits that change with it.
 - **A hand-over that changes something holds.** Between `native:0` and a pumped or coloured `logic`, or at another
   level, the frame that is up is held about 400 ms. Without it (tried on 2026-11-24, once the two lights were one) the
   walk went on while the idle blink waited to take a pumped `logic` back, and pumped `logic` and `native:0` by turns

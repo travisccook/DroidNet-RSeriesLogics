@@ -947,10 +947,16 @@ because it reads the spec, and because the review found that the gates alone are
   the pump's own 400 ms floor alone let it break section 9 by stage 1k's count on the real layer (stage R2rev): a rise
   by a path the pump's floor does not see (`ap=` moved each beat, a `C` re-seed, the clock held and resumed, `B` and
   `b=`), and a recolour. So the layer keeps windows of its own, using only existing core calls:
-  `FX_LOGIC_PUMP_MIN_MS` (400 ms since `fieldOnsetMs`) for an onset as the look enters, on its pump's own beat, for a
-  recolour, and for the next light after the walk; `LOGIC_RISE_MS` (500 ms, fork-local) for any other onset of its
-  level while it is up. At 400 ms for every rise the review's measure still found a clock held and resumed by turns
-  over on the rear on two of six walk seeds; 450 and 500 cleared all six.
+  `FX_LOGIC_PUMP_MIN_MS` (400 ms since `fieldOnsetMs`) for an onset as the look enters, for a pump beat after a pump
+  beat, and for the next light after the walk; and the WALK'S WINDOW for every other rise of the walk, of any size,
+  and a recolour: `W = 2 × STROBE_MIN_STATE_MS + D`, D the longest an LED takes to step (`10 ms × (max(delay − 1,
+  fade) + 1)`, the pause distribution of `updateMappedLED()`): a rise's light is on every LED within D, so rises W
+  apart keep every part of the display's onsets 340 ms apart. 440 ms on the front at its own pace, 740 on the rear,
+  1,940 on the rear at `s=0`. It replaced a fitted 500 ms, which the second review broke on a seventh walk seed;
+  swept over 400 seeds on R2rev's paths it gives 0 of 11,200 over. Rises under the gate's step are held too, because
+  the walk's light goes as about the fourth power of the level (R2-F5).
+- **`native:0` is the same walk** and the same light, so its brightness rises (`_nativeBright()`) keep the same window
+  at the engine's live pace (R2-F4). That path is R1's too; the R1 change would be the same hunk.
 - **The hand-over with the idle blink is seamless when it changes nothing** (`logic` not pumped, in the display's own
   colours, at the idle blink's level): the same walk goes on, no LED moves, no hold. Any other hand-over, and every
   hand-over between the walk and other light, is unseen light (`contractNativeEnded(known=false)`), the frame that is
@@ -960,7 +966,11 @@ because it reads the spec, and because the review found that the gates alone are
 - **`projector`'s stand-in** (`sparkle`) is not pumped (N8).
 - The exact rules, in the order the layer applies them, are in `DROIDNET_FORK.md` ("What is in (contract v1.4, R2)",
   "Its windows"), for Studio's mirror. A fork that draws `logic` itself (none does) would need the same.
-- Stage R2rev (the review's findings) passes in full, its check that the two lights are one included.
+- Stage R2rev (the reviews' findings) passes, R2-F1 to F6 and the check that the two lights are one, except R2-F7's
+  check (`test_review_r2_findings.cpp:525`): it compares the most light over 600 ms with the mean of the 100 ms before,
+  and `native:0` alone, with no `logic`, gives the same 18 and 31 (the walk's own texture). The fix it asks for (a held
+  frame stepped on a palette baked at its level) is in, and stage 2g holds the held frames to `native:0`'s frame for
+  frame.
 
-The ESP32 image with `logic` and `vu` drawn by the layer and the review's fixes: 1,139,773 B of flash and 64,956 B of
+The ESP32 image with `logic` and `vu` drawn by the layer and the reviews' fixes: 1,140,061 B of flash and 64,964 B of
 static RAM (F2 as first merged: 1,138,617 B and 64,948 B).
